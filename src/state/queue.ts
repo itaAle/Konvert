@@ -1,0 +1,360 @@
+// State machine of the conversion queue (one or more files):
+// empty → setup (analysis, choices) → converting → finished (and back).
+// Pure reducer and selectors; side effects live in `useQueue`.
+import type { AdvancedOptions } from "../bindings/AdvancedOptions";
+import type { ConversionOutcome } from "../bindings/ConversionOutcome";
+import type { ConversionPlan } from "../bindings/ConversionPlan";
+import type { ConversionRequest } from "../bindings/ConversionRequest";
+import type { ConversionWarning } from "../bindings/ConversionWarning";
+import type { ErrorPayload } from "../bindings/ErrorPayload";
+import type { FileAnalysis } from "../bindings/FileAnalysis";
+import type { JobEvent } from "../bindings/JobEvent";
+import type { Progress } from "../bindings/Progress";
+import type { QualityPreset } from "../bindings/QualityPreset";
+import type { TargetFormat } from "../bindings/TargetFormat";
+import type { TargetOption } from "../bindings/TargetOption";
+
+export type ItemStatus =
+  | "analyzing"
+  | "ready"
+  | "invalid"
+  | "queued"
+  | "running"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+export interface QueueItem {
+  /** Local identifier (stable while the item is in the list). */
+  key: number;
+  path: string;
+  name: string;
+  status: ItemStatus;
+  file: FileAnalysis | null;
+  /** Analysis or conversion error. */
+  error: ErrorPayload | null;
+  /** Plan for the current request (`null` while computing). */
+  plan: ConversionPlan | null;
+  planError: ErrorPayload | null;
+  jobId: number | null;
+  progress: Progress | null;
+  outcome: ConversionOutcome | null;
+}
+
+export interface QueueState {
+  phase: "empty" | "setup" | "converting" | "finished";
+  items: QueueItem[];
+  target: TargetFormat | null;
+  preset: QualityPreset;
+  advanced: AdvancedOptions;
+  /** Bumped whenever the request changes: answers for older requests are discarded. */
+  planVersion: number;
+  notice: "cancelled" | null;
+  cancelling: boolean;
+  nextKey: number;
+}
+
+export type QueueAction =
+  | { type: "add"; paths: string[] }
+  | { type: "analyzed"; key: number; file: FileAnalysis }
+  | { type: "analyzeFailed"; key: number; error: ErrorPayload }
+  | { type: "remove"; key: number }
+  | { type: "selectTarget"; target: TargetFormat }
+  | { type: "selectPreset"; preset: QualityPreset }
+  | { type: "setAdvanced"; advanced: AdvancedOptions }
+  | { type: "defaultPreset"; preset: QualityPreset }
+  | { type: "planned"; key: number; version: number; plan: ConversionPlan }
+  | { type: "planFailed"; key: number; version: number; error: ErrorPayload }
+  | { type: "start" }
+  | { type: "started"; key: number; jobId: number }
+  | { type: "startFailed"; key: number; error: ErrorPayload }
+  | { type: "job"; event: JobEvent }
+  | { type: "cancelAll" }
+  | { type: "back" }
+  | { type: "reset" };
+
+export const NO_TARGETS = "no_targets";
+
+export function initialQueue(preset: QualityPreset = "balanced"): QueueState {
+  return {
+    phase: "empty",
+    items: [],
+    target: null,
+    preset,
+    advanced: {},
+    planVersion: 0,
+    notice: null,
+    cancelling: false,
+    nextKey: 1,
+  };
+}
+
+const CONVERTING: ItemStatus[] = ["queued", "running", "done", "failed", "cancelled"];
+const FINISHED: ItemStatus[] = ["done", "failed", "cancelled"];
+
+const basename = (path: string) => path.split(/[\\/]/).pop() ?? path;
+
+// --- Selectors ---------------------------------------------------------------------
+
+/** Items that take part in the conversion (analysed and convertible). */
+export function readyItems(state: QueueState): QueueItem[] {
+  return state.items.filter((i) => i.status === "ready" && i.file);
+}
+
+/** Target formats offered for every analysed file (intersection). */
+export function commonTargets(items: QueueItem[]): TargetOption[] {
+  const files = items.filter((i) => i.file && i.status !== "invalid").map((i) => i.file!);
+  if (files.length === 0) return [];
+  const mixedKinds = new Set(files.map((f) => f.media.kind === "audio")).size > 1;
+  return files[0].targets
+    .filter((option) => files.every((f) => f.targets.some((o) => o.format === option.format)))
+    .map((option) => ({
+      ...option,
+      // Audio files and videos together: the audio formats are just "audio".
+      group: mixedKinds && option.group === "audioOnly" ? "audio" : option.group,
+      sameAsInput: files.every((f) => f.targets.find((o) => o.format === option.format)?.sameAsInput),
+    }));
+}
+
+export function requestOf(state: QueueState): ConversionRequest | null {
+  return state.target ? { target: state.target, preset: state.preset, advanced: state.advanced } : null;
+}
+
+export function canStart(state: QueueState): boolean {
+  const ready = readyItems(state);
+  return (
+    state.phase === "setup" &&
+    state.target != null &&
+    ready.length > 0 &&
+    !state.items.some((i) => i.status === "analyzing") &&
+    ready.every((i) => i.plan && !i.planError)
+  );
+}
+
+/** Sum of the estimates; `null` if any is unknown. */
+export function totalEstimate(items: QueueItem[]): { bytes: number; approximate: boolean } | null {
+  let bytes = 0;
+  let approximate = false;
+  for (const item of items) {
+    const e = item.plan?.estimate;
+    if (!e) return null;
+    bytes += e.bytes;
+    approximate ||= e.approximate;
+  }
+  return items.length > 0 ? { bytes, approximate } : null;
+}
+
+/** Union of the warnings of every item, in importance order. */
+export function allWarnings(items: QueueItem[]): ConversionWarning[] {
+  const seen = new Set<ConversionWarning>();
+  for (const item of items) item.plan?.warnings.forEach((w) => seen.add(w));
+  return [...seen];
+}
+
+/** Overall completion between 0 and 1, weighted by duration. */
+export function overallProgress(state: QueueState): number {
+  const items = state.items.filter((i) => CONVERTING.includes(i.status));
+  if (items.length === 0) return 0;
+  const durations = items.map((i) => i.file?.media.durationSecs ?? null);
+  const known = durations.filter((d): d is number => d != null && d > 0);
+  const fallback = known.length ? known.reduce((a, b) => a + b, 0) / known.length : 1;
+  let total = 0;
+  let done = 0;
+  items.forEach((item, index) => {
+    const weight = durations[index] ?? fallback;
+    const fraction = FINISHED.includes(item.status) ? 1 : item.status === "running" ? (item.progress?.fraction ?? 0) : 0;
+    total += weight;
+    done += weight * fraction;
+  });
+  return total > 0 ? done / total : 0;
+}
+
+export function counts(state: QueueState) {
+  const of = (s: ItemStatus) => state.items.filter((i) => i.status === s).length;
+  const total = state.items.filter((i) => CONVERTING.includes(i.status)).length;
+  return { done: of("done"), failed: of("failed"), cancelled: of("cancelled"), finished: of("done") + of("failed") + of("cancelled"), total };
+}
+
+// --- Reducer -----------------------------------------------------------------------
+
+function update(state: QueueState, key: number, patch: Partial<QueueItem>): QueueState {
+  return { ...state, items: state.items.map((i) => (i.key === key ? { ...i, ...patch } : i)) };
+}
+
+/** Drops every plan (the request changed). */
+function invalidate(state: QueueState): QueueState {
+  return {
+    ...state,
+    planVersion: state.planVersion + 1,
+    items: state.items.map((i) => ({ ...i, plan: null, planError: null })),
+  };
+}
+
+/** After the file list changes: keep the target only if still offered for every file. */
+function revalidateTarget(state: QueueState): QueueState {
+  if (state.target && !commonTargets(state.items).some((o) => o.format === state.target)) {
+    return invalidate({ ...state, target: null, advanced: {} });
+  }
+  return state;
+}
+
+function withoutItems(state: QueueState, items: QueueItem[]): QueueState {
+  if (items.length === 0) return { ...initialQueue(state.preset), nextKey: state.nextKey };
+  return revalidateTarget({ ...state, items });
+}
+
+/** Ends the conversion phase once every item is finished. */
+function maybeFinish(state: QueueState): QueueState {
+  const active = state.items.filter((i) => CONVERTING.includes(i.status));
+  if (active.some((i) => !FINISHED.includes(i.status))) return state;
+  if (active.every((i) => i.status === "cancelled")) {
+    // Nothing was produced: back to the choices, ready to try again.
+    return {
+      ...state,
+      phase: "setup",
+      cancelling: false,
+      notice: "cancelled",
+      items: state.items.map((i) => (i.status === "cancelled" ? { ...i, status: "ready", jobId: null, progress: null } : i)),
+    };
+  }
+  return { ...state, phase: "finished", cancelling: false };
+}
+
+export function queueReducer(state: QueueState, action: QueueAction): QueueState {
+  switch (action.type) {
+    case "add": {
+      if (state.phase === "converting") return state;
+      const base = state.phase === "finished" ? { ...initialQueue(state.preset), nextKey: state.nextKey } : state;
+      const known = new Set(base.items.map((i) => i.path));
+      const fresh = [...new Set(action.paths)].filter((p) => !known.has(p));
+      if (fresh.length === 0) return base;
+      let nextKey = base.nextKey;
+      const added: QueueItem[] = fresh.map((path) => ({
+        key: nextKey++,
+        path,
+        name: basename(path),
+        status: "analyzing",
+        file: null,
+        error: null,
+        plan: null,
+        planError: null,
+        jobId: null,
+        progress: null,
+        outcome: null,
+      }));
+      return { ...base, phase: "setup", notice: null, nextKey, items: [...base.items, ...added] };
+    }
+
+    case "analyzed": {
+      const item = state.items.find((i) => i.key === action.key);
+      if (!item || item.status !== "analyzing") return state;
+      const usable = action.file.targets.length > 0;
+      const next = update(state, action.key, {
+        file: action.file,
+        name: action.file.name,
+        status: usable ? "ready" : "invalid",
+        error: usable ? null : { code: NO_TARGETS, details: null },
+      });
+      return revalidateTarget(next);
+    }
+
+    case "analyzeFailed": {
+      const item = state.items.find((i) => i.key === action.key);
+      if (!item || item.status !== "analyzing") return state;
+      return update(state, action.key, { status: "invalid", error: action.error });
+    }
+
+    case "remove":
+      if (state.phase !== "setup") return state;
+      return withoutItems(state, state.items.filter((i) => i.key !== action.key));
+
+    case "selectTarget":
+      if (state.phase !== "setup" || state.target === action.target) return state;
+      // Codec choices of another format may not apply: start from automatic.
+      return invalidate({ ...state, target: action.target, advanced: {}, notice: null });
+
+    case "selectPreset":
+      if (state.phase !== "setup" || state.preset === action.preset) return state;
+      return invalidate({ ...state, preset: action.preset, notice: null });
+
+    case "setAdvanced":
+      if (state.phase !== "setup") return state;
+      return invalidate({ ...state, advanced: action.advanced, notice: null });
+
+    case "defaultPreset":
+      return state.phase === "empty" ? { ...state, preset: action.preset } : state;
+
+    case "planned":
+    case "planFailed": {
+      if (action.version !== state.planVersion) return state;
+      return action.type === "planned"
+        ? update(state, action.key, { plan: action.plan, planError: null })
+        : update(state, action.key, { plan: null, planError: action.error });
+    }
+
+    case "start":
+      if (!canStart(state)) return state;
+      return {
+        ...state,
+        phase: "converting",
+        notice: null,
+        cancelling: false,
+        items: state.items.map((i) =>
+          i.status === "ready" ? { ...i, status: "queued", jobId: null, progress: null, outcome: null, error: null } : i,
+        ),
+      };
+
+    case "started":
+      if (state.phase !== "converting") return state;
+      return update(state, action.key, { jobId: action.jobId });
+
+    case "startFailed":
+      if (state.phase !== "converting") return state;
+      return maybeFinish(update(state, action.key, { status: "failed", error: action.error }));
+
+    case "job": {
+      if (state.phase !== "converting") return state;
+      const item = state.items.find((i) => i.jobId === action.event.jobId);
+      if (!item || FINISHED.includes(item.status)) return state;
+      const u = action.event.update;
+      switch (u.state) {
+        case "queued":
+          return state;
+        case "running":
+          return update(state, item.key, { status: "running" });
+        case "progress":
+          return update(state, item.key, { status: "running", progress: u.progress });
+        case "done":
+          return maybeFinish(update(state, item.key, { status: "done", outcome: u.outcome }));
+        case "failed":
+          return maybeFinish(update(state, item.key, { status: "failed", error: u.error }));
+        case "cancelled":
+          return maybeFinish(update(state, item.key, { status: "cancelled" }));
+      }
+      return state;
+    }
+
+    case "cancelAll": {
+      if (state.phase !== "converting") return state;
+      // Items not handed to the backend yet will never start: cancel them now.
+      const items = state.items.map((i): QueueItem =>
+        i.status === "queued" && i.jobId == null ? { ...i, status: "cancelled" } : i,
+      );
+      return maybeFinish({ ...state, cancelling: true, items });
+    }
+
+    case "back":
+      // From a finished conversion back to the choices (e.g. retry after an error).
+      if (state.phase !== "finished") return state;
+      return {
+        ...state,
+        phase: "setup",
+        items: state.items.map((i) =>
+          FINISHED.includes(i.status) ? { ...i, status: "ready", jobId: null, progress: null, outcome: null, error: null } : i,
+        ),
+      };
+
+    case "reset":
+      return state.phase === "converting" ? state : { ...initialQueue(state.preset), nextKey: state.nextKey };
+  }
+}

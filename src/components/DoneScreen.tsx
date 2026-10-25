@@ -1,19 +1,11 @@
 import { motion } from "motion/react";
-import { ExternalLink, FolderOpen } from "lucide-react";
+import { CircleX, ExternalLink, FolderOpen } from "lucide-react";
 
-import { t } from "../i18n";
+import { errorMessage, t } from "../i18n";
 import { formatBytes } from "../lib/format";
-import type { ConverterState } from "../state/converter";
+import { counts, type QueueItem } from "../state/queue";
+import type { QueueController } from "../state/useQueue";
 import { Button } from "./ui/Button";
-
-type Done = Extract<ConverterState, { phase: "done" }>;
-
-interface DoneScreenProps {
-  state: Done;
-  onOpen: () => void;
-  onReveal: () => void;
-  onAnother: () => void;
-}
 
 function Checkmark() {
   return (
@@ -42,26 +34,110 @@ function Checkmark() {
   );
 }
 
-export function DoneScreen({ state, onOpen, onReveal, onAnother }: DoneScreenProps) {
-  const name = state.outcome.output.split(/[\\/]/).pop() ?? state.outcome.output;
+const outputName = (item: QueueItem) => item.outcome?.output.split(/[\\/]/).pop() ?? item.name;
+
+/** Single file converted successfully. */
+export function DoneScreen({ q, item }: { q: QueueController; item: QueueItem }) {
   return (
     <div className="flex flex-col items-center justify-center text-center">
       <Checkmark />
       <h1 className="mt-6 text-[26px] font-semibold tracking-[-0.02em]">{t("done.title")}</h1>
-      <p className="mt-2 max-w-lg truncate text-[15px] text-label-secondary" title={state.outcome.output}>
-        {t("done.saved", { name })} · {formatBytes(state.outcome.sizeBytes)}
+      <p className="mt-2 max-w-lg truncate text-[15px] text-label-secondary" title={item.outcome?.output}>
+        {t("done.saved", { name: outputName(item) })} · {formatBytes(item.outcome?.sizeBytes ?? 0)}
       </p>
       <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
-        <Button variant="primary" size="lg" icon={<ExternalLink size={18} aria-hidden />} onClick={onOpen}>
+        <Button
+          variant="primary"
+          size="lg"
+          icon={<ExternalLink size={18} aria-hidden />}
+          onClick={() => item.jobId != null && q.openOutput(item.jobId)}
+        >
           {t("actions.open")}
         </Button>
-        <Button size="lg" icon={<FolderOpen size={18} aria-hidden />} onClick={onReveal}>
+        <Button
+          size="lg"
+          icon={<FolderOpen size={18} aria-hidden />}
+          onClick={() => item.jobId != null && q.revealOutput(item.jobId)}
+        >
           {t("actions.reveal")}
         </Button>
       </div>
-      <Button variant="plain" className="mt-5" onClick={onAnother}>
+      <Button variant="plain" className="mt-5" onClick={q.reset}>
         {t("actions.another")}
       </Button>
+    </div>
+  );
+}
+
+/** Several files: summary and one row per file. */
+export function BatchDoneScreen({ q }: { q: QueueController }) {
+  const { state } = q;
+  const c = counts(state);
+  const items = state.items.filter((i) => i.status === "done" || i.status === "failed" || i.status === "cancelled");
+  const firstDone = items.find((i) => i.status === "done");
+  const title =
+    c.failed + c.cancelled === 0
+      ? t("done.batchAll", { n: c.done })
+      : c.done === 0
+        ? t("done.batchNone")
+        : t("done.batchPartial", { ok: c.done, failed: c.failed + c.cancelled });
+
+  return (
+    <div className="flex w-full flex-col items-center gap-6">
+      {c.done > 0 && <Checkmark />}
+      <h1 className="text-center text-[24px] font-semibold tracking-[-0.02em]">{title}</h1>
+      <ul className="w-full divide-y divide-separator overflow-hidden rounded-[20px] bg-surface shadow-card">
+        {items.map((item) => (
+          <li key={item.key} className="flex items-center gap-3 py-2.5 pr-2 pl-4">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[14px] font-medium" title={item.outcome?.output ?? item.name}>
+                {item.status === "done" ? outputName(item) : item.name}
+              </p>
+              <p className={`truncate text-[12px] ${item.status === "done" ? "text-label-secondary" : "text-danger"}`}>
+                {item.status === "done"
+                  ? formatBytes(item.outcome?.sizeBytes ?? 0)
+                  : item.status === "cancelled"
+                    ? t("status.cancelled")
+                    : errorMessage(item.error?.code ?? "unknown")}
+              </p>
+            </div>
+            {item.status === "done" && item.jobId != null ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => q.openOutput(item.jobId!)}
+                  aria-label={`${t("actions.open")}: ${outputName(item)}`}
+                  title={t("actions.open")}
+                  className="flex size-8 items-center justify-center rounded-full text-accent hover:bg-accent-soft"
+                >
+                  <ExternalLink size={16} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => q.revealOutput(item.jobId!)}
+                  aria-label={`${t("actions.reveal")}: ${outputName(item)}`}
+                  title={t("actions.reveal")}
+                  className="flex size-8 items-center justify-center rounded-full text-accent hover:bg-accent-soft"
+                >
+                  <FolderOpen size={16} aria-hidden />
+                </button>
+              </>
+            ) : (
+              <CircleX size={16} className="mr-2 text-label-tertiary" aria-hidden />
+            )}
+          </li>
+        ))}
+      </ul>
+      <div className="flex flex-wrap items-center justify-center gap-3">
+        {firstDone?.jobId != null && (
+          <Button size="lg" icon={<FolderOpen size={18} aria-hidden />} onClick={() => q.revealOutput(firstDone.jobId!)}>
+            {t("actions.reveal")}
+          </Button>
+        )}
+        <Button variant="primary" size="lg" onClick={q.reset}>
+          {t("actions.others")}
+        </Button>
+      </div>
     </div>
   );
 }

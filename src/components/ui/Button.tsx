@@ -2,7 +2,7 @@ import { motion, type HTMLMotionProps } from "motion/react";
 import type { ReactNode } from "react";
 
 type Variant = "primary" | "secondary" | "plain";
-type Size = "md" | "lg";
+type Size = "sm" | "md" | "lg";
 
 interface ButtonProps extends Omit<HTMLMotionProps<"button">, "children"> {
   variant?: Variant;
@@ -19,6 +19,7 @@ const variants: Record<Variant, string> = {
 };
 
 const sizes: Record<Size, string> = {
+  sm: "h-7 px-3 text-[13px] gap-1",
   md: "h-9 px-4 text-[14px] gap-1.5",
   lg: "h-12 px-7 text-[16px] gap-2",
 };

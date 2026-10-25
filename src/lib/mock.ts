@@ -1,11 +1,14 @@
 // Development-only simulated backend, used when the UI runs in a plain browser
 // (`npm run dev` without Tauri) to work on the design. Never bundled in releases.
-// Add `?mock=error` to the URL to simulate a damaged file.
+// URL parameters: `?mock=error` simulates a damaged file; `?files=a.wav|b.mp4`
+// sets what the file picker returns.
 import type { Backend } from "./api";
+import type { AudioCodecInfo } from "../bindings/AudioCodecInfo";
 import type { ConversionPlan } from "../bindings/ConversionPlan";
 import type { ConversionWarning } from "../bindings/ConversionWarning";
 import type { FileAnalysis } from "../bindings/FileAnalysis";
 import type { JobEvent } from "../bindings/JobEvent";
+import type { Preferences } from "../bindings/Preferences";
 import type { TargetFormat } from "../bindings/TargetFormat";
 import type { TargetOption } from "../bindings/TargetOption";
 
@@ -14,6 +17,21 @@ const listeners = new Set<(e: JobEvent) => void>();
 const timers = new Map<number, number>();
 let nextJob = 1;
 
+let preferences: Preferences = {
+  language: "auto",
+  theme: "auto",
+  defaultPreset: "balanced",
+  outputDir: null,
+  debugLogging: false,
+};
+
+const audioCodec = (codec: AudioCodecInfo["codec"]): AudioCodecInfo => ({
+  codec,
+  lossless: codec === "flac" || codec === "pcm",
+  sampleRates: codec === "opus" ? [8000, 12000, 16000, 24000, 48000] : null,
+  maxChannels: codec === "mp3" ? 2 : null,
+});
+
 const option = (format: TargetFormat, label: string, group: TargetOption["group"], lossless = false): TargetOption => ({
   format,
   label,
@@ -21,6 +39,13 @@ const option = (format: TargetFormat, label: string, group: TargetOption["group"
   group,
   lossless,
   sameAsInput: false,
+  kind: group === "video" ? "video" : "audio",
+  videoCodecs:
+    group !== "video" ? [] : format === "webm" ? ["vp9", "av1"] : format === "gif" ? ["gif"] : ["h264", "av1"],
+  audioCodecs:
+    format === "gif"
+      ? []
+      : [audioCodec(lossless ? "flac" : format === "webm" || format === "opus" ? "opus" : "aac")],
 });
 
 const AUDIO: TargetOption[] = [
@@ -52,9 +77,10 @@ function analysis(path: string): FileAnalysis {
         subtitleStreams: 0,
       },
       targets: [
-        ...(["mp4", "mkv", "mov", "webm", "avi", "gif"] as TargetFormat[]).map((f) =>
-          ({ ...option(f, f === "webm" ? "WebM" : f.toUpperCase(), "video"), sameAsInput: f === "mp4" }),
-        ),
+        ...(["mp4", "mkv", "mov", "webm", "avi", "gif"] as TargetFormat[]).map((f) => ({
+          ...option(f, f === "webm" ? "WebM" : f.toUpperCase(), "video"),
+          sameAsInput: f === "mp4",
+        })),
         ...AUDIO.map((o) => ({ ...o, group: "audioOnly" as const })),
         option("wav", "WAV", "audioOnly", true),
       ],
@@ -87,8 +113,24 @@ export const mockBackend: Backend = {
   },
   async appReady() {},
   async engineInfo() {
-    return { appVersion: "0.1.0-dev", ffmpegVersion: "ffmpeg version (simulated)" };
+    return { appVersion: "0.1.0-dev", ffmpegVersion: "ffmpeg version n9.0 (simulated)" };
   },
+  async getPreferences() {
+    return preferences;
+  },
+  async setPreferences(next) {
+    preferences = next;
+  },
+  async pickFolder() {
+    return "D:\\Conversioni";
+  },
+  async availableSpace() {
+    return 120_000_000_000;
+  },
+  async openReleasesPage() {},
+  async revealLog() {},
+  async clearLog() {},
+  async confirmClose() {},
   async analyzeFile(path) {
     await sleep(600);
     if (params.get("mock") === "error") {
@@ -114,7 +156,9 @@ export const mockBackend: Backend = {
       coverArtStream: null,
       warnings,
       estimate: {
-        bytes: Math.round((media.sizeBytes ?? 0) * (lossless ? 0.6 : media.kind === "audio" ? 0.14 * factor : factor * 0.8)),
+        bytes: Math.round(
+          (media.sizeBytes ?? 0) * (lossless ? 0.6 : media.kind === "audio" ? 0.14 * factor : factor * 0.8),
+        ),
         approximate: !lossless,
       },
     };
@@ -124,28 +168,31 @@ export const mockBackend: Backend = {
     const jobId = nextJob++;
     const name = (path.split(/[\\/]/).pop() ?? "file").replace(/\.\w+$/, "");
     let fraction = 0;
-    setTimeout(() => emit({ jobId, update: { state: "running" } }), 100);
-    const timer = window.setInterval(() => {
-      fraction = Math.min(1, fraction + 0.04);
-      emit({
-        jobId,
-        update: {
-          state: "progress",
-          progress: { fraction, etaSecs: (1 - fraction) * 25, speed: 8.4, processedSecs: null, outputBytes: null },
-        },
-      });
-      if (fraction >= 1) {
-        clearInterval(timer);
+    const delay = (jobId - 1) * 2500;
+    setTimeout(() => emit({ jobId, update: { state: "running" } }), 100 + delay);
+    setTimeout(() => {
+      const timer = window.setInterval(() => {
+        fraction = Math.min(1, fraction + 0.04);
         emit({
           jobId,
           update: {
-            state: "done",
-            outcome: { output: `C:\\Musica\\${name}.${request.target}`, sizeBytes: 5_400_000, elapsed: 6.2 },
+            state: "progress",
+            progress: { fraction, etaSecs: (1 - fraction) * 25, speed: 8.4, processedSecs: null, outputBytes: null },
           },
         });
-      }
-    }, 250);
-    timers.set(jobId, timer);
+        if (fraction >= 1) {
+          clearInterval(timer);
+          emit({
+            jobId,
+            update: {
+              state: "done",
+              outcome: { output: `C:\\Musica\\${name}.${request.target}`, sizeBytes: 5_400_000, elapsed: 6.2 },
+            },
+          });
+        }
+      }, 100);
+      timers.set(jobId, timer);
+    }, 100 + delay);
     return jobId;
   },
   async cancelConversion(jobId) {
@@ -157,13 +204,16 @@ export const mockBackend: Backend = {
   async revealOutput() {},
   async pickFiles() {
     await sleep(200);
-    return [params.get("file") ?? "C:\\Musica\\Brano di prova.wav"];
+    return params.get("files")?.split("|") ?? [params.get("file") ?? "C:\\Musica\\Brano di prova.wav"];
   },
   async onJobUpdate(handler) {
     listeners.add(handler);
     return () => listeners.delete(handler);
   },
   async onFileDrop() {
+    return () => {};
+  },
+  async onCloseRequested() {
     return () => {};
   },
 };

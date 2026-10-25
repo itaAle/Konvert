@@ -12,6 +12,7 @@ import type { FileAnalysis } from "../bindings/FileAnalysis";
 import type { JobEvent } from "../bindings/JobEvent";
 import type { MediaInfo } from "../bindings/MediaInfo";
 import type { PlatformInfo } from "../bindings/PlatformInfo";
+import type { Preferences } from "../bindings/Preferences";
 
 export interface DropHandlers {
   /** A drag with files entered (`true`) or left (`false`) the window. */
@@ -23,15 +24,25 @@ export interface Backend {
   platformInfo(): Promise<PlatformInfo>;
   appReady(): Promise<void>;
   engineInfo(): Promise<EngineInfo>;
+  getPreferences(): Promise<Preferences>;
+  setPreferences(preferences: Preferences): Promise<void>;
+  pickFolder(title: string): Promise<string | null>;
+  availableSpace(dir: string): Promise<number | null>;
+  openReleasesPage(): Promise<void>;
+  revealLog(): Promise<void>;
+  clearLog(): Promise<void>;
+  confirmClose(): Promise<void>;
   analyzeFile(path: string): Promise<FileAnalysis>;
   planConversion(path: string, media: MediaInfo, request: ConversionRequest): Promise<ConversionPlan>;
-  startConversion(path: string, request: ConversionRequest, outputDir?: string | null): Promise<number>;
+  startConversion(path: string, request: ConversionRequest): Promise<number>;
   cancelConversion(jobId: number): Promise<boolean>;
   openOutput(jobId: number): Promise<void>;
   revealOutput(jobId: number): Promise<void>;
   pickFiles(title: string, filterName: string): Promise<string[] | null>;
   onJobUpdate(handler: (event: JobEvent) => void): Promise<() => void>;
   onFileDrop(handlers: DropHandlers): Promise<() => void>;
+  /** The window close button was pressed while conversions are running. */
+  onCloseRequested(handler: () => void): Promise<() => void>;
 }
 
 /** Normalizes any rejection into the backend's `{ code, details }` shape. */
@@ -55,10 +66,17 @@ const tauriBackend: Backend = {
   platformInfo: () => call("platform_info"),
   appReady: () => call("app_ready"),
   engineInfo: () => call("engine_info"),
+  getPreferences: () => call("get_preferences"),
+  setPreferences: (preferences) => call("set_preferences", { preferences }),
+  pickFolder: (title) => call("pick_folder", { title }),
+  availableSpace: (dir) => call("available_space", { dir }),
+  openReleasesPage: () => call("open_releases_page"),
+  revealLog: () => call("reveal_log"),
+  clearLog: () => call("clear_log"),
+  confirmClose: () => call("confirm_close"),
   analyzeFile: (path) => call("analyze_file", { path }),
   planConversion: (path, media, request) => call("plan_conversion", { path, media, request }),
-  startConversion: (path, request, outputDir = null) =>
-    call("start_conversion", { path, request, outputDir }),
+  startConversion: (path, request) => call("start_conversion", { path, request }),
   cancelConversion: (jobId) => call("cancel_conversion", { jobId }),
   openOutput: (jobId) => call("open_output", { jobId }),
   revealOutput: (jobId) => call("reveal_output", { jobId }),
@@ -79,6 +97,7 @@ const tauriBackend: Backend = {
           break;
       }
     }),
+  onCloseRequested: (handler) => listen("close-requested", () => handler()),
 };
 
 const insideTauri = "__TAURI_INTERNALS__" in window;

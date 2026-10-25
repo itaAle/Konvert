@@ -9,13 +9,15 @@ import { Button } from "./ui/Button";
 
 interface ErrorScreenProps {
   error: ErrorPayload;
+  /** Overrides the message derived from the error code. */
+  message?: string | null;
   canGoBack: boolean;
   onBack: () => void;
   onChooseAnother: () => void;
 }
 
 /** Friendly message; raw engine output only inside "Technical details". */
-export function ErrorScreen({ error, canGoBack, onBack, onChooseAnother }: ErrorScreenProps) {
+export function ErrorScreen({ error, message, canGoBack, onBack, onChooseAnother }: ErrorScreenProps) {
   const [open, setOpen] = useState(false);
   const detailsId = useId();
 
@@ -26,7 +28,7 @@ export function ErrorScreen({ error, canGoBack, onBack, onChooseAnother }: Error
       </div>
       <h1 className="mt-6 text-[24px] font-semibold tracking-[-0.02em]">{t("errors.title")}</h1>
       <p role="alert" className="mt-2 max-w-md text-[15px] leading-relaxed text-label-secondary">
-        {errorMessage(error.code)}
+        {message ?? errorMessage(error.code)}
       </p>
 
       {error.details && (
