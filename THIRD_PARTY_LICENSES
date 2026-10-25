@@ -1,0 +1,55 @@
+KONVERT - THIRD-PARTY SOFTWARE NOTICES
+======================================
+
+Konvert itself is released under the MIT License (see LICENSE).
+It bundles or depends on the third-party software listed below. None of these
+components is used to make network connections: Konvert performs no network
+activity (see the "Privacy" section of README.md).
+
+This file is a work in progress; the complete list of Rust and JavaScript
+dependencies with their licenses is added in milestone 5.
+
+
+1. FFmpeg (ffmpeg.exe, ffprobe.exe and the libav*/libsw* DLLs)
+--------------------------------------------------------------
+
+License:    GNU Lesser General Public License, version 3 or later (LGPL-3.0-or-later)
+            Full text: ffmpeg/LICENSE.txt in the installation folder.
+Version:    n9.0.2-36-g6882969ce9 (release/9.0 branch)
+Build:      BtbN FFmpeg-Builds, variant "win64-lgpl-shared"
+            https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-10-25-13-00
+Website:    https://ffmpeg.org/
+
+How Konvert uses FFmpeg
+    FFmpeg runs as a separate program (child process). Konvert does not link to
+    it. The FFmpeg files are installed unmodified in the "ffmpeg" folder of the
+    installation directory and can be replaced by the user with any compatible
+    build (same file names), as permitted by the LGPL.
+
+Build configuration
+    The build is configured without --enable-gpl and without --enable-nonfree,
+    so it contains no GPL-only component (no libx264, libx265, libxvid) and no
+    non-free component (no libfdk-aac). It uses --enable-version3, which is why
+    the license is LGPL version 3 or later. The exact configuration is printed
+    by `ffmpeg -version`.
+
+    Libraries included in the build relevant to Konvert (each under its own
+    LGPL-compatible license): LAME (MP3, LGPL), libopus (BSD), libvorbis (BSD),
+    libvpx (BSD), SVT-AV1 (BSD-3-Clause-Clear), OpenH264 (BSD-2-Clause),
+    libaom (BSD), dav1d (BSD).
+
+Corresponding source code
+    - FFmpeg source at the exact commit:
+      https://github.com/FFmpeg/FFmpeg/commit/6882969ce9
+    - Build recipe (scripts that pin every library version and the configure
+      flags used): https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-10-25-13-00
+    - The archive and its SHA-256 are pinned in scripts/ffmpeg-manifest.json of
+      the Konvert repository.
+
+Patents
+    Some codecs (for example H.264/AVC and AAC) may be covered by patents in
+    some countries. The BSD license of OpenH264 covers its source code only: it
+    does NOT grant any license to H.264 patents (Cisco's patent coverage applies
+    only to the OpenH264 binaries that Cisco itself distributes). Users and
+    distributors are responsible for any patent licensing required where they
+    live.
