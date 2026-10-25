@@ -4,7 +4,28 @@ Audio and video file converter with a modern interface.
 Konvert converte file audio e video da un formato all'altro, **interamente sul tuo
 computer**: nessuna connessione di rete, nessuna telemetria, nessun account.
 
-> Stato: in sviluppo (milestone 1 di 5). Prima piattaforma: Windows 10/11.
+> Stato: in sviluppo (milestone 2 di 5). Prima piattaforma: Windows 10/11.
+
+## Formati
+
+Konvert propone solo le conversioni sensate per il file che gli dai:
+
+| File in ingresso  | Formati proposti                                                        |
+| ----------------- | ----------------------------------------------------------------------- |
+| Audio             | MP3, M4A (AAC), WAV, FLAC, OGG (Vorbis), OPUS, WMA, AIFF                |
+| Video con audio   | MP4, MKV, MOV, WebM, AVI, GIF e **solo audio** in tutti i formati audio |
+| Video senza audio | MP4, MKV, MOV, WebM, AVI, GIF                                           |
+
+- Tre preset in linguaggio comune: **Massima qualità**, **Bilanciata**, **File piccolo**,
+  più opzioni avanzate (bitrate, frequenza, canali, risoluzione, fps, codec).
+- Se i flussi sono già compatibili con il formato scelto (es. MP4 H.264/AAC → MKV),
+  vengono copiati **senza ricodifica**: istantaneo e senza perdita.
+- Avvisi chiari quando la conversione perde qualità o non può recuperarla
+  (es. MP3 → WAV) e quando si perdono copertina, sottotitoli o tracce audio extra.
+- Metadati e copertina conservati dove il formato lo permette (MP3, M4A, FLAC).
+- Video H.264 con OpenH264, VP9 per WebM, AV1 (SVT-AV1) tra le opzioni avanzate.
+
+La tabella dei formati è dichiarativa: `crates/konvert-core/src/formats.rs`.
 
 ## Sviluppo
 
@@ -41,6 +62,8 @@ mai nulla.
 npm run tauri dev         # avvia l'app in modalità sviluppo
 npm test                  # controllo privacy + test Rust (unitari e di integrazione)
 npm run check:privacy     # solo il controllo privacy
+npm run cli -- targets "C:\percorso\video.mp4"          # formati proposti
+npm run cli -- plan "C:\percorso\video.mp4" --to webm     # decisioni, avvisi, stima
 npm run cli -- convert "C:\percorso\brano.wav" --to mp3 --preset balanced
 ```
 
@@ -50,11 +73,13 @@ installato con Konvert.
 ### Struttura
 
 ```
-crates/konvert-core/   logica di dominio in Rust: analisi, builder dei comandi FFmpeg,
-                       esecuzione, nomi univoci, file temporanei (senza dipendenze da Tauri)
+crates/konvert-core/   logica di dominio in Rust (senza dipendenze da Tauri): analisi,
+                       catalogo formati, pianificazione, stima, builder dei comandi FFmpeg,
+                       esecuzione, nomi univoci, file temporanei
 crates/konvert-cli/    CLI di sviluppo sopra konvert-core
 src-tauri/             app Tauri: strato IPC sottile, configurazione, permessi
 src/                   interfaccia React + TypeScript
+src/bindings/          tipi TypeScript generati dai tipi Rust (ts-rs, durante `cargo test`)
 scripts/               setup di FFmpeg, controllo privacy
 ```
 
