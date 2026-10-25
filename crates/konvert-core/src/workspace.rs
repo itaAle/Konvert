@@ -12,6 +12,7 @@
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const RUN_PREFIX: &str = "run-";
@@ -25,7 +26,8 @@ pub fn default_base_dir() -> PathBuf {
 #[derive(Debug)]
 pub struct Workspace {
     dir: PathBuf,
-    lock: Option<File>,
+    /// `None` once closed.
+    lock: Mutex<Option<File>>,
 }
 
 impl Workspace {
@@ -45,7 +47,7 @@ impl Workspace {
             .map_err(|_| io::Error::other("cannot lock the temporary directory"))?;
         Ok(Self {
             dir,
-            lock: Some(lock),
+            lock: Mutex::new(Some(lock)),
         })
     }
 
@@ -57,13 +59,21 @@ impl Workspace {
     pub fn job_output(&self, job_id: u64, ext: &str) -> PathBuf {
         self.dir.join(format!("job-{job_id}.{ext}"))
     }
+
+    /// Releases the lock and deletes the directory (also done on drop).
+    /// Useful when the owner is never dropped, e.g. on application exit.
+    pub fn close(&self) {
+        let mut lock = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        // Release the lock before deleting: Windows cannot delete an open file.
+        if lock.take().is_some() {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
 }
 
 impl Drop for Workspace {
     fn drop(&mut self) {
-        // Release the lock before deleting: Windows cannot delete an open file.
-        drop(self.lock.take());
-        let _ = fs::remove_dir_all(&self.dir);
+        self.close();
     }
 }
 
@@ -115,6 +125,18 @@ mod tests {
         assert!(dir.is_dir());
         drop(ws);
         assert!(!dir.exists());
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn close_removes_the_directory_once() {
+        let base = test_base("close");
+        let ws = Workspace::create(&base).unwrap();
+        let dir = ws.dir().to_path_buf();
+        ws.close();
+        assert!(!dir.exists());
+        ws.close();
+        drop(ws);
         fs::remove_dir_all(&base).unwrap();
     }
 
