@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimal permissions for the main window: Konvert's own commands and event listening. No shell, file system, HTTP or opener permissions are granted to the frontend.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:default",
+    "allow-engine-info",
+    "allow-probe-file"
+  ]
+}

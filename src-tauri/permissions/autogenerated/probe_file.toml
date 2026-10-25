@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-probe-file"
+description = "Enables the probe_file command without any pre-configured scope."
+commands.allow = ["probe_file"]
+
+[[permission]]
+identifier = "deny-probe-file"
+description = "Denies the probe_file command without any pre-configured scope."
+commands.deny = ["probe_file"]

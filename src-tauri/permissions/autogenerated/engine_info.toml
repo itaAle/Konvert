@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-engine-info"
+description = "Enables the engine_info command without any pre-configured scope."
+commands.allow = ["engine_info"]
+
+[[permission]]
+identifier = "deny-engine-info"
+description = "Denies the engine_info command without any pre-configured scope."
+commands.deny = ["engine_info"]
