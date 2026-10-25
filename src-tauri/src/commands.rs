@@ -6,18 +6,24 @@
 //! `details` only on request.
 
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 
 use konvert_core::{
     ConversionPlan, ConversionRequest, CoreError, ErrorPayload, MediaInfo, TargetOption,
     available_targets, plan_conversion as plan,
 };
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 use ts_rs::TS;
 
+use crate::prefs::Preferences;
 use crate::state::AppState;
+
+/// The only web address Konvert knows. It is opened in the system browser, and
+/// only when the user clicks "Releases page"; the app itself never connects.
+pub const RELEASES_URL: &str = "https://github.com/itaAle/Konvert/releases";
 
 /// Extensions offered by the file picker (anything FFmpeg can read is accepted
 /// by drag and drop; this list only filters the dialog).
@@ -29,6 +35,10 @@ const MEDIA_EXTENSIONS: &[&str] = &[
 
 fn payload(e: CoreError) -> ErrorPayload {
     e.payload()
+}
+
+fn io_payload(e: impl std::fmt::Display) -> ErrorPayload {
+    payload(CoreError::Io(std::io::Error::other(e.to_string())))
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -77,6 +87,82 @@ pub fn app_ready(app: AppHandle) {
     }
 }
 
+// --- Preferences ---------------------------------------------------------------
+
+#[tauri::command]
+pub fn get_preferences(state: State<'_, AppState>) -> Preferences {
+    state.prefs.get()
+}
+
+/// Saves the preferences and applies them (theme, debug log) immediately.
+#[tauri::command]
+pub fn set_preferences(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    preferences: Preferences,
+) -> Result<(), ErrorPayload> {
+    crate::apply_theme(&window, preferences.theme);
+    state.log.set_enabled(preferences.debug_logging);
+    state.prefs.set(preferences).map_err(io_payload)
+}
+
+/// Native folder picker for the destination folder.
+#[tauri::command]
+pub async fn pick_folder(app: AppHandle, title: String) -> Option<PathBuf> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title(title)
+        .pick_folder(move |picked| {
+            let _ = tx.send(picked);
+        });
+    rx.await.ok().flatten()?.into_path().ok()
+}
+
+/// Free bytes on the volume of `dir` (for the "not enough space" warning).
+#[tauri::command]
+pub fn available_space(dir: PathBuf) -> Option<u64> {
+    konvert_core::available_space(&dir)
+}
+
+/// Opens the GitHub releases page in the system browser (user click only).
+#[tauri::command]
+pub fn open_releases_page(app: AppHandle) -> Result<(), ErrorPayload> {
+    app.opener()
+        .open_url(RELEASES_URL, None::<&str>)
+        .map_err(io_payload)
+}
+
+/// Shows the debug log in the file manager (or its folder if it is empty).
+#[tauri::command]
+pub fn reveal_log(app: AppHandle, state: State<'_, AppState>) -> Result<(), ErrorPayload> {
+    let path = state.log.path();
+    if path.is_file() {
+        app.opener().reveal_item_in_dir(path).map_err(io_payload)
+    } else {
+        let dir = path.parent().ok_or_else(|| io_payload("no log folder"))?;
+        std::fs::create_dir_all(dir).map_err(io_payload)?;
+        app.opener()
+            .open_path(dir.to_string_lossy(), None::<&str>)
+            .map_err(io_payload)
+    }
+}
+
+#[tauri::command]
+pub fn clear_log(state: State<'_, AppState>) -> Result<(), ErrorPayload> {
+    state.log.clear().map_err(io_payload)
+}
+
+/// The user confirmed closing the window although conversions are running.
+#[tauri::command]
+pub fn confirm_close(window: WebviewWindow, state: State<'_, AppState>) {
+    state.close_confirmed.store(true, Ordering::Relaxed);
+    state.jobs.cancel_all();
+    let _ = window.close();
+}
+
+// --- Files and conversions -------------------------------------------------------
+
 /// A file ready to be converted.
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -122,22 +208,27 @@ pub fn plan_conversion(
 }
 
 /// Queues a conversion; progress arrives through `job-update` events.
+/// The destination comes from the preferences (default: next to the original).
 #[tauri::command]
 pub fn start_conversion(
     app: AppHandle,
     state: State<'_, AppState>,
     path: PathBuf,
     request: ConversionRequest,
-    output_dir: Option<PathBuf>,
 ) -> Result<u64, ErrorPayload> {
     let bins = state.binaries().map_err(payload)?.clone();
     if !path.is_file() {
         return Err(payload(CoreError::InputNotFound));
     }
-    // Default destination: next to the original file.
-    let output_dir = output_dir
+    let output_dir = state
+        .prefs
+        .get()
+        .output_dir
         .or_else(|| path.parent().map(PathBuf::from))
-        .ok_or_else(|| payload(CoreError::InputNotFound))?;
+        .ok_or_else(|| payload(CoreError::OutputUnavailable))?;
+    if !output_dir.is_dir() {
+        return Err(payload(CoreError::OutputUnavailable));
+    }
     Ok(state.jobs.enqueue(
         app,
         bins,
@@ -166,7 +257,7 @@ pub fn open_output(
         .ok_or_else(|| payload(CoreError::InputNotFound))?;
     app.opener()
         .open_path(path.to_string_lossy(), None::<&str>)
-        .map_err(|e| payload(CoreError::Io(std::io::Error::other(e.to_string()))))
+        .map_err(io_payload)
 }
 
 /// Shows a file produced in this session in the system file manager.
@@ -180,9 +271,7 @@ pub fn reveal_output(
         .jobs
         .output(job_id)
         .ok_or_else(|| payload(CoreError::InputNotFound))?;
-    app.opener()
-        .reveal_item_in_dir(path)
-        .map_err(|e| payload(CoreError::Io(std::io::Error::other(e.to_string()))))
+    app.opener().reveal_item_in_dir(path).map_err(io_payload)
 }
 
 /// Native "open files" dialog. Returns `None` when cancelled.

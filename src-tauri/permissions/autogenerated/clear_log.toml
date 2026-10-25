@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-clear-log"
+description = "Enables the clear_log command without any pre-configured scope."
+commands.allow = ["clear_log"]
+
+[[permission]]
+identifier = "deny-clear-log"
+description = "Denies the clear_log command without any pre-configured scope."
+commands.deny = ["clear_log"]
