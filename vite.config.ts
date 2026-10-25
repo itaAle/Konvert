@@ -1,9 +1,11 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 // https://vite.dev/config/ — options tailored for Tauri development.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   // Keep Rust compiler errors visible.
   clearScreen: false,
   server: {
@@ -18,5 +20,8 @@ export default defineConfig({
   build: {
     // WebView2 (Chromium) on Windows; Safari 15 / WebKitGTK for later platforms.
     target: ["chrome120", "safari15"],
+  },
+  test: {
+    include: ["src/**/*.test.ts"],
   },
 });

@@ -1,0 +1,146 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens (Apple Human Interface palette).
+ * The window is transparent: on Windows 11 the Mica backdrop shows through
+ * (html[data-vibrancy="true"]); elsewhere the page paints an opaque background.
+ */
+:root {
+  color-scheme: light dark;
+
+  --k-window: #f5f5f7;
+  --k-surface: #ffffff;
+  --k-surface-raised: #ffffff;
+  --k-fill: rgb(120 120 128 / 0.08);
+  --k-fill-strong: rgb(120 120 128 / 0.16);
+  --k-separator: rgb(60 60 67 / 0.12);
+  --k-label: #1d1d1f;
+  --k-label-secondary: #6e6e73;
+  --k-label-tertiary: #8e8e93;
+  --k-accent: #007aff;
+  --k-accent-hover: #0068d9;
+  --k-accent-soft: rgb(0 122 255 / 0.1);
+  --k-success: #34c759;
+  --k-warning: #c76c00;
+  --k-warning-soft: rgb(255 149 0 / 0.12);
+  --k-danger: #d70015;
+  --k-danger-soft: rgb(255 59 48 / 0.1);
+  --k-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px rgb(0 0 0 / 0.06);
+  --k-shadow-lg: 0 2px 6px rgb(0 0 0 / 0.04), 0 24px 48px rgb(0 0 0 / 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --k-window: #1c1c1e;
+    --k-surface: #2c2c2e;
+    --k-surface-raised: #3a3a3c;
+    --k-fill: rgb(120 120 128 / 0.2);
+    --k-fill-strong: rgb(120 120 128 / 0.32);
+    --k-separator: rgb(84 84 88 / 0.6);
+    --k-label: #f5f5f7;
+    --k-label-secondary: #a1a1a6;
+    --k-label-tertiary: #8e8e93;
+    --k-accent: #0a84ff;
+    --k-accent-hover: #409cff;
+    --k-accent-soft: rgb(10 132 255 / 0.18);
+    --k-success: #30d158;
+    --k-warning: #ffb340;
+    --k-warning-soft: rgb(255 159 10 / 0.16);
+    --k-danger: #ff6961;
+    --k-danger-soft: rgb(255 69 58 / 0.16);
+    --k-shadow: 0 1px 2px rgb(0 0 0 / 0.25), 0 6px 18px rgb(0 0 0 / 0.18);
+    --k-shadow-lg: 0 2px 6px rgb(0 0 0 / 0.25), 0 16px 36px rgb(0 0 0 / 0.22);
+  }
+}
+
+/* Translucent surfaces over Mica. */
+html[data-vibrancy="true"] {
+  --k-window: transparent;
+  --k-surface: rgb(255 255 255 / 0.72);
+  --k-surface-raised: rgb(255 255 255 / 0.9);
+}
+
+@media (prefers-color-scheme: dark) {
+  html[data-vibrancy="true"] {
+    --k-surface: rgb(44 44 46 / 0.6);
+    --k-surface-raised: rgb(58 58 60 / 0.8);
+  }
+}
+
+@theme inline {
+  --color-window: var(--k-window);
+  --color-surface: var(--k-surface);
+  --color-surface-raised: var(--k-surface-raised);
+  --color-fill: var(--k-fill);
+  --color-fill-strong: var(--k-fill-strong);
+  --color-separator: var(--k-separator);
+  --color-label: var(--k-label);
+  --color-label-secondary: var(--k-label-secondary);
+  --color-label-tertiary: var(--k-label-tertiary);
+  --color-accent: var(--k-accent);
+  --color-accent-hover: var(--k-accent-hover);
+  --color-accent-soft: var(--k-accent-soft);
+  --color-success: var(--k-success);
+  --color-warning: var(--k-warning);
+  --color-warning-soft: var(--k-warning-soft);
+  --color-danger: var(--k-danger);
+  --color-danger-soft: var(--k-danger-soft);
+  --shadow-card: var(--k-shadow);
+  --shadow-card-lg: var(--k-shadow-lg);
+  /* SF Pro on Apple platforms; Inter (bundled, closest to SF) elsewhere. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter Variable",
+    "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-window);
+    color: var(--color-label);
+    font-family: var(--font-sans);
+    font-feature-settings: "kern", "calt";
+    -webkit-font-smoothing: antialiased;
+    /* A desktop app, not a web page. */
+    user-select: none;
+    cursor: default;
+    overflow: hidden;
+  }
+
+  :focus-visible {
+    outline: 3px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+    outline-offset: 2px;
+  }
+
+  pre,
+  code {
+    user-select: text;
+  }
+
+  /* Thin, unobtrusive scrollbars (macOS-like) instead of the classic Windows ones. */
+  ::-webkit-scrollbar {
+    width: 14px;
+    height: 14px;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-button {
+    display: none;
+  }
+  ::-webkit-scrollbar-thumb {
+    border: 4px solid transparent;
+    border-radius: 999px;
+    background: var(--color-fill-strong) content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-label-tertiary);
+  }
+}

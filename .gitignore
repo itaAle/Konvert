@@ -178,3 +178,6 @@ test-output/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Local preview configuration of the coding assistant
+.claude/launch.json
