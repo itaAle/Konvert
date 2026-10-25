@@ -4,7 +4,20 @@ Audio and video file converter with a modern interface.
 Konvert converte file audio e video da un formato all'altro, **interamente sul tuo
 computer**: nessuna connessione di rete, nessuna telemetria, nessun account.
 
-> Stato: in sviluppo (milestone 2 di 5). Prima piattaforma: Windows 10/11.
+> Stato: in sviluppo (milestone 3 di 5). Prima piattaforma: Windows 10/11.
+
+## Come si usa
+
+1. Trascina un file audio o video nella finestra (oppure **Scegli file…**, o Ctrl+O).
+2. Konvert lo analizza e propone solo i formati sensati per quel file.
+3. Scegli il formato e la qualità (**Massima qualità**, **Bilanciata**, **File piccolo**):
+   vedi subito la dimensione stimata e gli eventuali avvisi.
+4. Premi **Converti**: avanzamento, tempo rimanente e **Annulla** in ogni momento.
+   A fine lavoro puoi aprire il file o mostrarlo nella cartella.
+
+Il file convertito viene salvato accanto all'originale e non ne sovrascrive mai un altro
+(`brano.mp3` esiste già? → `brano (1).mp3`). Interfaccia in stile macOS con tema chiaro
+e scuro automatico ed effetto Mica su Windows 11.
 
 ## Formati
 
@@ -60,7 +73,8 @@ mai nulla.
 
 ```powershell
 npm run tauri dev         # avvia l'app in modalità sviluppo
-npm test                  # controllo privacy + test Rust (unitari e di integrazione)
+npm run dev               # solo interfaccia nel browser, con un backend simulato (design)
+npm test                  # controllo privacy + test interfaccia (Vitest) + test Rust
 npm run check:privacy     # solo il controllo privacy
 npm run cli -- targets "C:\percorso\video.mp4"          # formati proposti
 npm run cli -- plan "C:\percorso\video.mp4" --to webm     # decisioni, avvisi, stima
