@@ -4,20 +4,36 @@ Audio and video file converter with a modern interface.
 Konvert converte file audio e video da un formato all'altro, **interamente sul tuo
 computer**: nessuna connessione di rete, nessuna telemetria, nessun account.
 
-> Stato: in sviluppo (milestone 3 di 5). Prima piattaforma: Windows 10/11.
+> Stato: in sviluppo (milestone 4 di 5). Prima piattaforma: Windows 10/11.
 
 ## Come si usa
 
-1. Trascina un file audio o video nella finestra (oppure **Scegli file…**, o Ctrl+O).
-2. Konvert lo analizza e propone solo i formati sensati per quel file.
+1. Trascina uno o più file audio o video nella finestra (oppure **Scegli file…**, o Ctrl+O).
+2. Konvert li analizza e propone solo i formati sensati (per più file: quelli comuni a tutti).
 3. Scegli il formato e la qualità (**Massima qualità**, **Bilanciata**, **File piccolo**):
-   vedi subito la dimensione stimata e gli eventuali avvisi.
-4. Premi **Converti**: avanzamento, tempo rimanente e **Annulla** in ogni momento.
-   A fine lavoro puoi aprire il file o mostrarlo nella cartella.
+   vedi subito la dimensione stimata e gli eventuali avvisi. In **Avanzate** puoi
+   regolare bitrate, frequenza, canali, risoluzione, fotogrammi al secondo e codec.
+4. Premi **Converti**: avanzamento per ogni file e totale, tempo rimanente e **Annulla**
+   in ogni momento. A fine lavoro puoi aprire i file o mostrarli nella cartella.
 
-Il file convertito viene salvato accanto all'originale e non ne sovrascrive mai un altro
-(`brano.mp3` esiste già? → `brano (1).mp3`). Interfaccia in stile macOS con tema chiaro
-e scuro automatico ed effetto Mica su Windows 11.
+I file convertiti vengono salvati accanto all'originale (oppure in una cartella a scelta)
+e non ne sovrascrivono mai altri (`brano.mp3` esiste già? → `brano (1).mp3`).
+Se chiudi la finestra durante una conversione, Konvert chiede conferma.
+
+Interfaccia in stile macOS, in italiano o inglese, con tema chiaro/scuro (automatico o
+a scelta) ed effetto Mica su Windows 11.
+
+### Impostazioni (Ctrl+,)
+
+- **Lingua**, **Aspetto**, **Qualità predefinita**, **Cartella di destinazione**.
+- **Modalità debug** (disattivata di default): scrive un registro tecnico locale per
+  diagnosticare problemi, senza nomi né percorsi dei file. Si può mostrare o eliminare.
+- **Informazioni**: versione di Konvert e di FFmpeg, impegni sulla privacy, link alla
+  pagina dei rilasci (si apre nel browser solo quando lo clicchi).
+
+Le preferenze sono l'unico dato che Konvert conserva: un file JSON leggibile in
+`%APPDATA%\app.konvert.desktop\preferences.json`. Il registro di debug, se attivato, è in
+`%LOCALAPPDATA%\app.konvert.desktop\logs\konvert.log`.
 
 ## Formati
 
