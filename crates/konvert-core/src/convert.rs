@@ -72,6 +72,9 @@ pub async fn run_conversion(
     if !job.input.is_file() {
         return Err(CoreError::InputNotFound);
     }
+    if !job.output_dir.is_dir() {
+        return Err(CoreError::OutputUnavailable);
+    }
     let plan = plan_conversion(&job.media, &job.request, &job.input)?;
     let ext = formats::spec(job.request.target).extension;
     let temp_output = workspace.job_output(job.id, ext);

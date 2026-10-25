@@ -15,6 +15,7 @@
 pub mod binaries;
 pub mod command;
 pub mod convert;
+pub mod disk;
 pub mod error;
 pub mod estimate;
 pub mod formats;
@@ -29,6 +30,7 @@ mod process;
 
 pub use binaries::Binaries;
 pub use convert::{ConversionJob, ConversionOutcome, run_conversion};
+pub use disk::available_space;
 pub use error::{CoreError, ErrorPayload};
 pub use estimate::SizeEstimate;
 pub use formats::{TargetFormat, TargetOption, available_targets};

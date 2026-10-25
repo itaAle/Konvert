@@ -471,6 +471,34 @@ pub struct TargetOption {
     pub lossless: bool,
     /// Same format as the input (useful to change quality or size).
     pub same_as_input: bool,
+    pub kind: FormatKind,
+    /// Video encoders the user may pick in the advanced options (first = default).
+    pub video_codecs: Vec<VideoCodec>,
+    /// Audio encoders the user may pick (first = default); empty for GIF.
+    pub audio_codecs: Vec<AudioCodecInfo>,
+}
+
+/// What the advanced options need to know about an audio encoder.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AudioCodecInfo {
+    pub codec: AudioCodec,
+    pub lossless: bool,
+    /// Accepted sample rates (`None`: any common rate).
+    pub sample_rates: Option<Vec<u32>>,
+    pub max_channels: Option<u32>,
+}
+
+impl AudioCodecInfo {
+    pub fn of(codec: AudioCodec) -> Self {
+        Self {
+            codec,
+            lossless: codec.is_lossless(),
+            sample_rates: codec.supported_sample_rates().map(<[u32]>::to_vec),
+            max_channels: codec.max_channels(),
+        }
+    }
 }
 
 /// Format of an input file, guessed from its extension.
@@ -517,6 +545,14 @@ pub fn available_targets(media: &MediaInfo, input: &Path) -> Vec<TargetOption> {
                 group,
                 lossless: spec.is_lossless(),
                 same_as_input,
+                kind: spec.kind,
+                video_codecs: spec.video_codecs.to_vec(),
+                audio_codecs: spec
+                    .audio_codecs
+                    .iter()
+                    .copied()
+                    .map(AudioCodecInfo::of)
+                    .collect(),
             })
         })
         .collect()
@@ -714,6 +750,39 @@ mod tests {
         assert!(options.iter().all(|o| o.group == TargetGroup::Video));
         assert!(!formats(&options).contains(&TargetFormat::Gif));
         assert!(formats(&options).contains(&TargetFormat::Mp4));
+    }
+
+    #[test]
+    fn options_describe_the_codecs_for_the_advanced_panel() {
+        let options = available_targets(&video_with_audio(), Path::new("clip.mp4"));
+        let mkv = options
+            .iter()
+            .find(|o| o.format == TargetFormat::Mkv)
+            .unwrap();
+        assert_eq!(mkv.kind, FormatKind::Video);
+        assert_eq!(
+            mkv.video_codecs,
+            [VideoCodec::H264, VideoCodec::Av1, VideoCodec::Vp9]
+        );
+        assert_eq!(mkv.audio_codecs[0].codec, AudioCodec::Aac);
+        let opus = options
+            .iter()
+            .find(|o| o.format == TargetFormat::Opus)
+            .unwrap();
+        assert_eq!(
+            opus.audio_codecs[0].sample_rates.as_deref(),
+            Some(&[8000, 12000, 16000, 24000, 48000][..])
+        );
+        let gif = options
+            .iter()
+            .find(|o| o.format == TargetFormat::Gif)
+            .unwrap();
+        assert!(gif.audio_codecs.is_empty());
+        let flac = options
+            .iter()
+            .find(|o| o.format == TargetFormat::Flac)
+            .unwrap();
+        assert!(flac.audio_codecs[0].lossless);
     }
 
     #[test]

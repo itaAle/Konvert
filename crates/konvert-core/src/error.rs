@@ -18,6 +18,10 @@ pub enum CoreError {
     #[error("input file not found")]
     InputNotFound,
 
+    /// The destination folder does not exist (e.g. a removed USB drive).
+    #[error("destination folder not available")]
+    OutputUnavailable,
+
     /// The file was readable but contains no audio or video stream.
     #[error("the file contains no audio or video")]
     NotMedia,
@@ -57,6 +61,7 @@ impl CoreError {
         match self {
             CoreError::EngineMissing => "engine_missing",
             CoreError::InputNotFound => "input_not_found",
+            CoreError::OutputUnavailable => "output_unavailable",
             CoreError::NotMedia => "not_media",
             CoreError::CorruptInput { .. } => "corrupt_input",
             CoreError::UnsupportedConversion { .. } => "unsupported_conversion",
