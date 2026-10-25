@@ -7,14 +7,16 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::binaries::Binaries;
 use crate::error::CoreError;
 use crate::process;
 
 /// What kind of content a file holds, which drives the proposed targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub enum MediaKind {
     /// Audio only (cover art pictures do not count as video).
     Audio,
@@ -24,8 +26,9 @@ pub enum MediaKind {
     VideoWithAudio,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct AudioStream {
     pub index: u32,
     pub codec: String,
@@ -36,8 +39,9 @@ pub struct AudioStream {
     pub bit_depth: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct VideoStream {
     pub index: u32,
     pub codec: String,
@@ -48,9 +52,27 @@ pub struct VideoStream {
     pub pix_fmt: Option<String>,
 }
 
-/// Result of analysing an input file.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// An embedded cover picture (album art).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CoverArt {
+    pub index: u32,
+    /// Picture codec, usually `mjpeg` or `png`.
+    pub codec: String,
+}
+
+impl CoverArt {
+    /// Pictures that MP3/M4A/FLAC can store as-is.
+    pub fn is_portable(&self) -> bool {
+        matches!(self.codec.as_str(), "mjpeg" | "png")
+    }
+}
+
+/// Result of analysing an input file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct MediaInfo {
     /// FFmpeg demuxer name(s), e.g. `wav` or `mov,mp4,m4a,3gp,3g2,mj2`.
     pub container: String,
@@ -62,8 +84,8 @@ pub struct MediaInfo {
     pub audio: Vec<AudioStream>,
     /// Real video streams (attached cover pictures excluded).
     pub video: Vec<VideoStream>,
-    /// The file embeds a cover picture (e.g. album art in MP3/M4A/FLAC).
-    pub has_cover_art: bool,
+    /// Embedded cover picture (e.g. album art in MP3/M4A/FLAC).
+    pub cover_art: Option<CoverArt>,
     pub subtitle_streams: u32,
 }
 
@@ -108,7 +130,7 @@ pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
 
     let mut audio = Vec::new();
     let mut video = Vec::new();
-    let mut has_cover_art = false;
+    let mut cover_art = None;
     let mut subtitle_streams = 0;
 
     for s in raw.streams {
@@ -127,7 +149,12 @@ pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
                     .or(s.bits_per_sample)
                     .filter(|b| *b > 0),
             }),
-            Some("video") if s.is_attached_picture() => has_cover_art = true,
+            Some("video") if s.is_attached_picture() => {
+                cover_art.get_or_insert(CoverArt {
+                    index: s.index,
+                    codec,
+                });
+            }
             Some("video") => video.push(VideoStream {
                 index: s.index,
                 codec,
@@ -162,7 +189,7 @@ pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
         bit_rate: parse_num(&format.bit_rate),
         audio,
         video,
-        has_cover_art,
+        cover_art,
         subtitle_streams,
     })
 }
@@ -280,7 +307,9 @@ mod tests {
     fn cover_art_does_not_make_a_video() {
         let info = parse_ffprobe_json(MP3_WITH_COVER.as_bytes()).unwrap();
         assert_eq!(info.kind, MediaKind::Audio);
-        assert!(info.has_cover_art);
+        let cover = info.cover_art.as_ref().unwrap();
+        assert_eq!((cover.index, cover.codec.as_str()), (1, "mjpeg"));
+        assert!(cover.is_portable());
         assert!(info.video.is_empty());
     }
 

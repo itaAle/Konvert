@@ -1,0 +1,7 @@
+# TypeScript bindings generated from the Rust domain types (ts-rs) when running
+# `cargo test`. They are written to src/bindings and committed, so the frontend
+# always uses the exact shapes the Rust core serializes.
+[env]
+TS_RS_EXPORT_DIR = { value = "src/bindings", relative = true }
+# serde_json serializes u64 as a JSON number, not as a BigInt.
+TS_RS_LARGE_INT = "number"

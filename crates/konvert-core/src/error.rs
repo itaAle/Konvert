@@ -6,6 +6,7 @@
 //! inside an expandable "technical details" section.
 
 use serde::Serialize;
+use ts_rs::TS;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
@@ -133,7 +134,8 @@ fn is_disk_full(e: &std::io::Error) -> bool {
 }
 
 /// What the UI receives when an operation fails.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct ErrorPayload {
     pub code: String,
     pub details: Option<String>,

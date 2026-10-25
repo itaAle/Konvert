@@ -1,7 +1,11 @@
 //! Konvert core: everything that does not depend on the user interface.
 //!
 //! * [`probe`]: media analysis with FFprobe.
-//! * [`command`]: pure FFmpeg command builder.
+//! * [`formats`]: declarative catalog of output formats and proposal rules.
+//! * [`request`]: what the user asks for (format, preset, advanced options).
+//! * [`plan`]: decisions for one conversion (copy/re-encode, codecs, warnings).
+//! * [`estimate`]: estimated output size.
+//! * [`command`]: pure FFmpeg command builder (plan → arguments).
 //! * [`convert`]: runs FFmpeg, reports progress, supports cancellation.
 //! * [`naming`] / [`workspace`]: safe output naming and temporary files.
 //!
@@ -12,19 +16,26 @@ pub mod binaries;
 pub mod command;
 pub mod convert;
 pub mod error;
+pub mod estimate;
+pub mod formats;
 pub mod naming;
+pub mod plan;
 pub mod probe;
 pub mod progress;
+pub mod request;
 pub mod workspace;
 
 mod process;
 
 pub use binaries::Binaries;
-pub use command::{ConversionRequest, QualityPreset, TargetFormat};
 pub use convert::{ConversionJob, ConversionOutcome, run_conversion};
 pub use error::{CoreError, ErrorPayload};
+pub use estimate::SizeEstimate;
+pub use formats::{TargetFormat, TargetOption, available_targets};
+pub use plan::{ConversionPlan, ConversionWarning, plan_conversion};
 pub use probe::{MediaInfo, MediaKind, probe};
 pub use progress::Progress;
+pub use request::{AdvancedOptions, ChannelLayout, ConversionRequest, QualityPreset};
 pub use workspace::Workspace;
 
 /// First line of `ffmpeg -version` (e.g. `ffmpeg version n9.0.2 ...`).

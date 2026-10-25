@@ -12,14 +12,18 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio_util::sync::CancellationToken;
+use ts_rs::TS;
 
 use crate::binaries::Binaries;
-use crate::command::{ConversionRequest, build_command};
+use crate::command::build_from_plan;
 use crate::error::CoreError;
+use crate::formats;
 use crate::naming;
+use crate::plan::plan_conversion;
 use crate::probe::MediaInfo;
 use crate::process;
 use crate::progress::{Progress, ProgressParser};
+use crate::request::ConversionRequest;
 use crate::workspace::Workspace;
 
 /// Lines of FFmpeg stderr kept for the "technical details" section.
@@ -40,12 +44,15 @@ pub struct ConversionJob {
 }
 
 /// Result of a successful conversion.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct ConversionOutcome {
     pub output: PathBuf,
     pub size_bytes: u64,
+    /// Seconds.
     #[serde(serialize_with = "serialize_secs")]
+    #[ts(type = "number")]
     pub elapsed: Duration,
 }
 
@@ -65,9 +72,10 @@ pub async fn run_conversion(
     if !job.input.is_file() {
         return Err(CoreError::InputNotFound);
     }
-    let ext = job.request.target.extension();
+    let plan = plan_conversion(&job.media, &job.request, &job.input)?;
+    let ext = formats::spec(job.request.target).extension;
     let temp_output = workspace.job_output(job.id, ext);
-    let command = build_command(&job.media, &job.request, &job.input, &temp_output)?;
+    let command = build_from_plan(&plan, &job.input, &temp_output);
 
     let result = run_ffmpeg(
         bins,

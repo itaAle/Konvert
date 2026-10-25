@@ -5,6 +5,7 @@
 //! of the current block and yields a snapshot each time a block is complete.
 
 use serde::Serialize;
+use ts_rs::TS;
 
 /// Raw values of one completed progress block.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -61,8 +62,9 @@ impl ProgressParser {
 }
 
 /// Progress information ready to be shown to the user.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct Progress {
     /// Completion between 0.0 and 1.0, when the input duration is known.
     pub fraction: Option<f64>,
