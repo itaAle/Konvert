@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = ["crates/konvert-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+# `File::try_lock` (used for crash-safe temp-dir cleanup) is stable since 1.89.
+rust-version = "1.89"
+repository = "https://github.com/itaAle/Konvert"
+
+[workspace.dependencies]
+konvert-core = { path = "crates/konvert-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", default-features = false }
+tokio-util = { version = "0.7", default-features = false }
+windows-sys = "0.61"
+
+# Release profile shared by every crate of the workspace (Tauri reads it from the root).
+# See https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
