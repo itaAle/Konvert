@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reveal-output"
+description = "Enables the reveal_output command without any pre-configured scope."
+commands.allow = ["reveal_output"]
+
+[[permission]]
+identifier = "deny-reveal-output"
+description = "Denies the reveal_output command without any pre-configured scope."
+commands.deny = ["reveal_output"]

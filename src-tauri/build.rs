@@ -2,7 +2,18 @@ use std::path::Path;
 
 /// Commands the frontend may invoke. Each one must also be granted in
 /// `capabilities/default.json` (as `allow-<command-name>`), otherwise Tauri rejects it.
-const COMMANDS: &[&str] = &["engine_info", "probe_file"];
+const COMMANDS: &[&str] = &[
+    "engine_info",
+    "platform_info",
+    "app_ready",
+    "analyze_file",
+    "plan_conversion",
+    "start_conversion",
+    "cancel_conversion",
+    "open_output",
+    "reveal_output",
+    "pick_files",
+];
 
 fn main() {
     // The FFmpeg binaries are bundled as resources; fail early with a clear hint

@@ -21,7 +21,9 @@
         "minHeight": 540,
         "center": true,
         "incognito": true,
-        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,AutofillServerCommunication,MediaRouter,OptimizationHints,Translate,NetworkTimeServiceQuerying --disable-background-networking --disable-component-update --disable-domain-reliability --disable-sync --disable-client-side-phishing-detection --no-pings --no-first-run"
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,AutofillServerCommunication,MediaRouter,OptimizationHints,Translate,NetworkTimeServiceQuerying --disable-background-networking --disable-component-update --disable-domain-reliability --disable-sync --disable-client-side-phishing-detection --no-pings --no-first-run",
+        "transparent": true,
+        "visible": false
       }
     ],
     "security": {
@@ -54,12 +56,16 @@
         "form-action": "'none'"
       },
       "freezePrototype": true,
-      "capabilities": ["default"]
+      "capabilities": [
+        "default"
+      ]
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "publisher": "Konvert contributors",
     "copyright": "Copyright (c) 2026 Konvert contributors. MIT License.",
     "category": "Utility",

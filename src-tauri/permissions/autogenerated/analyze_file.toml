@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-analyze-file"
+description = "Enables the analyze_file command without any pre-configured scope."
+commands.allow = ["analyze_file"]
+
+[[permission]]
+identifier = "deny-analyze-file"
+description = "Denies the analyze_file command without any pre-configured scope."
+commands.deny = ["analyze_file"]

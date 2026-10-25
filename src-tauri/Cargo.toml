@@ -22,8 +22,17 @@ tauri-build = { version = "2", features = [] }
 # Privacy: no network-capable Tauri plugins (updater, http, websocket, ...) and no
 # HTTP client crates. `scripts/check-privacy.mjs` enforces this.
 tauri = { version = "~2.11", features = [] }  # keep in sync with @tauri-apps/api in package.json
+# Native file/folder pickers and "open file / show in folder". Used only from Rust:
+# the frontend is granted no permission for these plugins.
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
 konvert-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 tokio-util = { workspace = true }
+ts-rs = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# Mica backdrop on Windows 11 (same version Tauri already depends on).
+window-vibrancy = "0.6"

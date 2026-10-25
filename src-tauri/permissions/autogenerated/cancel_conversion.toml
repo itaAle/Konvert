@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cancel-conversion"
+description = "Enables the cancel_conversion command without any pre-configured scope."
+commands.allow = ["cancel_conversion"]
+
+[[permission]]
+identifier = "deny-cancel-conversion"
+description = "Denies the cancel_conversion command without any pre-configured scope."
+commands.deny = ["cancel_conversion"]
