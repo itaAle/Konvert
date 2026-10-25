@@ -1,0 +1,15 @@
+[package]
+name = "konvert-cli"
+description = "Developer command line for Konvert's conversion engine (not shipped with the app)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+konvert-core = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
+tokio-util = { workspace = true }
