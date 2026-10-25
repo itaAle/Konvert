@@ -1,0 +1,45 @@
+{
+  "description": "Pinned FFmpeg/FFprobe builds used by Konvert. Downloaded only at development/build time by scripts/setup-ffmpeg.*, verified with SHA-256, never at runtime. To upgrade: pick a new LGPL build, update url/sha256/version, run the setup script and the test suite.",
+  "ffmpegVersion": "n9.0.2-36-g6882969ce9",
+  "license": "LGPL-3.0-or-later",
+  "source": {
+    "ffmpegCommit": "https://github.com/FFmpeg/FFmpeg/commit/6882969ce9",
+    "buildRecipe": "https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-10-25-13-00",
+    "release": "https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-10-25-13-00"
+  },
+  "requiredEncoders": [
+    "libopenh264",
+    "libmp3lame",
+    "libvpx",
+    "libvpx-vp9",
+    "libsvtav1",
+    "libopus",
+    "libvorbis",
+    "aac",
+    "flac",
+    "wmav2",
+    "mpeg4",
+    "gif"
+  ],
+  "platforms": {
+    "windows-x86_64": {
+      "urls": [
+        "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-25-13-00/ffmpeg-n9.0.2-36-g6882969ce9-win64-lgpl-shared-9.0.zip"
+      ],
+      "sha256": "72e3fbaf17f8d5162c3010f9e58872fcb93ba2b03731fd0fff1ca9aabb616ea6",
+      "archive": "zip",
+      "binDir": "bin",
+      "files": ["ffmpeg.exe", "ffprobe.exe", "*.dll"]
+    },
+    "linux-x86_64": {
+      "status": "untested: Linux packaging is planned for phase 2",
+      "urls": [
+        "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-25-13-00/ffmpeg-n9.0.2-36-g6882969ce9-linux64-lgpl-9.0.tar.xz"
+      ],
+      "sha256": "e3164231897b2e503686acd5829c4dab945d9ee02bdc98ef69793ecc72fc0546",
+      "archive": "tar.xz",
+      "binDir": "bin",
+      "files": ["ffmpeg", "ffprobe"]
+    }
+  }
+}
