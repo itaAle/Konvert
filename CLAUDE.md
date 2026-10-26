@@ -122,7 +122,7 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
 - 2026-10-26: **v0.3.0, macOS (Apple Silicon) and Linux support** on `main`. Owner's decisions: macOS without an Apple Developer account for now (ad hoc signature, no notarization, Gatekeeper "Open Anyway" documented in the README); .deb + .rpm + AppImage; Linux x86_64 + arm64.
   - CI green on Windows x64, macOS arm64, Linux x64 and arm64, including the network monitor of the running app (no connection).
   - The macOS FFmpeg build is pinned and mirrored with its sources; the Linux archives are mirrored too (all hashes verified).
-  - Release flow: the Windows installer comes from `npm run release` locally; the macOS/Linux packages come from the **Release packages** workflow artifacts; the owner creates the `v0.3.0` tag and the GitHub release.
+  - Release flow: the Windows installer comes from `npm run release` locally; the macOS/Linux packages come from the **Release packages** workflow artifacts (one artifact per package with its `.sha256`; attach the extracted files to the release, not the artifact zips); the owner creates the `v0.3.0` tag and the GitHub release.
   - v0.3.0 ships Windows, macOS arm64 and Linux x64 only: the first Linux arm64 packaging failed (missing `xdg-utils`, fixed). The owner will run **Release packages** with `platform: linux-arm64` later; then restore arm64 in the README (platforms line and installation table).
   - Not verified on real hardware yet: drag & drop and "Open With" on macOS/Linux, Gatekeeper, the Linux desktop integration.
 

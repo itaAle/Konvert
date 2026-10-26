@@ -108,8 +108,40 @@ jobs:
           app_exe="$(find target/release/bundle/macos/Konvert.app/Contents/MacOS -maxdepth 1 -type f | head -n1)"
           bash scripts/monitor-network.sh --seconds 30 "$app_exe" "$RUNNER_TEMP/test.wav"
 
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      # One artifact (one zip) per package, with its .sha256: users download only
+      # what their system needs.
+      - name: Package names
+        id: files
+        run: |
+          for ext in dmg deb rpm AppImage; do
+            file="$(cd release && ls -- *."$ext" 2>/dev/null | head -n1 || true)"
+            echo "$ext=$file" >> "$GITHUB_OUTPUT"
+          done
+
+      - if: steps.files.outputs.dmg != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: konvert-${{ runner.os }}-${{ runner.arch }}
-          path: release/
+          name: ${{ steps.files.outputs.dmg }}
+          path: release/${{ steps.files.outputs.dmg }}*
+          if-no-files-found: error
+
+      - if: steps.files.outputs.deb != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.files.outputs.deb }}
+          path: release/${{ steps.files.outputs.deb }}*
+          if-no-files-found: error
+
+      - if: steps.files.outputs.rpm != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.files.outputs.rpm }}
+          path: release/${{ steps.files.outputs.rpm }}*
+          if-no-files-found: error
+
+      - if: steps.files.outputs.AppImage != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.files.outputs.AppImage }}
+          path: release/${{ steps.files.outputs.AppImage }}*
           if-no-files-found: error
