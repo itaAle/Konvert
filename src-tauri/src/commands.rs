@@ -18,6 +18,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 use ts_rs::TS;
 
+use crate::launch::LaunchFiles;
 use crate::prefs::Preferences;
 use crate::state::AppState;
 
@@ -277,8 +278,8 @@ pub fn reveal_output(
 
 /// Files Konvert was launched with ("Open with"); returned once.
 #[tauri::command]
-pub fn take_launch_files(state: State<'_, AppState>) -> Vec<PathBuf> {
-    std::mem::take(&mut *state.launch_files.lock().unwrap_or_else(|e| e.into_inner()))
+pub fn take_launch_files(files: State<'_, LaunchFiles>) -> Vec<PathBuf> {
+    files.take()
 }
 
 /// Opens the bundled third-party licenses with the default text editor.
@@ -337,5 +338,30 @@ mod tests {
             .collect();
         let picker: BTreeSet<&str> = MEDIA_EXTENSIONS.iter().copied().collect();
         assert_eq!(registered, picker);
+    }
+
+    #[test]
+    fn macos_and_linux_open_with_cover_every_file_picker_extension() {
+        let picker: BTreeSet<String> = MEDIA_EXTENSIONS.iter().map(|e| e.to_string()).collect();
+        for (platform, conf) in [
+            ("macos", include_str!("../tauri.macos.conf.json")),
+            ("linux", include_str!("../tauri.linux.conf.json")),
+        ] {
+            let conf: serde_json::Value = serde_json::from_str(conf).unwrap();
+            let associations = conf["bundle"]["fileAssociations"].as_array().unwrap();
+            let registered: BTreeSet<String> = associations
+                .iter()
+                .flat_map(|a| a["ext"].as_array().unwrap())
+                .map(|e| e.as_str().unwrap().to_owned())
+                .collect();
+            assert_eq!(registered, picker, "{platform}");
+            for a in associations {
+                match platform {
+                    // Listed in "Open With", never the default app.
+                    "macos" => assert_eq!(a["rank"], "Alternate", "{a}"),
+                    _ => assert!(a["mimeType"].as_str().is_some_and(|m| m.contains('/')), "{a}"),
+                }
+            }
+        }
     }
 }

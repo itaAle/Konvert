@@ -28,9 +28,7 @@ pub fn run() {
         // is running) hands its files to this instance and exits.
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             let files = launch::files_from_args(argv.into_iter().map(Into::into), cwd.as_ref());
-            if !files.is_empty() {
-                let _ = app.emit(launch::OPEN_FILES_EVENT, files);
-            }
+            launch::open_files(app, files);
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.set_focus();
@@ -40,7 +38,14 @@ pub fn run() {
         // "open file / show in folder / releases page".
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // Managed before setup: macOS may deliver opened files before the window exists.
+        .manage(launch::LaunchFiles::default())
         .setup(|app| {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            launch::open_files(
+                app.handle(),
+                launch::files_from_args(std::env::args_os(), &cwd),
+            );
             let window = app.get_webview_window("main");
             let vibrancy = window.as_ref().is_some_and(apply_backdrop);
             let state = AppState::initialize(app.handle(), vibrancy)?;
@@ -87,12 +92,33 @@ pub fn run() {
     // Without a window (e.g. WebView2 missing) explain the problem instead of
     // exiting silently.
     let app = app.unwrap_or_else(|e| launch::fatal_startup_error(&e.to_string()));
-    app.run(|app, event| {
-        if let RunEvent::Exit = event
-            && let Some(state) = app.try_state::<AppState>()
-        {
-            state.shutdown();
+    app.run(|app, event| match event {
+        // ⌘Q on macOS quits without closing the window first: ask as for ×.
+        RunEvent::ExitRequested { api, .. } => {
+            if let Some(state) = app.try_state::<AppState>()
+                && state.jobs.has_active()
+                && !state.close_confirmed.load(Ordering::Relaxed)
+            {
+                api.prevent_exit();
+                let _ = app.emit(CLOSE_REQUESTED_EVENT, ());
+            }
         }
+        RunEvent::Exit => {
+            if let Some(state) = app.try_state::<AppState>() {
+                state.shutdown();
+            }
+        }
+        // "Open with", double-click on a document and drops on the Dock icon.
+        #[cfg(target_os = "macos")]
+        RunEvent::Opened { urls } => {
+            let files = urls
+                .into_iter()
+                .filter_map(|url| url.to_file_path().ok())
+                .filter(|path| path.is_file())
+                .collect();
+            launch::open_files(app, files);
+        }
+        _ => {}
     });
 }
 

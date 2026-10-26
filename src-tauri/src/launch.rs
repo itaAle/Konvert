@@ -1,11 +1,54 @@
-//! Files passed on the command line ("Open with Konvert", drag onto the icon)
-//! and startup failures.
+//! Files opened with Konvert ("Open with Konvert", drag onto the icon) and
+//! startup failures.
+//!
+//! Windows and Linux pass the files on the command line (to the second instance
+//! too, through the single-instance plugin); macOS sends them as an "open
+//! documents" event instead, possibly before the window exists.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use tauri::{AppHandle, Emitter, Manager};
 
 /// Event carrying files opened while Konvert is already running.
 pub const OPEN_FILES_EVENT: &str = "open-files";
+
+/// Files opened before the UI asked for them (managed state). `None` once the
+/// UI has taken them: later files are delivered with [`OPEN_FILES_EVENT`].
+pub struct LaunchFiles(Mutex<Option<Vec<PathBuf>>>);
+
+impl Default for LaunchFiles {
+    fn default() -> Self {
+        Self(Mutex::new(Some(Vec::new())))
+    }
+}
+
+impl LaunchFiles {
+    /// Hands the queued files to the UI, once.
+    pub fn take(&self) -> Vec<PathBuf> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .unwrap_or_default()
+    }
+}
+
+/// Queues `files` until the UI is ready, then delivers them with an event.
+pub fn open_files(app: &AppHandle, files: Vec<PathBuf>) {
+    if files.is_empty() {
+        return;
+    }
+    let pending = app.state::<LaunchFiles>();
+    let mut queue = pending.0.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(queue) = queue.as_mut() {
+        queue.extend(files);
+    } else {
+        drop(queue);
+        let _ = app.emit(OPEN_FILES_EVENT, files);
+    }
+}
 
 /// Existing files among `args` (program name excluded); relative paths are
 /// resolved against `cwd`. Options such as `--foo` are ignored.
@@ -19,15 +62,19 @@ pub fn files_from_args(args: impl IntoIterator<Item = OsString>, cwd: &Path) -> 
         .collect()
 }
 
-/// Shown when the window cannot be created at all, typically because the
-/// Microsoft Edge WebView2 runtime is missing. Exits the process.
+/// Shown when the window cannot be created at all: on Windows typically because
+/// the Microsoft Edge WebView2 runtime is missing. Exits the process.
 pub fn fatal_startup_error(error: &str) -> ! {
-    let message = format!(
-        "Konvert non può avviarsi: probabilmente manca Microsoft Edge WebView2 Runtime. \
-         Installalo dal sito Microsoft e riprova.\n\n\
-         Konvert cannot start: the Microsoft Edge WebView2 Runtime is probably missing. \
-         Install it from Microsoft's website and try again.\n\n({error})"
-    );
+    let message = if cfg!(windows) {
+        format!(
+            "Konvert non può avviarsi: probabilmente manca Microsoft Edge WebView2 Runtime. \
+             Installalo dal sito Microsoft e riprova.\n\n\
+             Konvert cannot start: the Microsoft Edge WebView2 Runtime is probably missing. \
+             Install it from Microsoft's website and try again.\n\n({error})"
+        )
+    } else {
+        format!("Konvert non può avviarsi. / Konvert cannot start.\n\n({error})")
+    };
     show_error_box(&message);
     std::process::exit(1);
 }

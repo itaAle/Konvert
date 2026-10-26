@@ -1,0 +1,287 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Konvert",
+        "width": 960,
+        "height": 680,
+        "minWidth": 720,
+        "minHeight": 540,
+        "center": true,
+        "incognito": true,
+        "transparent": false,
+        "visible": false
+      }
+    ]
+  },
+  "bundle": {
+    "targets": [
+      "deb",
+      "rpm",
+      "appimage"
+    ],
+    "fileAssociations": [
+      {
+        "ext": [
+          "mp3"
+        ],
+        "name": "MP3",
+        "mimeType": "audio/mpeg"
+      },
+      {
+        "ext": [
+          "m4a",
+          "m4b",
+          "alac"
+        ],
+        "name": "MPEG-4 audio",
+        "mimeType": "audio/mp4"
+      },
+      {
+        "ext": [
+          "aac"
+        ],
+        "name": "AAC",
+        "mimeType": "audio/aac"
+      },
+      {
+        "ext": [
+          "wav",
+          "wave"
+        ],
+        "name": "WAV",
+        "mimeType": "audio/x-wav"
+      },
+      {
+        "ext": [
+          "flac"
+        ],
+        "name": "FLAC",
+        "mimeType": "audio/flac"
+      },
+      {
+        "ext": [
+          "ogg",
+          "oga"
+        ],
+        "name": "Ogg audio",
+        "mimeType": "audio/ogg"
+      },
+      {
+        "ext": [
+          "opus"
+        ],
+        "name": "Opus",
+        "mimeType": "audio/x-opus+ogg"
+      },
+      {
+        "ext": [
+          "wma"
+        ],
+        "name": "Windows Media Audio",
+        "mimeType": "audio/x-ms-wma"
+      },
+      {
+        "ext": [
+          "aif",
+          "aiff",
+          "aifc"
+        ],
+        "name": "AIFF",
+        "mimeType": "audio/x-aiff"
+      },
+      {
+        "ext": [
+          "ape"
+        ],
+        "name": "Monkey's Audio",
+        "mimeType": "audio/x-ape"
+      },
+      {
+        "ext": [
+          "wv"
+        ],
+        "name": "WavPack",
+        "mimeType": "audio/x-wavpack"
+      },
+      {
+        "ext": [
+          "mka"
+        ],
+        "name": "Matroska audio",
+        "mimeType": "audio/x-matroska"
+      },
+      {
+        "ext": [
+          "ac3"
+        ],
+        "name": "AC-3",
+        "mimeType": "audio/ac3"
+      },
+      {
+        "ext": [
+          "mp4"
+        ],
+        "name": "MPEG-4 video",
+        "mimeType": "video/mp4"
+      },
+      {
+        "ext": [
+          "m4v"
+        ],
+        "name": "M4V",
+        "mimeType": "video/x-m4v"
+      },
+      {
+        "ext": [
+          "mkv"
+        ],
+        "name": "Matroska video",
+        "mimeType": "video/x-matroska"
+      },
+      {
+        "ext": [
+          "mov",
+          "qt"
+        ],
+        "name": "QuickTime",
+        "mimeType": "video/quicktime"
+      },
+      {
+        "ext": [
+          "webm"
+        ],
+        "name": "WebM",
+        "mimeType": "video/webm"
+      },
+      {
+        "ext": [
+          "avi"
+        ],
+        "name": "AVI",
+        "mimeType": "video/x-msvideo"
+      },
+      {
+        "ext": [
+          "wmv"
+        ],
+        "name": "Windows Media Video",
+        "mimeType": "video/x-ms-wmv"
+      },
+      {
+        "ext": [
+          "flv"
+        ],
+        "name": "Flash Video",
+        "mimeType": "video/x-flv"
+      },
+      {
+        "ext": [
+          "mpg",
+          "mpeg",
+          "vob"
+        ],
+        "name": "MPEG video",
+        "mimeType": "video/mpeg"
+      },
+      {
+        "ext": [
+          "ts",
+          "m2ts",
+          "mts"
+        ],
+        "name": "MPEG transport stream",
+        "mimeType": "video/mp2t"
+      },
+      {
+        "ext": [
+          "3gp"
+        ],
+        "name": "3GPP",
+        "mimeType": "video/3gpp"
+      },
+      {
+        "ext": [
+          "ogv"
+        ],
+        "name": "Ogg video",
+        "mimeType": "video/ogg"
+      },
+      {
+        "ext": [
+          "gif"
+        ],
+        "name": "GIF",
+        "mimeType": "image/gif"
+      },
+      {
+        "ext": [
+          "jpg",
+          "jpeg",
+          "jpe",
+          "jfif"
+        ],
+        "name": "JPEG",
+        "mimeType": "image/jpeg"
+      },
+      {
+        "ext": [
+          "png"
+        ],
+        "name": "PNG",
+        "mimeType": "image/png"
+      },
+      {
+        "ext": [
+          "webp"
+        ],
+        "name": "WebP",
+        "mimeType": "image/webp"
+      },
+      {
+        "ext": [
+          "avif"
+        ],
+        "name": "AVIF",
+        "mimeType": "image/avif"
+      },
+      {
+        "ext": [
+          "heic"
+        ],
+        "name": "HEIC",
+        "mimeType": "image/heic"
+      },
+      {
+        "ext": [
+          "heif",
+          "hif"
+        ],
+        "name": "HEIF",
+        "mimeType": "image/heif"
+      },
+      {
+        "ext": [
+          "bmp"
+        ],
+        "name": "BMP",
+        "mimeType": "image/bmp"
+      },
+      {
+        "ext": [
+          "tif",
+          "tiff"
+        ],
+        "name": "TIFF",
+        "mimeType": "image/tiff"
+      }
+    ],
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
+  }
+}
