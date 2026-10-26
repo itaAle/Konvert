@@ -10,6 +10,7 @@ import type { ErrorPayload } from "../bindings/ErrorPayload";
 import type { FileAnalysis } from "../bindings/FileAnalysis";
 import type { FrameOptions } from "../bindings/FrameOptions";
 import type { JobEvent } from "../bindings/JobEvent";
+import type { PdfOptions } from "../bindings/PdfOptions";
 import type { Progress } from "../bindings/Progress";
 import type { QualityPreset } from "../bindings/QualityPreset";
 import type { TargetFormat } from "../bindings/TargetFormat";
@@ -52,6 +53,10 @@ export interface QueueState {
   frames: FrameOptions;
   /** Erase where the files were made (GPS data, location tags). */
   removeLocation: boolean;
+  /** Pictures to PDF and PDF to pictures. */
+  pdf: PdfOptions;
+  /** The running or finished conversion made one PDF out of every file. */
+  combined: boolean;
   /** Bumped whenever the request changes: answers for older requests are discarded. */
   planVersion: number;
   notice: "cancelled" | null;
@@ -64,11 +69,13 @@ export type QueueAction =
   | { type: "analyzed"; key: number; file: FileAnalysis }
   | { type: "analyzeFailed"; key: number; error: ErrorPayload }
   | { type: "remove"; key: number }
+  | { type: "move"; key: number; delta: -1 | 1 }
   | { type: "selectTarget"; target: TargetFormat }
   | { type: "selectPreset"; preset: QualityPreset }
   | { type: "setAdvanced"; advanced: AdvancedOptions }
   | { type: "setFrames"; frames: FrameOptions }
   | { type: "setRemoveLocation"; removeLocation: boolean }
+  | { type: "setPdf"; pdf: PdfOptions }
   | { type: "defaultPreset"; preset: QualityPreset }
   | { type: "planned"; key: number; version: number; plan: ConversionPlan }
   | { type: "planFailed"; key: number; version: number; error: ErrorPayload }
@@ -85,6 +92,17 @@ export const NO_TARGETS = "no_targets";
 /** One frame, in the middle of the video. */
 export const DEFAULT_FRAMES: FrameOptions = { mode: "single", atSecs: null, everySecs: null };
 
+/** A4 pages chosen by orientation, small margins, one PDF; 150 dpi pictures of every page. */
+export const DEFAULT_PDF: PdfOptions = {
+  pageSize: "a4",
+  orientation: "auto",
+  margin: "small",
+  combine: true,
+  dpi: 150,
+  pages: null,
+  pageLabel: null,
+};
+
 export function initialQueue(preset: QualityPreset = "balanced"): QueueState {
   return {
     phase: "empty",
@@ -94,6 +112,8 @@ export function initialQueue(preset: QualityPreset = "balanced"): QueueState {
     advanced: {},
     frames: DEFAULT_FRAMES,
     removeLocation: false,
+    pdf: DEFAULT_PDF,
+    combined: false,
     planVersion: 0,
     notice: null,
     cancelling: false,
@@ -126,10 +146,13 @@ export function commonTargets(items: QueueItem[]): TargetOption[] {
   const files = items.filter((i) => i.file && i.status !== "invalid").map((i) => i.file!);
   if (files.length === 0) return [];
   const mixedKinds = new Set(files.map((f) => f.media.kind === "audio")).size > 1;
+  // A PDF becomes a PDF only when it is combined with other files.
+  const lonePdf = files.length === 1 && files[0].media.kind === "document";
   return files[0].targets
     .filter((option) =>
       files.every((f) => f.targets.some((o) => o.format === option.format && sameGroup(o.group, option.group))),
     )
+    .filter((option) => !(lonePdf && option.format === "pdf"))
     .map((option) => ({
       ...option,
       // Audio files and videos together: the audio formats are just "audio".
@@ -146,8 +169,25 @@ export function requestOf(state: QueueState): ConversionRequest | null {
         advanced: state.advanced,
         frames: state.frames,
         removeLocation: state.removeLocation,
+        pdf: state.pdf,
       }
     : null;
+}
+
+/** Every file goes into one PDF: always for PDFs, for pictures unless turned off. */
+export function combines(state: QueueState): boolean {
+  const ready = readyItems(state);
+  return (
+    state.target === "pdf" &&
+    ready.length > 1 &&
+    (state.pdf.combine || ready.some((i) => i.file!.media.kind === "document"))
+  );
+}
+
+/** Items shown as results: a combined PDF is one result, shared by every file. */
+export function resultItems(state: QueueState): QueueItem[] {
+  const finished = state.items.filter((i) => FINISHED.includes(i.status));
+  return state.combined ? finished.slice(0, 1) : finished;
 }
 
 export function canStart(state: QueueState): boolean {
@@ -243,6 +283,7 @@ function maybeFinish(state: QueueState): QueueState {
       ...state,
       phase: "setup",
       cancelling: false,
+      combined: false,
       notice: "cancelled",
       items: state.items.map((i) => (i.status === "cancelled" ? { ...i, status: "ready", jobId: null, progress: null } : i)),
     };
@@ -298,6 +339,17 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
       if (state.phase !== "setup") return state;
       return withoutItems(state, state.items.filter((i) => i.key !== action.key));
 
+    case "move": {
+      // Order of the pages in a combined PDF.
+      if (state.phase !== "setup") return state;
+      const from = state.items.findIndex((i) => i.key === action.key);
+      const to = from + action.delta;
+      if (from < 0 || to < 0 || to >= state.items.length) return state;
+      const items = [...state.items];
+      [items[from], items[to]] = [items[to], items[from]];
+      return { ...state, items };
+    }
+
     case "selectTarget":
       if (state.phase !== "setup" || state.target === action.target) return state;
       // Codec choices of another format may not apply: start from automatic.
@@ -319,6 +371,10 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
       if (state.phase !== "setup") return state;
       return invalidate({ ...state, removeLocation: action.removeLocation, notice: null });
 
+    case "setPdf":
+      if (state.phase !== "setup") return state;
+      return invalidate({ ...state, pdf: action.pdf, notice: null });
+
     case "defaultPreset":
       return state.phase === "empty" ? { ...state, preset: action.preset } : state;
 
@@ -337,6 +393,7 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
         phase: "converting",
         notice: null,
         cancelling: false,
+        combined: combines(state),
         items: state.items.map((i) =>
           i.status === "ready" ? { ...i, status: "queued", jobId: null, progress: null, outcome: null, error: null } : i,
         ),
@@ -352,24 +409,26 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
 
     case "job": {
       if (state.phase !== "converting") return state;
-      const item = state.items.find((i) => i.jobId === action.event.jobId);
-      if (!item || FINISHED.includes(item.status)) return state;
+      // Every file of a combined PDF shares the same job.
+      const jobItems = state.items.filter((i) => i.jobId === action.event.jobId && !FINISHED.includes(i.status));
+      if (jobItems.length === 0) return state;
       const u = action.event.update;
-      switch (u.state) {
-        case "queued":
-          return state;
-        case "running":
-          return update(state, item.key, { status: "running" });
-        case "progress":
-          return update(state, item.key, { status: "running", progress: u.progress });
-        case "done":
-          return maybeFinish(update(state, item.key, { status: "done", outcome: u.outcome }));
-        case "failed":
-          return maybeFinish(update(state, item.key, { status: "failed", error: u.error }));
-        case "cancelled":
-          return maybeFinish(update(state, item.key, { status: "cancelled" }));
-      }
-      return state;
+      const patch: Partial<QueueItem> | null =
+        u.state === "running"
+          ? { status: "running" }
+          : u.state === "progress"
+            ? { status: "running", progress: u.progress }
+            : u.state === "done"
+              ? { status: "done", outcome: u.outcome }
+              : u.state === "failed"
+                ? { status: "failed", error: u.error }
+                : u.state === "cancelled"
+                  ? { status: "cancelled" }
+                  : null;
+      if (!patch) return state;
+      const keys = new Set(jobItems.map((i) => i.key));
+      const next = { ...state, items: state.items.map((i) => (keys.has(i.key) ? { ...i, ...patch } : i)) };
+      return FINISHED.includes(patch.status!) ? maybeFinish(next) : next;
     }
 
     case "cancelAll": {
@@ -387,6 +446,7 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
       return {
         ...state,
         phase: "setup",
+        combined: false,
         items: state.items.map((i) =>
           FINISHED.includes(i.status) ? { ...i, status: "ready", jobId: null, progress: null, outcome: null, error: null } : i,
         ),

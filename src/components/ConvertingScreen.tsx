@@ -65,8 +65,8 @@ function speedText(progress: Progress | null): string | null {
   return progress?.speed != null ? t("progress.speed", { speed: formatSpeed(progress.speed) }) : null;
 }
 
-/** Large single-file view. */
-function SingleProgress({ q, item }: { q: QueueController; item: QueueItem }) {
+/** Large single-file view (also for several files combined into one PDF). */
+function SingleProgress({ q, item, name = item.name }: { q: QueueController; item: QueueItem; name?: string }) {
   const fraction = item.progress?.fraction ?? null;
   const percent = fraction != null ? Math.round(fraction * 100) : null;
   const targetLabel = item.file?.targets.find((o) => o.format === q.state.target)?.label ?? "";
@@ -76,7 +76,7 @@ function SingleProgress({ q, item }: { q: QueueController; item: QueueItem }) {
   return (
     <section className="w-full rounded-[28px] bg-surface px-10 py-12 text-center shadow-card-lg">
       <p className="flex items-center justify-center gap-2 text-[14px] text-label-secondary">
-        <span className="max-w-[60%] truncate">{item.name}</span>
+        <span className="max-w-[60%] truncate">{name}</span>
         <ArrowRight size={14} aria-hidden className="shrink-0" />
         <span className="font-semibold text-label">{targetLabel}</span>
       </p>
@@ -167,5 +167,8 @@ function BatchProgress({ q }: { q: QueueController }) {
 
 export function ConvertingScreen({ q }: { q: QueueController }) {
   const active = q.state.items.filter((i) => i.status !== "invalid" && i.status !== "ready");
+  if (q.state.combined && active.length > 0) {
+    return <SingleProgress q={q} item={active[0]} name={t("progress.combining", { n: active.length })} />;
+  }
   return active.length === 1 ? <SingleProgress q={q} item={active[0]} /> : <BatchProgress q={q} />;
 }

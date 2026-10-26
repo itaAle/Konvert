@@ -93,11 +93,19 @@ const PICTURE_NAMES: Record<string, string> = {
   jpeg2000: "JPEG 2000",
 };
 
+/** "1 pagina", "12 pagine". */
+export function formatPages(pages: number): string {
+  return pages === 1 ? t("file.onePage") : t("file.pages", { n: new Intl.NumberFormat(intlLocale()).format(pages) });
+}
+
 /** One-line technical summary, e.g. "1920×1080 · 30 fps · H.264 · AAC stereo". */
 export function describeMedia(media: MediaInfo): string {
   const parts: string[] = [];
   const video = media.video[0];
   const audio = media.audio[0];
+  if (media.kind === "document") {
+    return ["PDF", media.document ? formatPages(media.document.pages) : null].filter(Boolean).join(" · ");
+  }
   if (media.kind === "image") {
     if (video?.width && video.height) parts.push(`${video.width}×${video.height}`);
     if (video) parts.push(PICTURE_NAMES[video.codec] ?? codecName(video.codec));

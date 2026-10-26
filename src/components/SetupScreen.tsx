@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef } from "react";
 import type { TargetFormat } from "../bindings/TargetFormat";
 import { t } from "../i18n";
 import { revealVariants } from "../lib/motion";
-import { allWarnings, canStart, commonTargets, readyItems, totalEstimate } from "../state/queue";
+import { allWarnings, canStart, combines, commonTargets, readyItems, totalEstimate } from "../state/queue";
 import type { QueueController } from "../state/useQueue";
 import { AdvancedPanel } from "./AdvancedPanel";
 import { DestinationRow } from "./DestinationRow";
@@ -14,6 +14,8 @@ import { FileList } from "./FileList";
 import { FormatGrid } from "./FormatGrid";
 import { FramesPanel } from "./FramesPanel";
 import { LocationRow } from "./LocationRow";
+import { PagesPanel } from "./PagesPanel";
+import { PdfPanel } from "./PdfPanel";
 import { PlanFooterInfo, PlanSummary, hasStrongWarning, isRemux } from "./PlanSummary";
 import { QualityPicker } from "./QualityPicker";
 import { Button } from "./ui/Button";
@@ -46,6 +48,14 @@ export function SetupScreen({ q }: { q: QueueController }) {
   const counts = ready.map((i) => i.plan?.frames?.count ?? null);
   const pictures = allPlanned && counts.every((n) => n != null) ? (counts as number[]).reduce((a, b) => a + b, 0) : null;
   const hasLocation = ready.some((i) => i.file?.media.hasLocation);
+  // PDF documents: pictures of their pages, or PDFs merged together.
+  const documents = ready.filter((i) => i.file?.media.kind === "document");
+  const allDocuments = ready.length > 0 && documents.length === ready.length;
+  const pageCount = allDocuments ? Math.min(...documents.map((i) => i.file!.media.document?.pages ?? 1)) : 0;
+  const pageCounts = ready.map((i) => i.plan?.document?.pages.length ?? null);
+  const pagePictures = allPlanned && pageCounts.every((n) => n != null) ? (pageCounts as number[]).reduce((a, b) => a + b, 0) : null;
+  const invalidPages = planError?.code === "invalid_pages";
+  const together = combines(state);
 
   // Bring quality and warnings into view once the options have appeared, and
   // whenever an important warning shows up, so it never stays below the fold.
@@ -69,7 +79,11 @@ export function SetupScreen({ q }: { q: QueueController }) {
         )}
       </div>
       <Button variant="primary" size="lg" disabled={!canStart(state)} onClick={() => void q.start()} className="min-w-44">
-        {ready.length > 1 ? t("actions.convertAll", { n: ready.length }) : t("actions.convert")}
+        {together || (state.target === "pdf" && ready.length === 1)
+          ? t("actions.makePdf")
+          : ready.length > 1
+            ? t("actions.convertAll", { n: ready.length })
+            : t("actions.convert")}
       </Button>
     </>
   );
@@ -87,7 +101,13 @@ export function SetupScreen({ q }: { q: QueueController }) {
             </Button>
           </div>
         ) : (
-          <FileList items={state.items} onRemove={q.remove} onAdd={() => void q.chooseFiles()} onClear={q.reset} />
+          <FileList
+            items={state.items}
+            onRemove={q.remove}
+            onAdd={() => void q.chooseFiles()}
+            onClear={q.reset}
+            onMove={together ? q.move : undefined}
+          />
         )}
 
         <AnimatePresence initial={false}>
@@ -138,19 +158,45 @@ export function SetupScreen({ q }: { q: QueueController }) {
                   <FramesPanel value={state.frames} onChange={q.setFrames} duration={shortest} count={pictures} />
                 </section>
               )}
-              {!FIXED_QUALITY.includes(option.format) && (
+              {option.group === "pages" && (
+                <section>
+                  <SectionTitle>{t("pdf.pagesTitle")}</SectionTitle>
+                  <PagesPanel
+                    value={state.pdf}
+                    onChange={q.setPdf}
+                    pageCount={pageCount}
+                    count={pagePictures}
+                    invalid={invalidPages}
+                  />
+                </section>
+              )}
+              {option.group === "document" && !allDocuments && (
+                <section>
+                  <SectionTitle>{t("pdf.pageTitle")}</SectionTitle>
+                  <PdfPanel value={state.pdf} onChange={q.setPdf} canCombine={ready.length > 1 && documents.length === 0} />
+                </section>
+              )}
+              {option.group === "document" && documents.length > 0 && (
+                <p className="-mt-2 flex items-start gap-2 px-1 text-[13px] text-label-secondary">
+                  <Info size={15} className="mt-0.5 shrink-0" aria-hidden />
+                  {t("pdf.mergeHint")}
+                </p>
+              )}
+              {/* Merged PDFs keep their pages as they are. */}
+              {!FIXED_QUALITY.includes(option.format) && !(option.group === "document" && allDocuments) && (
                 <section>
                   <SectionTitle>{t("quality.title")}</SectionTitle>
                   <QualityPicker value={state.preset} onChange={q.selectPreset} />
                 </section>
               )}
               <AdvancedPanel option={option} value={state.advanced} onChange={q.setAdvanced} />
-              {hasLocation && option.group !== "frames" && (
+              {/* Frames and PDF pages never keep the location. */}
+              {hasLocation && option.group !== "frames" && option.group !== "document" && (
                 <LocationRow checked={state.removeLocation} onChange={q.setRemoveLocation} />
               )}
               {/* Margin keeps the content clear of the faded edge above the footer. */}
               <div ref={summaryRef} className="flex scroll-mb-10 flex-col gap-4">
-                <PlanSummary warnings={warnings} error={planError} lowSpace={q.lowSpace} />
+                <PlanSummary warnings={warnings} error={invalidPages ? null : planError} lowSpace={q.lowSpace} />
                 <DestinationRow />
               </div>
             </motion.div>

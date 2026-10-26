@@ -1,8 +1,8 @@
 import { AnimatePresence, motion } from "motion/react";
-import { Plus, TriangleAlert, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Plus, TriangleAlert, X } from "lucide-react";
 
 import { errorMessage, t } from "../i18n";
-import { formatBytes, formatDuration } from "../lib/format";
+import { formatBytes, formatDuration, formatPages } from "../lib/format";
 import { kindStyle } from "../lib/kind";
 import { NO_TARGETS, type QueueItem } from "../state/queue";
 import { formatEstimate } from "./PlanSummary";
@@ -14,6 +14,8 @@ interface FileListProps {
   onRemove?: (key: number) => void;
   onAdd?: () => void;
   onClear?: () => void;
+  /** Files combined into one PDF: their order is the order of the pages. */
+  onMove?: (key: number, delta: -1 | 1) => void;
 }
 
 export function itemProblem(item: QueueItem): string | null {
@@ -47,11 +49,13 @@ function ItemIcon({ item }: { item: QueueItem }) {
 }
 
 /** Compact list of the files to convert (two or more). */
-export function FileList({ items, onRemove, onAdd, onClear }: FileListProps) {
+export function FileList({ items, onRemove, onAdd, onClear, onMove }: FileListProps) {
+  const title = onMove ? t("files.titleCombine") : t("files.title");
+  const moveButton = "flex size-7 shrink-0 items-center justify-center rounded-full text-label-tertiary transition-colors enabled:hover:bg-fill enabled:hover:text-label disabled:opacity-30";
   return (
-    <section aria-label={t("files.title")}>
+    <section aria-label={title}>
       <div className="mb-3 flex items-center gap-2 px-1">
-        <h2 className="text-[17px] font-semibold tracking-[-0.01em]">{t("files.title")}</h2>
+        <h2 className="text-[17px] font-semibold tracking-[-0.01em]">{title}</h2>
         <span className="text-[14px] text-label-tertiary">{t("files.count", { n: items.length })}</span>
         <span className="flex-1" />
         {onClear && (
@@ -65,14 +69,16 @@ export function FileList({ items, onRemove, onAdd, onClear }: FileListProps) {
           </Button>
         )}
       </div>
+      {onMove && <p className="-mt-2 mb-3 px-1 text-[13px] text-label-secondary">{t("files.orderHint")}</p>}
       <ul className="max-h-[248px] divide-y divide-separator overflow-y-auto rounded-[20px] bg-surface shadow-card">
         <AnimatePresence initial={false}>
-          {items.map((item) => {
+          {items.map((item, index) => {
             const problem = itemProblem(item);
             const media = item.file?.media;
             const facts = media
               ? [
                   media.durationSecs != null ? formatDuration(media.durationSecs) : null,
+                  media.document ? formatPages(media.document.pages) : null,
                   media.sizeBytes != null ? formatBytes(media.sizeBytes) : null,
                 ]
                   .filter(Boolean)
@@ -102,6 +108,30 @@ export function FileList({ items, onRemove, onAdd, onClear }: FileListProps) {
                   </span>
                 )}
                 {problem && <span className="shrink-0 text-[12px] text-label-tertiary">{t("files.excluded")}</span>}
+                {onMove && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={index === 0}
+                      onClick={() => onMove(item.key, -1)}
+                      aria-label={t("files.moveUp", { name: item.name })}
+                      title={t("files.moveUp", { name: item.name })}
+                      className={moveButton}
+                    >
+                      <ChevronUp size={16} aria-hidden />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={index === items.length - 1}
+                      onClick={() => onMove(item.key, 1)}
+                      aria-label={t("files.moveDown", { name: item.name })}
+                      title={t("files.moveDown", { name: item.name })}
+                      className={moveButton}
+                    >
+                      <ChevronDown size={16} aria-hidden />
+                    </button>
+                  </>
+                )}
                 {onRemove && (
                   <button
                     type="button"

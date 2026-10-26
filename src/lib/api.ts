@@ -35,6 +35,8 @@ export interface Backend {
   analyzeFile(path: string): Promise<FileAnalysis>;
   planConversion(path: string, media: MediaInfo, request: ConversionRequest): Promise<ConversionPlan>;
   startConversion(path: string, request: ConversionRequest): Promise<number>;
+  /** One job that turns every file, in order, into a single PDF. */
+  startCombined(paths: string[], request: ConversionRequest): Promise<number>;
   cancelConversion(jobId: number): Promise<boolean>;
   openOutput(jobId: number): Promise<void>;
   revealOutput(jobId: number): Promise<void>;
@@ -82,6 +84,7 @@ const tauriBackend: Backend = {
   analyzeFile: (path) => call("analyze_file", { path }),
   planConversion: (path, media, request) => call("plan_conversion", { path, media, request }),
   startConversion: (path, request) => call("start_conversion", { path, request }),
+  startCombined: (paths, request) => call("start_combined", { paths, request }),
   cancelConversion: (jobId) => call("cancel_conversion", { jobId }),
   openOutput: (jobId) => call("open_output", { jobId }),
   revealOutput: (jobId) => call("reveal_output", { jobId }),

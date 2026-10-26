@@ -2,13 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   allWarnings,
   canStart,
+  combines,
   commonTargets,
   counts,
   DEFAULT_FRAMES,
+  DEFAULT_PDF,
   initialQueue,
   overallProgress,
   queueReducer as reduce,
   requestOf,
+  resultItems,
   totalEstimate,
   type QueueAction,
   type QueueState,
@@ -26,18 +29,27 @@ const option = (format: TargetFormat, group: TargetOption["group"]): TargetOptio
   lossless: false,
   secondary: false,
   sameAsInput: false,
-  kind: group === "video" ? "video" : group === "image" || group === "frames" ? "image" : "audio",
+  kind:
+    group === "video"
+      ? "video"
+      : group === "document"
+        ? "document"
+        : ["image", "frames", "pages"].includes(group)
+          ? "image"
+          : "audio",
   videoCodecs: [],
   audioCodecs: [],
 });
 
-function file(name: string, kind: "audio" | "videoWithAudio" | "image", duration: number | null): FileAnalysis {
+function file(name: string, kind: "audio" | "videoWithAudio" | "image" | "document", duration: number | null): FileAnalysis {
   const targets =
     kind === "audio"
       ? [option("mp3", "audio"), option("flac", "audio")]
       : kind === "image"
-        ? [option("jpg", "image"), option("png", "image"), option("webp", "image")]
-        : [
+        ? [option("jpg", "image"), option("png", "image"), option("webp", "image"), option("pdf", "document")]
+        : kind === "document"
+          ? [option("png", "pages"), option("jpg", "pages"), option("pdf", "document")]
+          : [
             option("mp4", "video"),
             option("mkv", "video"),
             option("mp3", "audioOnly"),
@@ -61,7 +73,7 @@ function file(name: string, kind: "audio" | "videoWithAudio" | "image", duration
       hasTags: false,
       picture: kind === "image" ? { alpha: false, alphaStream: null, gridGroup: null, exif: false, exifCopyable: false } : null,
       hasLocation: false,
-      document: null,
+      document: kind === "document" ? { pages: 4, widthPt: 595, heightPt: 842 } : null,
     },
     targets,
   };
@@ -129,8 +141,8 @@ describe("queue state machine", () => {
       { type: "analyzed", key: 2, file: file("b.heic", "image", null) },
     );
     const targets = commonTargets(s.items);
-    expect(targets.map((t) => t.format)).toEqual(["jpg", "png", "webp"]);
-    expect(targets.every((t) => t.group === "image")).toBe(true);
+    expect(targets.map((t) => t.format)).toEqual(["jpg", "png", "webp", "pdf"]);
+    expect(targets.filter((t) => t.group === "image")).toHaveLength(3);
 
     s = run(s, { type: "add", paths: ["c.wav"] }, { type: "analyzed", key: 3, file: file("c.wav", "audio", 10) });
     expect(commonTargets(s.items)).toEqual([]);
@@ -225,7 +237,14 @@ describe("queue state machine", () => {
     s = reduce(s, { type: "planned", key: 1, version: old, plan: plan("mp3", 1) });
     expect(s.items[0].plan).toBe(null);
     expect(canStart(s)).toBe(false);
-    expect(requestOf(s)).toEqual({ target: "mp3", preset: "small", advanced: {}, frames: DEFAULT_FRAMES, removeLocation: false });
+    expect(requestOf(s)).toEqual({
+      target: "mp3",
+      preset: "small",
+      advanced: {},
+      frames: DEFAULT_FRAMES,
+      removeLocation: false,
+      pdf: DEFAULT_PDF,
+    });
   });
 
   it("changing format resets the advanced options", () => {
@@ -293,5 +312,74 @@ describe("queue state machine", () => {
     s = reduce(s, { type: "add", paths: ["b.wav"] });
     expect(s).toMatchObject({ phase: "setup", preset: "small", target: null });
     expect(s.items.map((i) => i.name)).toEqual(["b.wav"]);
+  });
+
+  it("offers a PDF for pictures and PDFs together, never for a lone PDF", () => {
+    let s = run(initialQueue(), { type: "add", paths: ["a.pdf"] });
+    s = reduce(s, { type: "analyzed", key: 1, file: file("a.pdf", "document", null) });
+    // Pictures of its pages only: a PDF becomes a PDF by joining others.
+    expect(commonTargets(s.items).map((t) => [t.format, t.group])).toEqual([
+      ["png", "pages"],
+      ["jpg", "pages"],
+    ]);
+    s = run(s, { type: "add", paths: ["b.jpg"] }, { type: "analyzed", key: 2, file: file("b.jpg", "image", null) });
+    expect(commonTargets(s.items).map((t) => [t.format, t.group])).toEqual([["pdf", "document"]]);
+  });
+
+  it("combines every file into one job, in the order chosen", () => {
+    let s = run(initialQueue(), { type: "add", paths: ["a.jpg", "b.jpg", "c.pdf"] });
+    s = run(
+      s,
+      { type: "analyzed", key: 1, file: file("a.jpg", "image", null) },
+      { type: "analyzed", key: 2, file: file("b.jpg", "image", null) },
+      { type: "analyzed", key: 3, file: file("c.pdf", "document", null) },
+      { type: "selectTarget", target: "pdf" },
+    );
+    // Pages follow the list: the PDF first, then the photos.
+    s = run(s, { type: "move", key: 3, delta: -1 }, { type: "move", key: 3, delta: -1 }, { type: "move", key: 3, delta: -1 });
+    expect(s.items.map((i) => i.name)).toEqual(["c.pdf", "a.jpg", "b.jpg"]);
+    s = run(s, { type: "move", key: 2, delta: 1 });
+    expect(s.items.map((i) => i.key)).toEqual([3, 1, 2]);
+    // A PDF among the files: always one document, even with "one PDF" off.
+    s = reduce(s, { type: "setPdf", pdf: { ...DEFAULT_PDF, combine: false } });
+    expect(combines(s)).toBe(true);
+
+    for (const key of [1, 2, 3]) s = reduce(s, { type: "planned", key, version: s.planVersion, plan: plan("pdf", 100) });
+    s = reduce(s, { type: "start" });
+    expect(s.combined).toBe(true);
+    s = run(s, ...[3, 1, 2].map((key): QueueAction => ({ type: "started", key, jobId: 9 })));
+    const progress = { fraction: 0.4, etaSecs: null, speed: null, processedSecs: null, outputBytes: null };
+    s = reduce(s, { type: "job", event: { jobId: 9, update: { state: "progress", progress } } });
+    expect(s.items.every((i) => i.status === "running" && i.progress?.fraction === 0.4)).toBe(true);
+    expect(overallProgress(s)).toBeCloseTo(0.4);
+    // Moving files is over once the conversion started.
+    expect(reduce(s, { type: "move", key: 1, delta: -1 })).toBe(s);
+
+    const outcome = { output: "C:\m\c.pdf", sizeBytes: 300, files: 1, elapsed: 1 };
+    s = reduce(s, { type: "job", event: { jobId: 9, update: { state: "done", outcome } } });
+    expect(s.phase).toBe("finished");
+    expect(resultItems(s)).toHaveLength(1);
+    expect(resultItems(s)[0].outcome).toEqual(outcome);
+    s = reduce(s, { type: "back" });
+    expect(s).toMatchObject({ phase: "setup", combined: false });
+  });
+
+  it("makes one PDF per photo when asked", () => {
+    let s = run(initialQueue(), { type: "add", paths: ["a.jpg", "b.jpg"] });
+    s = run(
+      s,
+      { type: "analyzed", key: 1, file: file("a.jpg", "image", null) },
+      { type: "analyzed", key: 2, file: file("b.jpg", "image", null) },
+      { type: "selectTarget", target: "pdf" },
+    );
+    expect(combines(s)).toBe(true);
+    const version = s.planVersion;
+    s = reduce(s, { type: "setPdf", pdf: { ...s.pdf, combine: false } });
+    expect(s.planVersion).toBe(version + 1);
+    expect(combines(s)).toBe(false);
+    expect(requestOf(s)?.pdf?.combine).toBe(false);
+    // Another format: nothing to combine.
+    s = run(s, { type: "setPdf", pdf: DEFAULT_PDF }, { type: "selectTarget", target: "png" });
+    expect(combines(s)).toBe(false);
   });
 });

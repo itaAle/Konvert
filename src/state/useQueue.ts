@@ -5,6 +5,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { AdvancedOptions } from "../bindings/AdvancedOptions";
 import type { FrameOptions } from "../bindings/FrameOptions";
 import type { JobEvent } from "../bindings/JobEvent";
+import type { PdfOptions } from "../bindings/PdfOptions";
 import type { QualityPreset } from "../bindings/QualityPreset";
 import type { TargetFormat } from "../bindings/TargetFormat";
 import { t } from "../i18n";
@@ -12,6 +13,7 @@ import { backend, toErrorPayload } from "../lib/api";
 import { usePreferences } from "./preferences";
 import {
   canStart,
+  combines,
   initialQueue,
   queueReducer,
   readyItems,
@@ -90,8 +92,10 @@ export function useQueue() {
     const items = readyItems(state);
     if (items.length === 0 || !totalEstimate(items)) return;
     const perDir = new Map<string, number>();
+    // A combined PDF is saved next to the first file.
+    const together = combines(state);
     for (const item of items) {
-      const dir = prefs.outputDir ?? dirname(item.path);
+      const dir = prefs.outputDir ?? dirname(together ? items[0].path : item.path);
       perDir.set(dir, (perDir.get(dir) ?? 0) + (item.plan?.estimate?.bytes ?? 0));
     }
     let stale = false;
@@ -140,24 +144,34 @@ export function useQueue() {
 
   const start = useCallback(async () => {
     const s = stateRef.current;
-    const request = requestOf(s);
-    if (!canStart(s) || !request) return;
+    const base = requestOf(s);
+    if (!canStart(s) || !base) return;
+    // Pictures of PDF pages are named "name-pagina-01" in the interface language.
+    const request = { ...base, pdf: { ...s.pdf, pageLabel: t("pdf.pageLabel") } };
     const items = readyItems(s);
     cancelling.current = false;
     dispatch({ type: "start" });
+    // Every file goes into one PDF: a single job shared by all the items.
+    const groups = combines(s) ? [items] : items.map((item) => [item]);
     // The backend runs one job at a time; queue them all now, in order.
-    for (const item of items) {
+    for (const group of groups) {
       if (cancelling.current) break;
       try {
-        const jobId = await backend.startConversion(item.path, request);
+        const jobId =
+          group.length > 1
+            ? await backend.startCombined(
+                group.map((i) => i.path),
+                request,
+              )
+            : await backend.startConversion(group[0].path, request);
         knownJobs.current.add(jobId);
-        dispatch({ type: "started", key: item.key, jobId });
+        group.forEach((item) => dispatch({ type: "started", key: item.key, jobId }));
         const early = pendingEvents.current.get(jobId) ?? [];
         pendingEvents.current.delete(jobId);
         early.forEach((event) => dispatch({ type: "job", event }));
         if (cancelling.current) void backend.cancelConversion(jobId);
       } catch (error) {
-        dispatch({ type: "startFailed", key: item.key, error: toErrorPayload(error) });
+        group.forEach((item) => dispatch({ type: "startFailed", key: item.key, error: toErrorPayload(error) }));
       }
     }
   }, []);
@@ -167,11 +181,11 @@ export function useQueue() {
     if (s.phase !== "converting") return;
     cancelling.current = true;
     dispatch({ type: "cancelAll" });
+    const jobs = new Set<number>();
     for (const item of s.items) {
-      if (item.jobId != null && (item.status === "queued" || item.status === "running")) {
-        void backend.cancelConversion(item.jobId);
-      }
+      if (item.jobId != null && (item.status === "queued" || item.status === "running")) jobs.add(item.jobId);
     }
+    jobs.forEach((jobId) => void backend.cancelConversion(jobId));
   }, []);
 
   const chooseFiles = useCallback(async () => {
@@ -189,11 +203,13 @@ export function useQueue() {
     addFiles: (paths: string[]) => dispatch({ type: "add", paths }),
     chooseFiles,
     remove: (key: number) => dispatch({ type: "remove", key }),
+    move: (key: number, delta: -1 | 1) => dispatch({ type: "move", key, delta }),
     selectTarget: (target: TargetFormat) => dispatch({ type: "selectTarget", target }),
     selectPreset: (preset: QualityPreset) => dispatch({ type: "selectPreset", preset }),
     setAdvanced: (advanced: AdvancedOptions) => dispatch({ type: "setAdvanced", advanced }),
     setFrames: (frames: FrameOptions) => dispatch({ type: "setFrames", frames }),
     setRemoveLocation: (removeLocation: boolean) => dispatch({ type: "setRemoveLocation", removeLocation }),
+    setPdf: (pdf: PdfOptions) => dispatch({ type: "setPdf", pdf }),
     start,
     cancelAll,
     back: () => dispatch({ type: "back" }),

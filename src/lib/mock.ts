@@ -1,7 +1,7 @@
 // Development-only simulated backend, used when the UI runs in a plain browser
 // (`npm run dev` without Tauri) to work on the design. Never bundled in releases.
 // URL parameters: `?mock=error` simulates a damaged file; `?files=a.wav|b.mp4`
-// sets what the file picker returns.
+// sets what the file picker returns (a `.pdf` is a 12-page document).
 import type { Backend } from "./api";
 import type { AudioCodecInfo } from "../bindings/AudioCodecInfo";
 import type { ConversionPlan } from "../bindings/ConversionPlan";
@@ -52,7 +52,14 @@ const option = (
   group,
   lossless,
   sameAsInput: false,
-  kind: group === "video" ? "video" : group === "image" || group === "frames" ? "image" : "audio",
+  kind:
+    group === "video"
+      ? "video"
+      : group === "document"
+        ? "document"
+        : ["image", "frames", "pages"].includes(group)
+          ? "image"
+          : "audio",
   secondary,
   videoCodecs:
     group !== "video"
@@ -69,7 +76,7 @@ const option = (
                 ? ["mpeg2"]
                 : ["h264", "av1"],
   audioCodecs:
-    ANIMATIONS.includes(format) || group === "image" || group === "frames"
+    ANIMATIONS.includes(format) || ["image", "frames", "pages", "document"].includes(group)
       ? []
       : [audioCodec(lossless ? "flac" : format === "webm" || format === "opus" ? "opus" : "aac")],
 });
@@ -124,8 +131,60 @@ const FRAMES: TargetOption[] = [
   option("webp", "WebP", "frames"),
 ];
 
+const PDF = option("pdf", "PDF", "document");
+
+const PAGES: TargetOption[] = [
+  option("png", "PNG", "pages", true),
+  option("jpg", "JPG", "pages"),
+  option("webp", "WebP", "pages"),
+];
+
+const MOCK_PAGES = 12;
+
+/** Same rules as the core: "1-3, 5, 8-", empty for every page. */
+function parsePages(text: string | null | undefined, count: number): number[] {
+  const parts = (text ?? "")
+    .split(/[,;]/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return Array.from({ length: count }, (_, i) => i + 1);
+  const chosen = new Set<number>();
+  for (const part of parts) {
+    const m = part.match(/^(\d*)\s*(-?)\s*(\d*)$/);
+    const first = m?.[1] ? Number(m[1]) : m?.[2] ? 1 : NaN;
+    const last = m?.[3] ? Number(m[3]) : m?.[2] ? count : first;
+    if (!(first >= 1 && first <= last && last <= count)) {
+      throw { code: "invalid_pages", details: `invalid page range "${part}" (the document has ${count} pages)` };
+    }
+    for (let p = first; p <= last; p++) chosen.add(p);
+  }
+  return [...chosen].sort((a, b) => a - b);
+}
+
 function analysis(path: string): FileAnalysis {
   const name = path.split(/[\\/]/).pop() ?? path;
+  if (/\.pdf$/i.test(name)) {
+    return {
+      path,
+      name,
+      media: {
+        container: "pdf",
+        kind: "document",
+        durationSecs: null,
+        sizeBytes: 1_240_000,
+        bitRate: null,
+        video: [],
+        audio: [],
+        coverArt: null,
+        subtitleStreams: 0,
+        hasTags: false,
+        picture: null,
+        hasLocation: false,
+        document: { pages: MOCK_PAGES, widthPt: 595.3, heightPt: 841.9 },
+      },
+      targets: [...PAGES, PDF],
+    };
+  }
   if (/\.svgz?$/i.test(name)) {
     // A drawing: rendered by Konvert, any size without loss.
     return {
@@ -146,7 +205,7 @@ function analysis(path: string): FileAnalysis {
         hasLocation: false,
         document: null,
       },
-      targets: IMAGES,
+      targets: [...IMAGES, PDF],
     };
   }
   if (/\.(jpe?g|png|webp|avif|heic|heif|bmp|tiff?)$/i.test(name)) {
@@ -171,7 +230,7 @@ function analysis(path: string): FileAnalysis {
         hasLocation: true,
         document: null,
       },
-      targets: IMAGES.map((o) => ({ ...o, sameAsInput: !heic && o.format === "jpg" })),
+      targets: [...IMAGES.map((o) => ({ ...o, sameAsInput: !heic && o.format === "jpg" })), PDF],
     };
   }
   const isVideo = /\.(mp4|mov|mkv|webm|avi)$/i.test(name);
@@ -259,6 +318,34 @@ export const mockBackend: Backend = {
     return analysis(path);
   },
   async planConversion(_path, media, request) {
+    if (request.target === "pdf" || media.kind === "document") {
+      const toPdf = request.target === "pdf";
+      const pages = toPdf
+        ? Array.from({ length: media.document?.pages ?? 1 }, (_, i) => i + 1)
+        : parsePages(request.pdf?.pages, media.document?.pages ?? 1);
+      const dpi = request.pdf?.dpi ?? 150;
+      const plan: ConversionPlan = {
+        target: request.target,
+        videoStream: null,
+        video: null,
+        audioStream: null,
+        audio: null,
+        coverArtStream: null,
+        image: null,
+        frames: null,
+        removeLocation: false,
+        document: { pages, dpi, placement: null },
+        warnings: toPdf && media.picture?.exif ? ["metadataDropped"] : !toPdf && pages.length > 300 ? ["manyFiles"] : [],
+        estimate: {
+          bytes: toPdf
+            ? Math.round((media.sizeBytes ?? 0) * (media.kind === "document" ? 1 : 0.6))
+            : Math.round(pages.length * 8.27 * 11.69 * dpi * dpi * (request.target === "png" ? 0.5 : 0.12)),
+          approximate: true,
+        },
+      };
+      await sleep(80);
+      return plan;
+    }
     const fromVideo = media.kind !== "image" && ["jpg", "png", "webp"].includes(request.target);
     if (fromVideo) {
       const frames = request.frames ?? { mode: "single", atSecs: null, everySecs: null };
@@ -367,9 +454,15 @@ export const mockBackend: Backend = {
     };
     return plan;
   },
+  async startCombined(paths, request) {
+    return mockBackend.startConversion(paths[0], { ...request, target: "pdf" });
+  },
   async startConversion(path, request) {
     const jobId = nextJob++;
     const name = (path.split(/[\\/]/).pop() ?? "file").replace(/\.\w+$/, "");
+    // Pages of a PDF: one picture next to it, or a folder of pictures.
+    const pages = /\.pdf$/i.test(path) && request.target !== "pdf" ? parsePages(request.pdf?.pages, MOCK_PAGES) : null;
+    const label = request.pdf?.pageLabel ?? "page";
     let fraction = 0;
     const delay = (jobId - 1) * 2500;
     setTimeout(() => emit({ jobId, update: { state: "running" } }), 100 + delay);
@@ -393,7 +486,16 @@ export const mockBackend: Backend = {
               state: "done",
               outcome: series
                 ? { output: `C:\\Video\\${name}`, sizeBytes: 42_000_000, files: 120, elapsed: 9.8 }
-                : { output: `C:\\Musica\\${name}.${request.target}`, sizeBytes: 5_400_000, files: 1, elapsed: 6.2 },
+                : pages && pages.length > 1
+                  ? { output: `C:\\Documenti\\${name}`, sizeBytes: pages.length * 420_000, files: pages.length, elapsed: 2.4 }
+                  : pages
+                    ? {
+                        output: `C:\\Documenti\\${name}-${label}-${String(pages[0]).padStart(2, "0")}.${request.target}`,
+                        sizeBytes: 420_000,
+                        files: 1,
+                        elapsed: 0.4,
+                      }
+                    : { output: `C:\\Musica\\${name}.${request.target}`, sizeBytes: 5_400_000, files: 1, elapsed: 6.2 },
             },
           });
         }

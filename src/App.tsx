@@ -18,6 +18,7 @@ import { t } from "./i18n";
 import { backend } from "./lib/api";
 import { screenVariants } from "./lib/motion";
 import { PreferencesProvider, usePreferences } from "./state/preferences";
+import { resultItems } from "./state/queue";
 import { useQueue } from "./state/useQueue";
 
 export default function App() {
@@ -98,7 +99,7 @@ function Main() {
       screen = <ConvertingScreen q={q} />;
       break;
     case "finished": {
-      const finished = state.items.filter((i) => i.status === "done" || i.status === "failed" || i.status === "cancelled");
+      const finished = resultItems(state);
       if (finished.length === 1 && finished[0].status === "done") {
         screen = <DoneScreen q={q} item={finished[0]} />;
       } else if (finished.length === 1) {

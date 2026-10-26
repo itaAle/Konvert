@@ -66,8 +66,8 @@ export function AdvancedPanel({ option, value, onChange }: AdvancedPanelProps) {
           onChange={(v) => set({ imageQuality: num(v) })} />,
       );
     }
-    // An icon has fixed sizes.
-    if (option.format !== "ico") {
+    // An icon has fixed sizes; pictures of PDF pages are sized by their resolution.
+    if (option.format !== "ico" && option.group !== "pages") {
       fields.push(
         <Select key="maxdim" label={t("advanced.maxDimension")} value={str(value.maxDimension)}
           options={[{ value: AUTO, label: originalLabel }, ...MAX_DIMENSIONS.map((d) => ({ value: String(d), label: t("advanced.pixels", { n: d }) }))]}
