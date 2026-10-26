@@ -107,7 +107,8 @@ impl JobQueue {
                 .path(
                     &workspace.job_output(id, formats::spec(job.request.target).extension),
                     "temp",
-                );
+                )
+                .path(&workspace.job_dir(id), "temp-dir");
             let update = queue.run(&app, &bins, &workspace, job, &token).await;
             lock(&queue.cancels).remove(&id);
             queue.log_outcome(id, &update, &redactor);
@@ -187,8 +188,8 @@ impl JobQueue {
                 None => "none".into(),
             };
             line.push_str(&format!(
-                "; video {video}; audio {audio}; picture {image}; warnings {:?}",
-                plan.warnings
+                "; video {video}; audio {audio}; picture {image}; frames {:?}; warnings {:?}",
+                plan.frames, plan.warnings
             ));
         }
         self.log.write(&line);
@@ -200,8 +201,9 @@ impl JobQueue {
         }
         let line = match update {
             JobUpdate::Done { outcome } => format!(
-                "job {id}: done in {:.1} s, {} bytes",
+                "job {id}: done in {:.1} s, {} file(s), {} bytes",
                 outcome.elapsed.as_secs_f64(),
+                outcome.files,
                 outcome.size_bytes
             ),
             JobUpdate::Cancelled => format!("job {id}: cancelled"),

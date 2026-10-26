@@ -134,6 +134,30 @@
       },
       {
         "ext": [
+          "eac3"
+        ],
+        "name": "E-AC-3",
+        "role": "Viewer",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "mp2"
+        ],
+        "name": "MPEG audio layer II",
+        "role": "Viewer",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "caf"
+        ],
+        "name": "Core Audio Format",
+        "role": "Viewer",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
           "mp4"
         ],
         "name": "MPEG-4 video",
@@ -243,6 +267,14 @@
       },
       {
         "ext": [
+          "apng"
+        ],
+        "name": "Animated PNG",
+        "role": "Viewer",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
           "jpg",
           "jpeg",
           "jpe",
@@ -307,6 +339,14 @@
           "tiff"
         ],
         "name": "TIFF",
+        "role": "Viewer",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "ico"
+        ],
+        "name": "Windows icon",
         "role": "Viewer",
         "rank": "Alternate"
       }

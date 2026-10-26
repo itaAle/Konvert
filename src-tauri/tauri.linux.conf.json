@@ -122,6 +122,27 @@
       },
       {
         "ext": [
+          "eac3"
+        ],
+        "name": "E-AC-3",
+        "mimeType": "audio/eac3"
+      },
+      {
+        "ext": [
+          "mp2"
+        ],
+        "name": "MPEG audio layer II",
+        "mimeType": "audio/mpeg"
+      },
+      {
+        "ext": [
+          "caf"
+        ],
+        "name": "Core Audio Format",
+        "mimeType": "audio/x-caf"
+      },
+      {
+        "ext": [
           "mp4"
         ],
         "name": "MPEG-4 video",
@@ -218,6 +239,13 @@
       },
       {
         "ext": [
+          "apng"
+        ],
+        "name": "Animated PNG",
+        "mimeType": "image/apng"
+      },
+      {
+        "ext": [
           "jpg",
           "jpeg",
           "jpe",
@@ -276,6 +304,13 @@
         ],
         "name": "TIFF",
         "mimeType": "image/tiff"
+      },
+      {
+        "ext": [
+          "ico"
+        ],
+        "name": "Windows icon",
+        "mimeType": "image/vnd.microsoft.icon"
       }
     ],
     "linux": {

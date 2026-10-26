@@ -37,6 +37,9 @@
   !insertmacro ${OP} "wv"
   !insertmacro ${OP} "mka"
   !insertmacro ${OP} "ac3"
+  !insertmacro ${OP} "eac3"
+  !insertmacro ${OP} "mp2"
+  !insertmacro ${OP} "caf"
   !insertmacro ${OP} "mp4"
   !insertmacro ${OP} "m4v"
   !insertmacro ${OP} "mkv"
@@ -55,6 +58,7 @@
   !insertmacro ${OP} "ogv"
   !insertmacro ${OP} "vob"
   !insertmacro ${OP} "gif"
+  !insertmacro ${OP} "apng"
   !insertmacro ${OP} "jpg"
   !insertmacro ${OP} "jpeg"
   !insertmacro ${OP} "jpe"
@@ -68,6 +72,7 @@
   !insertmacro ${OP} "bmp"
   !insertmacro ${OP} "tif"
   !insertmacro ${OP} "tiff"
+  !insertmacro ${OP} "ico"
 !macroend
 
 !macro KONVERT_REGISTER_EXTENSION EXT
