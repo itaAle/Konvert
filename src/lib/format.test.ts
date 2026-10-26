@@ -22,6 +22,7 @@ const media = (overrides: Partial<MediaInfo>): MediaInfo => ({
   picture: null,
   hasTags: false,
   hasLocation: false,
+  document: null,
   ...overrides,
 });
 

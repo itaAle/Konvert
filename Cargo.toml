@@ -21,6 +21,10 @@ ts-rs = { version = "12", default-features = false, features = ["serde-compat", 
 windows-sys = "0.61"
 # SVG rendering (pure Rust, Apache-2.0 OR MIT, no network code).
 resvg = "0.49"
+# PDF rendering (pure Rust, Apache-2.0 OR MIT, no unsafe code, no network code).
+hayro = "0.8"
+# PDF reading, merging and writing (pure Rust, MIT).
+lopdf = { version = "0.46", default-features = false }
 
 # Release profile shared by every crate of the workspace (Tauri reads it from the root).
 # See https://tauri.app/concept/size/#cargo-configuration

@@ -109,6 +109,74 @@ pub struct FrameOptions {
     pub every_secs: Option<f64>,
 }
 
+/// Paper size of the pages made from pictures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PageSize {
+    #[default]
+    A4,
+    Letter,
+    /// Shaped like the picture.
+    Fit,
+}
+
+/// Orientation of the pages made from pictures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PageOrientation {
+    /// Turned to match each picture.
+    #[default]
+    Auto,
+    Portrait,
+    Landscape,
+}
+
+/// White border around the pictures on their pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PageMargin {
+    None,
+    #[default]
+    Small,
+    Normal,
+}
+
+/// Choices for PDF documents: pictures to PDF and PDF to pictures.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export, optional_fields = nullable)]
+pub struct PdfOptions {
+    pub page_size: PageSize,
+    pub orientation: PageOrientation,
+    pub margin: PageMargin,
+    /// Several files go into one PDF, in order (otherwise one PDF each).
+    pub combine: bool,
+    /// PDF to pictures: resolution in dots per inch.
+    pub dpi: u32,
+    /// PDF to pictures: pages such as `"1-3, 5"` (`None`: every page).
+    pub pages: Option<String>,
+    /// PDF to pictures: word between the name and the page number in file
+    /// names (`"pagina"`, `"page"`).
+    pub page_label: Option<String>,
+}
+
+impl Default for PdfOptions {
+    fn default() -> Self {
+        Self {
+            page_size: PageSize::default(),
+            orientation: PageOrientation::default(),
+            margin: PageMargin::default(),
+            combine: true,
+            dpi: 150,
+            pages: None,
+            page_label: None,
+        }
+    }
+}
+
 /// A conversion requested by the user.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -126,6 +194,10 @@ pub struct ConversionRequest {
     /// Erase where the photo or video was made (GPS data, location tags).
     #[serde(default)]
     pub remove_location: bool,
+    /// Only for PDF documents (pictures to PDF, PDF to pictures).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub pdf: Option<PdfOptions>,
 }
 
 impl ConversionRequest {
@@ -137,6 +209,7 @@ impl ConversionRequest {
             advanced: AdvancedOptions::default(),
             frames: None,
             remove_location: false,
+            pdf: None,
         }
     }
 }

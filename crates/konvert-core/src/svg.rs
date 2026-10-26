@@ -119,6 +119,7 @@ pub fn probe(path: &Path) -> Result<MediaInfo, CoreError> {
         }),
         has_tags: false,
         has_location: false,
+        document: None,
     })
 }
 

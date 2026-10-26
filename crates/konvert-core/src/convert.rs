@@ -7,6 +7,8 @@
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -18,11 +20,12 @@ use crate::binaries::Binaries;
 use crate::command::{build_from_plan, build_from_plan_with, file_url};
 use crate::error::CoreError;
 use crate::exif;
-use crate::formats;
+use crate::formats::{self, TargetFormat};
 use crate::metadata;
 use crate::naming;
+use crate::pdf;
 use crate::plan::{ConversionPlan, plan_conversion};
-use crate::probe::MediaInfo;
+use crate::probe::{MediaInfo, MediaKind};
 use crate::process;
 use crate::progress::{Progress, ProgressParser};
 use crate::request::{ConversionRequest, FrameMode};
@@ -86,6 +89,13 @@ pub async fn run_conversion(
     let ext = formats::spec(job.request.target).extension;
     if plan.frames.is_some_and(|f| f.mode == FrameMode::Sequence) {
         return run_series(bins, workspace, job, &plan, cancel, on_progress, started).await;
+    }
+    if job.request.target == TargetFormat::Pdf {
+        let inputs = [(job.input.clone(), job.media.clone())];
+        return run_document(bins, workspace, job, &inputs, cancel, on_progress, started).await;
+    }
+    if job.media.kind == MediaKind::Document {
+        return run_pages(bins, workspace, job, &plan, cancel, on_progress, started).await;
     }
     let temp_output = workspace.job_output(job.id, ext);
     let cover_comment = prepare_cover_comment(bins, workspace, job, &plan).await;
@@ -211,6 +221,296 @@ async fn run_series(
         files,
         elapsed: started.elapsed(),
     })
+}
+
+/// Several files (pictures and PDFs, in order) into one PDF document.
+#[derive(Debug, Clone)]
+pub struct CombinedJob {
+    pub id: u64,
+    pub inputs: Vec<(PathBuf, MediaInfo)>,
+    pub request: ConversionRequest,
+    pub output_dir: PathBuf,
+}
+
+/// Runs a [`CombinedJob`]: one PDF named after the first file.
+pub async fn run_combined(
+    bins: &Binaries,
+    workspace: &Workspace,
+    job: &CombinedJob,
+    cancel: &CancellationToken,
+    on_progress: impl FnMut(Progress) + Send,
+) -> Result<ConversionOutcome, CoreError> {
+    let started = Instant::now();
+    let (first, media) =
+        job.inputs
+            .first()
+            .cloned()
+            .ok_or_else(|| CoreError::UnsupportedConversion {
+                details: "no file to put in the document".into(),
+            })?;
+    if job.inputs.iter().any(|(path, _)| !path.is_file()) {
+        return Err(CoreError::InputNotFound);
+    }
+    if !job.output_dir.is_dir() {
+        return Err(CoreError::OutputUnavailable);
+    }
+    let request = ConversionRequest {
+        target: TargetFormat::Pdf,
+        ..job.request.clone()
+    };
+    let lead = ConversionJob {
+        id: job.id,
+        input: first,
+        media,
+        request,
+        output_dir: job.output_dir.clone(),
+    };
+    run_document(
+        bins,
+        workspace,
+        &lead,
+        &job.inputs,
+        cancel,
+        on_progress,
+        started,
+    )
+    .await
+}
+
+/// Builds one PDF from pictures (each encoded as JPEG by FFmpeg, turned the
+/// right way up, on its own page) and PDFs (every page copied), in order.
+async fn run_document(
+    bins: &Binaries,
+    workspace: &Workspace,
+    job: &ConversionJob,
+    inputs: &[(PathBuf, MediaInfo)],
+    cancel: &CancellationToken,
+    mut on_progress: impl FnMut(Progress) + Send,
+    started: Instant,
+) -> Result<ConversionOutcome, CoreError> {
+    let picture_file = workspace.dir().join(format!("job-{}-page.jpg", job.id));
+    let mut parts = Vec::with_capacity(inputs.len());
+    let result: Result<(), CoreError> =
+        async {
+            for (i, (input, media)) in inputs.iter().enumerate() {
+                if cancel.is_cancelled() {
+                    return Err(CoreError::Cancelled);
+                }
+                on_progress(fraction(i, inputs.len() + 1));
+                let plan = plan_conversion(media, &job.request, input)?;
+                let document =
+                    plan.document
+                        .clone()
+                        .ok_or_else(|| CoreError::UnsupportedConversion {
+                            details: "not a picture or a PDF".into(),
+                        })?;
+                match (&plan.image, document.placement) {
+                    (Some(image), Some(placement)) => {
+                        // The picture as FFmpeg makes a JPG of it (rotation, HEIC
+                        // tiles, transparency on white).
+                        let jpeg_plan = ConversionPlan {
+                            target: TargetFormat::Jpg,
+                            ..plan.clone()
+                        };
+                        let command = build_from_plan(&jpeg_plan, input, &picture_file);
+                        run_ffmpeg(bins, &command.args, None, cancel, &mut |_| {}).await?;
+                        let jpeg = std::fs::read(&picture_file)?;
+                        let _ = std::fs::remove_file(&picture_file);
+                        if jpeg.is_empty() {
+                            return Err(nothing_written());
+                        }
+                        let (width, height) = image.width.zip(image.height).ok_or_else(|| {
+                            CoreError::CorruptInput {
+                                details: "picture size unknown".into(),
+                            }
+                        })?;
+                        parts.push(pdf::Part::Picture {
+                            jpeg,
+                            width,
+                            height,
+                            placement,
+                        });
+                    }
+                    _ => parts.push(pdf::Part::Document(std::fs::read(input)?)),
+                }
+            }
+            Ok(())
+        }
+        .await;
+    let _ = std::fs::remove_file(&picture_file);
+    result?;
+
+    on_progress(fraction(inputs.len(), inputs.len() + 1));
+    let assembled = tokio::task::spawn_blocking(move || pdf::assemble(parts))
+        .await
+        .map_err(|e| CoreError::Io(std::io::Error::other(e)))??;
+    if cancel.is_cancelled() {
+        return Err(CoreError::Cancelled);
+    }
+    let temp_output = workspace.job_output(job.id, "pdf");
+    std::fs::write(&temp_output, &assembled.0)?;
+    let stem = output_stem(&job.input);
+    let output_dir = job.output_dir.clone();
+    let temp = temp_output.clone();
+    let moved = tokio::task::spawn_blocking(move || {
+        naming::move_to_unique(&temp, &output_dir, &stem, "pdf")
+    })
+    .await
+    .map_err(|e| CoreError::Io(std::io::Error::other(e)))?;
+    let output = match moved {
+        Ok(path) => path,
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp_output);
+            return Err(e.into());
+        }
+    };
+    Ok(ConversionOutcome {
+        size_bytes: assembled.0.len() as u64,
+        output,
+        files: 1,
+        elapsed: started.elapsed(),
+    })
+}
+
+/// Pages of a PDF as pictures, in a new folder named after the document:
+/// `name-page-01.png`... The pages are drawn on a worker thread one at a time
+/// (progress and cancellation between pages); PNG pages are written as they
+/// are, JPG and WebP pages are encoded by FFmpeg.
+async fn run_pages(
+    bins: &Binaries,
+    workspace: &Workspace,
+    job: &ConversionJob,
+    plan: &ConversionPlan,
+    cancel: &CancellationToken,
+    mut on_progress: impl FnMut(Progress) + Send,
+    started: Instant,
+) -> Result<ConversionOutcome, CoreError> {
+    let document = plan
+        .document
+        .clone()
+        .ok_or_else(|| CoreError::UnsupportedConversion {
+            details: "no pages to draw".into(),
+        })?;
+    let ext = formats::spec(job.request.target).extension;
+    let png_target = job.request.target == TargetFormat::Png;
+    let temp_dir = workspace.job_dir(job.id);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir)?;
+
+    let data = std::fs::read(&job.input)?;
+    let pages = document.pages.clone();
+    let total = pages.len();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (sender, mut receiver) = tokio::sync::mpsc::channel::<pdf::RenderedPage>(2);
+    let renderer = {
+        let stop = stop.clone();
+        let dpi = document.dpi;
+        tokio::task::spawn_blocking(move || {
+            pdf::render_pages(data, &pages, dpi, &stop, |page| {
+                sender.blocking_send(page).is_ok()
+            })
+        })
+    };
+
+    let result: Result<(), CoreError> = async {
+        let mut done = 0;
+        loop {
+            let page = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(CoreError::Cancelled),
+                page = receiver.recv() => page,
+            };
+            let Some(page) = page else { return Ok(()) };
+            let name = temp_dir.join(format!("page-{:06}.{ext}", page.number));
+            if png_target {
+                std::fs::write(&name, &page.png)?;
+            } else {
+                let drawing = temp_dir.join(format!("drawing-{:06}.png", page.number));
+                std::fs::write(&drawing, &page.png)?;
+                let command = build_from_plan(plan, &drawing, &name);
+                let encoded = run_ffmpeg(bins, &command.args, None, cancel, &mut |_| {}).await;
+                let _ = std::fs::remove_file(&drawing);
+                encoded?;
+            }
+            done += 1;
+            on_progress(fraction(done, total));
+        }
+    }
+    .await;
+    // Stop the renderer (if still drawing) and collect its own outcome.
+    stop.store(true, Ordering::Relaxed);
+    drop(receiver);
+    let rendered = renderer
+        .await
+        .map_err(|e| CoreError::Io(std::io::Error::other(e)))?;
+    let outcome = result.and(match rendered {
+        // Stopped by us after an error or a cancellation: already reported.
+        Err(CoreError::Cancelled) if cancel.is_cancelled() => Err(CoreError::Cancelled),
+        other => other,
+    });
+    if let Err(e) = outcome {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Err(e);
+    }
+
+    let stem = output_stem(&job.input);
+    let label = page_label(
+        job.request
+            .pdf
+            .as_ref()
+            .and_then(|p| p.page_label.as_deref()),
+    );
+    let numbers = document.pages.clone();
+    let digits = document
+        .pages
+        .last()
+        .map_or(1, |n| n.to_string().len())
+        .max(2);
+    let output_dir = job.output_dir.clone();
+    let temp = temp_dir.clone();
+    let moved = tokio::task::spawn_blocking(move || {
+        naming::move_series_named(&temp, &output_dir, &stem, ext, |i, _| {
+            let mut name = stem.clone();
+            name.push(format!("-{label}-{:0digits$}.{ext}", numbers[i]));
+            name
+        })
+    })
+    .await
+    .map_err(|e| CoreError::Io(std::io::Error::other(e)));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let (output, files, size_bytes) = moved??;
+    Ok(ConversionOutcome {
+        output,
+        size_bytes,
+        files,
+        elapsed: started.elapsed(),
+    })
+}
+
+/// Word between the name and the number of page pictures: letters only
+/// (the UI sends "pagina" or "page"), "page" otherwise.
+fn page_label(label: Option<&str>) -> String {
+    let clean: String = label
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_alphabetic())
+        .take(20)
+        .collect();
+    if clean.is_empty() {
+        "page".into()
+    } else {
+        clean
+    }
+}
+
+fn fraction(done: usize, total: usize) -> Progress {
+    Progress {
+        fraction: Some(done as f64 / total.max(1) as f64),
+        eta_secs: None,
+        speed: None,
+        processed_secs: None,
+        output_bytes: None,
+    }
 }
 
 /// Draws an SVG picture at its planned size into a PNG file of the private

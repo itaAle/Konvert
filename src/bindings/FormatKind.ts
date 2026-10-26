@@ -3,4 +3,4 @@
 /**
  * Whether a format stores audio only, video (possibly with audio) or a picture.
  */
-export type FormatKind = "audio" | "video" | "image";
+export type FormatKind = "audio" | "video" | "image" | "document";

@@ -63,6 +63,72 @@ pub fn exif_tiff_with_gps(orientation: u16) -> Vec<u8> {
     t
 }
 
+/// A PDF with one page per size (points), each filled with a gray rectangle
+/// and carrying personal metadata (author, date) that conversions must drop.
+pub fn pdf(sizes: &[(f32, f32)]) -> Vec<u8> {
+    use lopdf::{Dictionary, Document, Object, Stream, dictionary};
+    let mut doc = Document::with_version("1.7");
+    let pages_id = doc.new_object_id();
+    let mut kids = Vec::new();
+    for (w, h) in sizes {
+        let content = format!("0.5 g 10 10 {} {} re f", w - 20.0, h - 20.0);
+        let content_id = doc.add_object(Stream::new(Dictionary::new(), content.into_bytes()));
+        kids.push(Object::from(doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), (*w).into(), (*h).into()],
+            "Contents" => content_id,
+        })));
+    }
+    let count = kids.len() as i64;
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => count }),
+    );
+    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    let info = doc.add_object(dictionary! {
+        "Author" => Object::string_literal("Mario Rossi"),
+        "CreationDate" => Object::string_literal("D:20260101120000"),
+    });
+    doc.trailer.set("Root", catalog);
+    doc.trailer.set("Info", info);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+/// The same PDF, protected: it needs `user_password` to be opened.
+pub fn encrypted_pdf(user_password: &str) -> Vec<u8> {
+    use lopdf::encryption::crypt_filters::{Aes128CryptFilter, CryptFilter};
+    use lopdf::{Document, EncryptionState, EncryptionVersion, Object, Permissions};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    let mut doc = Document::load_mem(&pdf(&[(595.0, 842.0)])).unwrap();
+    doc.trailer.set(
+        "ID",
+        vec![
+            Object::string_literal("0123456789abcdef"),
+            Object::string_literal("0123456789abcdef"),
+        ],
+    );
+    let filter: Arc<dyn CryptFilter> = Arc::new(Aes128CryptFilter);
+    let version = EncryptionVersion::V4 {
+        document: &doc,
+        encrypt_metadata: true,
+        crypt_filters: BTreeMap::from([(b"StdCF".to_vec(), filter)]),
+        stream_filter: b"StdCF".to_vec(),
+        string_filter: b"StdCF".to_vec(),
+        owner_password: "proprietario",
+        user_password,
+        permissions: Permissions::all(),
+    };
+    doc.encrypt(&EncryptionState::try_from(version).unwrap())
+        .unwrap();
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    bytes
+}
+
 /// Adds an EXIF segment (APP1) right after the start of a JPEG file.
 pub fn jpeg_with_exif(jpeg: &[u8], orientation: u16) -> Vec<u8> {
     jpeg_with_exif_block(jpeg, &exif_tiff(orientation))

@@ -28,6 +28,8 @@ pub enum MediaKind {
     VideoWithAudio,
     /// A single picture (photo): JPEG, PNG, WebP, AVIF, HEIC, BMP, TIFF, ...
     Image,
+    /// A PDF document.
+    Document,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -123,6 +125,9 @@ pub struct MediaInfo {
     /// The file records where it was made (GPS in a photo, location of a video).
     #[serde(default)]
     pub has_location: bool,
+    /// Document details, for [`MediaKind::Document`] only.
+    #[serde(default)]
+    pub document: Option<crate::pdf::DocumentInfo>,
 }
 
 impl MediaInfo {
@@ -144,6 +149,13 @@ impl MediaInfo {
 pub async fn probe(bins: &Binaries, input: &Path) -> Result<MediaInfo, CoreError> {
     if !input.is_file() {
         return Err(CoreError::InputNotFound);
+    }
+    if crate::pdf::is_pdf(input) {
+        // Read by Konvert, not by FFmpeg (see `pdf.rs`).
+        let path = input.to_path_buf();
+        return tokio::task::spawn_blocking(move || crate::pdf::probe(&path))
+            .await
+            .map_err(|e| CoreError::Io(std::io::Error::other(e)))?;
     }
     if crate::svg::is_svg(input) {
         // Drawn by Konvert, not by FFmpeg (see `svg.rs`).
@@ -331,6 +343,7 @@ pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
         picture: None,
         has_tags,
         has_location,
+        document: None,
     })
 }
 
@@ -475,6 +488,7 @@ fn parse_picture(
         picture: Some(picture),
         has_tags: false,
         has_location: false,
+        document: None,
     })
 }
 

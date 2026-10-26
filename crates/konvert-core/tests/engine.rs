@@ -565,6 +565,7 @@ async fn advanced_options_are_applied() {
         },
         frames: None,
         remove_location: false,
+        pdf: None,
     };
     let (_, out) = convert(&bins, &tmp, &input, request).await;
     let video = out.primary_video().unwrap();
@@ -869,8 +870,12 @@ async fn every_picture_format_from_every_picture_input() {
         assert_eq!(media.kind, MediaKind::Image, "{input:?}");
         assert_eq!(size_of(&media), (Some(*width), Some(*height)), "{input:?}");
         // Only what this engine can write (no JPEG XL without libjxl).
-        let targets =
-            formats::supported_targets(konvert_core::available_targets(&media, input), &encoders);
+        // PDF documents have their own tests.
+        let targets: Vec<_> =
+            formats::supported_targets(konvert_core::available_targets(&media, input), &encoders)
+                .into_iter()
+                .filter(|t| t.kind == formats::FormatKind::Image)
+                .collect();
         assert!(targets.len() >= 3, "{input:?}");
         for target in targets {
             let request = req(target.format, QualityPreset::Balanced);
@@ -1481,6 +1486,216 @@ async fn cancelling_a_series_leaves_nothing_behind() {
     let trigger = cancel.clone();
     let result = run_conversion(&bins, &ws, &job, &cancel, move |p| {
         if p.fraction.is_some_and(|f| f > 0.0 && f < 1.0) {
+            trigger.cancel();
+        }
+    })
+    .await;
+    assert!(matches!(result, Err(CoreError::Cancelled)), "{result:?}");
+    assert!(files_in(&out_dir).is_empty(), "no folder must be created");
+    assert_eq!(files_in(ws.dir()), [".lock"]);
+}
+
+// --- PDF documents ---------------------------------------------------------------
+
+const A4: (f32, f32) = (595.276, 841.89);
+
+/// The PDF's metadata dictionary, as text (it must not reveal anything).
+fn pdf_info(data: &[u8]) -> String {
+    let doc = lopdf::Document::load_mem(data).unwrap();
+    let info = doc
+        .trailer
+        .get(b"Info")
+        .and_then(lopdf::Object::as_reference)
+        .unwrap();
+    format!("{:?}", doc.get_dictionary(info).unwrap())
+}
+
+fn pdf_page_sizes(data: &[u8]) -> Vec<(f32, f32)> {
+    let doc = lopdf::Document::load_mem(data).unwrap();
+    doc.get_pages()
+        .values()
+        .map(|id| {
+            let page = doc.get_dictionary(*id).unwrap();
+            let b = page.get(b"MediaBox").unwrap().as_array().unwrap();
+            let n = |o: &lopdf::Object| o.as_float().unwrap();
+            (n(&b[2]) - n(&b[0]), n(&b[3]) - n(&b[1]))
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn photos_become_a_pdf_and_come_back_as_pictures() {
+    let bins = engine();
+    let tmp = TempDir::new("pdf-roundtrip");
+    // A photo stored 64×48 but displayed 48×64 (EXIF orientation).
+    let photo = sample_jpeg(&bins, &tmp, "Ritratto.jpg", Some(6));
+    let media = probe(&bins, &photo).await.unwrap();
+
+    // Page shaped like the photo, no margins: the page has its proportions.
+    let mut request = req(TargetFormat::Pdf, QualityPreset::Max);
+    request.pdf = Some(konvert_core::PdfOptions {
+        page_size: konvert_core::PageSize::Fit,
+        margin: konvert_core::PageMargin::None,
+        ..Default::default()
+    });
+    let plan = plan_conversion(&media, &request, &photo).unwrap();
+    assert_eq!(
+        plan.warnings,
+        [konvert_core::ConversionWarning::MetadataDropped]
+    );
+    let (outcome, pdf_media) = convert(&bins, &tmp, &photo, request).await;
+    assert!(outcome.output.ends_with("Ritratto.pdf"));
+    assert_eq!(pdf_media.kind, MediaKind::Document);
+    let doc = pdf_media.document.unwrap();
+    assert_eq!(doc.pages, 1);
+    assert!((doc.width_pt / doc.height_pt - 48.0 / 64.0).abs() < 0.01);
+    let data = std::fs::read(&outcome.output).unwrap();
+    assert!(!pdf_info(&data).contains("Creat") && pdf_info(&data).contains("Konvert"));
+
+    // And back: one PNG picture per page, upright, with the photo's proportions.
+    let mut back = req(TargetFormat::Png, QualityPreset::Balanced);
+    back.pdf = Some(konvert_core::PdfOptions {
+        dpi: 72,
+        page_label: Some("pagina".into()),
+        ..Default::default()
+    });
+    let (folder, _) = convert_series(&bins, &tmp, &outcome.output, back).await;
+    assert_eq!(files_in(&folder.output), ["Ritratto-pagina-01.png"]);
+    let page = probe(&bins, &folder.output.join("Ritratto-pagina-01.png"))
+        .await
+        .unwrap();
+    let (w, h) = size_of(&page);
+    assert!(h > w, "{w:?}×{h:?}");
+    assert!((w.unwrap() as f32 / h.unwrap() as f32 - 0.75).abs() < 0.02);
+}
+
+#[tokio::test]
+async fn pdfs_are_merged_in_order_without_personal_metadata() {
+    let bins = engine();
+    let tmp = TempDir::new("pdf-merge");
+    let files: Vec<PathBuf> = [
+        ("Uno.pdf", fixtures::pdf(&[A4, A4])),
+        ("Due.pdf", fixtures::pdf(&[(A4.1, A4.0)])),
+        ("Tre è.pdf", fixtures::pdf(&[(612.0, 792.0), A4, A4])),
+    ]
+    .into_iter()
+    .map(|(name, data)| {
+        let path = tmp.path(name);
+        std::fs::write(&path, data).unwrap();
+        path
+    })
+    .collect();
+    let mut inputs = Vec::new();
+    for path in &files {
+        let media = probe(&bins, path).await.unwrap();
+        assert_eq!(media.kind, MediaKind::Document);
+        inputs.push((path.clone(), media));
+    }
+    let out_dir = tmp.path("out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ws = Workspace::create(&tmp.path("ws")).unwrap();
+    let job = konvert_core::CombinedJob {
+        id: 3,
+        inputs,
+        request: req(TargetFormat::Pdf, QualityPreset::Balanced),
+        output_dir: out_dir.clone(),
+    };
+    let outcome = konvert_core::run_combined(&bins, &ws, &job, &CancellationToken::new(), |_| {})
+        .await
+        .unwrap();
+    assert_eq!(outcome.output, out_dir.join("Uno.pdf"));
+    assert_eq!(files_in(ws.dir()), [".lock"]);
+    let data = std::fs::read(&outcome.output).unwrap();
+    assert_eq!(
+        pdf_page_sizes(&data),
+        [A4, A4, (A4.1, A4.0), (612.0, 792.0), A4, A4]
+    );
+    let info = pdf_info(&data);
+    assert!(
+        !info.contains("Mario") && !info.contains("D:2026"),
+        "{info}"
+    );
+    assert!(!String::from_utf8_lossy(&data).contains("Mario Rossi"));
+}
+
+#[tokio::test]
+async fn pages_of_different_sizes_become_pictures_of_matching_sizes() {
+    let bins = engine();
+    let tmp = TempDir::new("pdf-pages");
+    let path = tmp.path("Misto.pdf");
+    std::fs::write(&path, fixtures::pdf(&[A4, (A4.1, A4.0), (200.0, 100.0)])).unwrap();
+    let mut request = req(TargetFormat::Webp, QualityPreset::Small);
+    request.pdf = Some(konvert_core::PdfOptions {
+        dpi: 72,
+        pages: Some("2-3".into()),
+        ..Default::default()
+    });
+    let (folder, _) = convert_series(&bins, &tmp, &path, request).await;
+    assert_eq!(
+        files_in(&folder.output),
+        ["Misto-page-02.webp", "Misto-page-03.webp"]
+    );
+    let landscape = probe(&bins, &folder.output.join("Misto-page-02.webp"))
+        .await
+        .unwrap();
+    assert_eq!(size_of(&landscape), (Some(841), Some(595)));
+    let small = probe(&bins, &folder.output.join("Misto-page-03.webp"))
+        .await
+        .unwrap();
+    assert_eq!(size_of(&small), (Some(200), Some(100)));
+}
+
+#[tokio::test]
+async fn protected_and_damaged_pdfs_are_reported_clearly() {
+    let bins = engine();
+    let tmp = TempDir::new("pdf-errors");
+    let locked = tmp.path("Protetto.pdf");
+    std::fs::write(&locked, fixtures::encrypted_pdf("segreta")).unwrap();
+    assert_eq!(
+        probe(&bins, &locked).await.unwrap_err().code(),
+        "pdf_encrypted"
+    );
+
+    // Protected only against editing: it opens like any PDF.
+    let restricted = tmp.path("Solo lettura.pdf");
+    std::fs::write(&restricted, fixtures::encrypted_pdf("")).unwrap();
+    let media = probe(&bins, &restricted).await.unwrap();
+    assert_eq!(media.document.unwrap().pages, 1);
+
+    let damaged = tmp.path("Rotto.pdf");
+    std::fs::write(&damaged, b"%PDF-1.7\n1 0 obj << /Type /Catalog").unwrap();
+    assert_eq!(
+        probe(&bins, &damaged).await.unwrap_err().code(),
+        "corrupt_input"
+    );
+}
+
+#[tokio::test]
+async fn cancelling_a_long_pdf_leaves_nothing_behind() {
+    let bins = engine();
+    let tmp = TempDir::new("pdf-cancel");
+    let path = tmp.path("Lungo.pdf");
+    std::fs::write(&path, fixtures::pdf(&vec![A4; 200])).unwrap();
+    let media = probe(&bins, &path).await.unwrap();
+    let out_dir = tmp.path("uscita");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ws = Workspace::create(&tmp.path("ws")).unwrap();
+    let mut request = req(TargetFormat::Jpg, QualityPreset::Max);
+    request.pdf = Some(konvert_core::PdfOptions {
+        dpi: 300,
+        ..Default::default()
+    });
+    let job = ConversionJob {
+        id: 1,
+        input: path,
+        media,
+        request,
+        output_dir: out_dir.clone(),
+    };
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    let result = run_conversion(&bins, &ws, &job, &cancel, move |p| {
+        if p.fraction.is_some_and(|f| f > 0.0) {
             trigger.cancel();
         }
     })

@@ -84,17 +84,31 @@ pub fn move_series(
     stem: &OsStr,
     ext: &str,
 ) -> io::Result<(PathBuf, u32, u64)> {
+    move_series_named(src_dir, dir, stem, ext, |i, count| {
+        let digits = count.to_string().len().max(3);
+        let mut name = stem.to_os_string();
+        name.push(format!("-{:0digits$}.{ext}", i + 1));
+        name
+    })
+}
+
+/// Like [`move_series`], with the file names given by `name(index, count)`.
+pub fn move_series_named(
+    src_dir: &Path,
+    dir: &Path,
+    stem: &OsStr,
+    ext: &str,
+    name: impl Fn(usize, usize) -> OsString,
+) -> io::Result<(PathBuf, u32, u64)> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(src_dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == ext))
         .collect();
     files.sort();
     let folder = create_unique_dir(dir, stem)?;
-    let digits = files.len().to_string().len().max(3);
     let mut bytes = 0;
     for (i, file) in files.iter().enumerate() {
-        let mut name = stem.to_os_string();
-        name.push(format!("-{:0digits$}.{ext}", i + 1));
+        let name = name(i, files.len());
         let size = std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
         if let Err(e) = move_no_replace(file, &folder.join(name)) {
             let _ = std::fs::remove_dir_all(&folder);

@@ -73,6 +73,8 @@ pub enum TargetFormat {
     Ico,
     /// JPEG XL (only with an engine built with libjxl).
     Jxl,
+    /// PDF document: pictures as pages, or several PDFs merged.
+    Pdf,
 }
 
 impl TargetFormat {
@@ -107,6 +109,8 @@ pub enum FormatKind {
     Audio,
     Video,
     Image,
+    /// A PDF document (made by Konvert, not by FFmpeg).
+    Document,
 }
 
 /// Audio encoders Konvert uses.
@@ -337,6 +341,8 @@ impl FormatSpec {
             FormatKind::Video => self
                 .default_video_codec()
                 .is_some_and(VideoCodec::is_lossless),
+            // Pages are copied as they are; pictures keep their pixels up to the page size.
+            FormatKind::Document => false,
         }
     }
 }
@@ -908,6 +914,16 @@ pub static FORMATS: &[FormatSpec] = &[
         requires_encoder: Some("libjxl"),
         ..SPEC
     },
+    FormatSpec {
+        format: TargetFormat::Pdf,
+        label: "PDF",
+        extension: "pdf",
+        input_extensions: &["pdf"],
+        // Written by Konvert (`pdf.rs`), not by FFmpeg.
+        muxer: "",
+        kind: FormatKind::Document,
+        ..SPEC
+    },
 ];
 
 /// Catalog entry of a format.
@@ -966,6 +982,9 @@ const IMAGE_TARGETS: &[TargetFormat] = &[
 /// Pictures taken from a video (one frame or a series).
 const FRAME_TARGETS: &[TargetFormat] = &[TargetFormat::Jpg, TargetFormat::Png, TargetFormat::Webp];
 
+/// Pages of a PDF as pictures.
+const PAGE_TARGETS: &[TargetFormat] = &[TargetFormat::Png, TargetFormat::Jpg, TargetFormat::Webp];
+
 /// What Konvert proposes for one kind of input.
 #[derive(Debug)]
 pub struct Rule {
@@ -976,6 +995,8 @@ pub struct Rule {
     pub audio: &'static [TargetFormat],
     /// Picture outputs.
     pub image: &'static [TargetFormat],
+    /// Document outputs (PDF).
+    pub document: &'static [TargetFormat],
 }
 
 /// Proposal rules. Audio inputs never get video outputs; pictures only get
@@ -986,24 +1007,35 @@ pub static RULES: &[Rule] = &[
         video: &[],
         audio: AUDIO_TARGETS,
         image: &[],
+        document: &[],
     },
     Rule {
         input: MediaKind::Video,
         video: VIDEO_TARGETS,
         audio: &[],
         image: FRAME_TARGETS,
+        document: &[],
     },
     Rule {
         input: MediaKind::VideoWithAudio,
         video: VIDEO_TARGETS,
         audio: AUDIO_TARGETS,
         image: FRAME_TARGETS,
+        document: &[],
     },
     Rule {
         input: MediaKind::Image,
         video: &[],
         audio: &[],
         image: IMAGE_TARGETS,
+        document: &[TargetFormat::Pdf],
+    },
+    Rule {
+        input: MediaKind::Document,
+        video: &[],
+        audio: &[],
+        image: PAGE_TARGETS,
+        document: &[TargetFormat::Pdf],
     },
 ];
 
@@ -1022,6 +1054,10 @@ pub enum TargetGroup {
     Image,
     /// Video → pictures (one frame or a series).
     Frames,
+    /// PDF → pictures, one per page.
+    Pages,
+    /// Pictures or PDFs → a PDF document.
+    Document,
 }
 
 /// A conversion proposed to the user.
@@ -1136,15 +1172,16 @@ pub fn available_targets(media: &MediaInfo, input: &Path) -> Vec<TargetOption> {
     } else {
         TargetGroup::AudioOnly
     };
-    let image_group = if media.kind == MediaKind::Image {
-        TargetGroup::Image
-    } else {
-        TargetGroup::Frames
+    let image_group = match media.kind {
+        MediaKind::Image => TargetGroup::Image,
+        MediaKind::Document => TargetGroup::Pages,
+        _ => TargetGroup::Frames,
     };
     let groups = [
         (rule.video, TargetGroup::Video),
         (rule.audio, audio_group),
         (rule.image, image_group),
+        (rule.document, TargetGroup::Document),
     ];
 
     groups
@@ -1269,6 +1306,7 @@ mod tests {
         TargetFormat::StillGif,
         TargetFormat::Ico,
         TargetFormat::Jxl,
+        TargetFormat::Pdf,
     ];
 
     fn media(json: &str) -> MediaInfo {
@@ -1341,6 +1379,11 @@ mod tests {
                     s.video_codecs.is_empty() && s.audio_codecs.is_empty(),
                     "{f:?}"
                 ),
+                // Written by Konvert itself.
+                FormatKind::Document => assert!(
+                    s.video_codecs.is_empty() && s.audio_codecs.is_empty() && s.muxer.is_empty(),
+                    "{f:?}"
+                ),
             }
             assert_eq!(
                 s.image_codec.is_some(),
@@ -1352,8 +1395,15 @@ mod tests {
 
     #[test]
     fn pictures_get_only_picture_formats() {
-        let options = available_targets(&picture("mjpeg", "image2"), Path::new("IMG_1.JPEG"));
-        assert!(options.iter().all(|o| o.group == TargetGroup::Image));
+        let all = available_targets(&picture("mjpeg", "image2"), Path::new("IMG_1.JPEG"));
+        // Pictures can also become a PDF document, in its own group, last.
+        let (options, pdf): (Vec<_>, Vec<_>) =
+            all.into_iter().partition(|o| o.group == TargetGroup::Image);
+        assert_eq!(formats(&pdf), [TargetFormat::Pdf]);
+        assert_eq!(
+            (pdf[0].group, pdf[0].kind),
+            (TargetGroup::Document, FormatKind::Document)
+        );
         assert!(options.iter().all(|o| o.kind == FormatKind::Image));
         assert!(
             options
@@ -1384,7 +1434,11 @@ mod tests {
         let bmp = available_targets(&picture("bmp", "bmp_pipe"), Path::new("a.bmp"));
         assert!(!formats(&bmp).contains(&TargetFormat::Bmp));
         let heic = available_targets(&picture("hevc", "image2"), Path::new("a.heic"));
-        assert_eq!(heic.len(), IMAGE_TARGETS.len());
+        assert_eq!(
+            heic.len(),
+            IMAGE_TARGETS.len() + 1,
+            "every picture format, and PDF"
+        );
 
         // Pictures never reach audio or video formats.
         assert!(!is_offered(
@@ -1461,7 +1515,13 @@ mod tests {
     fn every_format_is_reachable_from_some_input() {
         let offered: HashSet<TargetFormat> = RULES
             .iter()
-            .flat_map(|r| r.video.iter().chain(r.audio).chain(r.image))
+            .flat_map(|r| {
+                r.video
+                    .iter()
+                    .chain(r.audio)
+                    .chain(r.image)
+                    .chain(r.document)
+            })
             .copied()
             .collect();
         assert_eq!(offered.len(), ALL.len());

@@ -16,10 +16,11 @@ use crate::formats::{
     self, AudioCodec, FormatKind, FormatSpec, ImageCodec, TargetFormat, VideoCodec,
     is_lossless_audio_codec, is_lossless_image, is_lossless_video_codec,
 };
+use crate::pdf::{self, Placement};
 use crate::probe::{
     AudioStream, MediaInfo, MediaKind, PictureInfo, VideoStream, pix_fmt_has_alpha,
 };
-use crate::request::{ConversionRequest, FrameMode, QualityPreset};
+use crate::request::{AdvancedOptions, ConversionRequest, FrameMode, QualityPreset};
 
 /// How the audio stream is produced.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -222,6 +223,20 @@ pub struct FramePlan {
     pub count: Option<u32>,
 }
 
+/// A PDF part of a conversion.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DocumentPlan {
+    /// Pages of the PDF, 1-based: the ones to turn into pictures, or every
+    /// page of a PDF merged into another.
+    pub pages: Vec<u32>,
+    /// PDF to pictures: rendering resolution in dots per inch.
+    pub dpi: u32,
+    /// Picture to PDF: where the picture goes on its page.
+    pub placement: Option<Placement>,
+}
+
 /// Beyond this many pictures, the user is told about it.
 const MANY_FILES: u32 = 300;
 
@@ -244,6 +259,9 @@ pub struct ConversionPlan {
     /// Pictures taken from a video (picture formats from a video input).
     #[serde(default)]
     pub frames: Option<FramePlan>,
+    /// PDF documents (pictures to PDF, PDF to PDF, PDF to pictures).
+    #[serde(default)]
+    pub document: Option<DocumentPlan>,
     /// Where the file was made is erased (GPS data, location tags).
     #[serde(default)]
     pub remove_location: bool,
@@ -286,11 +304,14 @@ pub fn plan_conversion(
             spec.label
         )));
     }
+    if spec.kind == FormatKind::Document {
+        return plan_document(media, request);
+    }
     if spec.kind == FormatKind::Image {
-        return if media.kind == MediaKind::Image {
-            plan_picture(media, request, spec)
-        } else {
-            plan_frames(media, request, spec)
+        return match media.kind {
+            MediaKind::Image => plan_picture(media, request, spec),
+            MediaKind::Document => plan_pages(media, request, spec),
+            _ => plan_frames(media, request, spec),
         };
     }
 
@@ -305,7 +326,7 @@ pub fn plan_conversion(
                 .primary_video()
                 .ok_or_else(|| unsupported("the input has no video".into()))?,
         ),
-        FormatKind::Audio | FormatKind::Image => None,
+        FormatKind::Audio | FormatKind::Image | FormatKind::Document => None,
     };
     let video = video_stream.map(|v| plan_video(spec, v, request, force_encode));
 
@@ -338,6 +359,7 @@ pub fn plan_conversion(
         cover_art_stream,
         image: None,
         frames: None,
+        document: None,
         remove_location: request.remove_location && media.has_location,
         warnings: Vec::new(),
         estimate: None,
@@ -436,6 +458,152 @@ fn plan_frames(
     }
     plan.frames = Some(frames);
     plan.estimate = estimate_size(media, &plan);
+    Ok(plan)
+}
+
+/// A PDF made from this file: a picture laid out on its own page, or every
+/// page of a PDF (merged with the other files, in order).
+fn plan_document(
+    media: &MediaInfo,
+    request: &ConversionRequest,
+) -> Result<ConversionPlan, CoreError> {
+    use ConversionWarning as W;
+    let options = request.pdf.clone().unwrap_or_default();
+    match media.kind {
+        MediaKind::Image => {
+            let src = media
+                .primary_video()
+                .ok_or_else(|| unsupported("the input has no picture".into()))?;
+            let picture = media.picture.clone().unwrap_or_default();
+            let (width, height) = src
+                .width
+                .zip(src.height)
+                .filter(|(w, h)| *w > 0 && *h > 0)
+                .unwrap_or((1000, 1000));
+            let placement = pdf::place(width, height, &options);
+            // Pixels worth keeping on paper: all of them, 300 or 150 dots per inch.
+            let dpi = pick(request.preset, None, Some(300.0), Some(150.0));
+            let paper_limit = dpi.map(|dpi| (placement.longest_inches() * dpi).ceil() as u32);
+            let jpeg = ConversionRequest {
+                target: TargetFormat::Jpg,
+                advanced: AdvancedOptions {
+                    image_quality: request.advanced.image_quality,
+                    max_dimension: [paper_limit, request.advanced.max_dimension]
+                        .into_iter()
+                        .flatten()
+                        .min(),
+                    ..AdvancedOptions::default()
+                },
+                ..request.clone()
+            };
+            let mut plan = plan_still(
+                media,
+                &jpeg,
+                formats::spec(TargetFormat::Jpg),
+                src,
+                picture.clone(),
+            )?;
+            plan.target = TargetFormat::Pdf;
+            if let Some(image) = plan.image.as_mut() {
+                // EXIF data has no place in a PDF.
+                image.copy_exif = false;
+            }
+            plan.warnings.clear();
+            if picture.exif {
+                plan.warnings.push(W::MetadataDropped);
+            }
+            plan.remove_location = false;
+            plan.document = Some(DocumentPlan {
+                pages: vec![1],
+                dpi: 0,
+                placement: Some(placement),
+            });
+            Ok(plan)
+        }
+        MediaKind::Document => {
+            let info = media
+                .document
+                .as_ref()
+                .ok_or_else(|| unsupported("the input is not a PDF".into()))?;
+            Ok(ConversionPlan {
+                target: TargetFormat::Pdf,
+                video_stream: None,
+                video: None,
+                audio_stream: None,
+                audio: None,
+                cover_art_stream: None,
+                image: None,
+                frames: None,
+                document: Some(DocumentPlan {
+                    pages: (1..=info.pages).collect(),
+                    dpi: 0,
+                    placement: None,
+                }),
+                remove_location: false,
+                warnings: Vec::new(),
+                // The pages are copied as they are.
+                estimate: media.size_bytes.map(|bytes| SizeEstimate {
+                    bytes,
+                    approximate: true,
+                }),
+            })
+        }
+        _ => Err(unsupported(
+            "only pictures and PDFs become PDF documents".into(),
+        )),
+    }
+}
+
+/// Pages of a PDF as pictures: each chosen page rendered at the chosen
+/// resolution, saved in a folder named after the document.
+fn plan_pages(
+    media: &MediaInfo,
+    request: &ConversionRequest,
+    spec: &FormatSpec,
+) -> Result<ConversionPlan, CoreError> {
+    use ConversionWarning as W;
+    let info = media
+        .document
+        .as_ref()
+        .ok_or_else(|| unsupported("the input is not a PDF".into()))?;
+    let options = request.pdf.clone().unwrap_or_default();
+    let dpi = options.dpi.clamp(36, pdf::MAX_DPI);
+    let pages = pdf::parse_pages(options.pages.as_deref(), info.pages)?;
+    let (width, height) = pdf::rendered_size(info.width_pt, info.height_pt, dpi);
+    // Pages are drawn on white: an opaque, lossless picture of the first page.
+    let page = VideoStream {
+        index: 0,
+        codec: "png".into(),
+        width: Some(width),
+        height: Some(height),
+        fps: None,
+        bit_rate: None,
+        pix_fmt: Some("rgb24".into()),
+    };
+    let request = ConversionRequest {
+        advanced: AdvancedOptions {
+            image_quality: request.advanced.image_quality,
+            ..AdvancedOptions::default()
+        },
+        ..request.clone()
+    };
+    let mut plan = plan_still(media, &request, spec, &page, PictureInfo::default())?;
+    // Turning pages into pictures is not a re-compression worth a warning.
+    plan.warnings.clear();
+    if pages.len() as u32 > MANY_FILES {
+        plan.warnings.push(W::ManyFiles);
+    }
+    // Text pages compress far better than photos.
+    let per_page = plan.estimate.map_or(0, |e| e.bytes / 3);
+    plan.estimate = Some(SizeEstimate {
+        bytes: per_page * pages.len() as u64,
+        approximate: true,
+    });
+    plan.document = Some(DocumentPlan {
+        pages,
+        dpi,
+        placement: None,
+    });
     Ok(plan)
 }
 
@@ -582,6 +750,7 @@ fn plan_still(
         cover_art_stream: None,
         image: Some(image),
         frames: None,
+        document: None,
         remove_location: request.remove_location && media.has_location,
         warnings,
         estimate: None,

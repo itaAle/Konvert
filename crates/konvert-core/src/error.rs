@@ -34,6 +34,10 @@ pub enum CoreError {
     #[error("this conversion is not supported")]
     UnsupportedConversion { details: String },
 
+    /// The PDF needs a password to be opened (Konvert does not ask for passwords).
+    #[error("the PDF is protected by a password")]
+    PdfEncrypted,
+
     /// The destination volume ran out of space.
     #[error("not enough disk space")]
     DiskFull { details: String },
@@ -65,6 +69,7 @@ impl CoreError {
             CoreError::NotMedia => "not_media",
             CoreError::CorruptInput { .. } => "corrupt_input",
             CoreError::UnsupportedConversion { .. } => "unsupported_conversion",
+            CoreError::PdfEncrypted => "pdf_encrypted",
             CoreError::DiskFull { .. } => "disk_full",
             CoreError::PermissionDenied { .. } => "permission_denied",
             CoreError::Cancelled => "cancelled",

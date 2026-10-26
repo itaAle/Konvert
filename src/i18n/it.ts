@@ -45,6 +45,8 @@ export const it = {
     groupAudioOnly: "Solo audio",
     groupImage: "Formato immagine",
     groupFrames: "Fotogrammi",
+    groupPages: "Pagine come immagini",
+    groupDocument: "Documento PDF",
     lossless: "Senza perdita",
     sameFormat: "Stesso formato",
     animated: "Animata",
@@ -227,6 +229,7 @@ export const it = {
     not_media: "Questo file non contiene audio, video o immagini.",
     corrupt_input: "Il file sembra danneggiato o in un formato non supportato.",
     unsupported_conversion: "Questa conversione non è supportata per questo file.",
+    pdf_encrypted: "Questo PDF è protetto da una password. Konvert non apre i PDF protetti: rimuovi la protezione con il programma con cui è stato creato e riprova.",
     disk_full: "Spazio su disco insufficiente per salvare il file convertito.",
     permission_denied:
       "Accesso negato: Konvert non può leggere il file o scrivere nella cartella di destinazione.",

@@ -144,6 +144,7 @@ function analysis(path: string): FileAnalysis {
         hasTags: false,
         picture: { alpha: true, alphaStream: null, gridGroup: null, exif: false, exifCopyable: false },
         hasLocation: false,
+        document: null,
       },
       targets: IMAGES,
     };
@@ -168,6 +169,7 @@ function analysis(path: string): FileAnalysis {
         hasTags: false,
         picture: { alpha: false, alphaStream: null, gridGroup: heic ? 0 : null, exif: true, exifCopyable: true },
         hasLocation: true,
+        document: null,
       },
       targets: IMAGES.map((o) => ({ ...o, sameAsInput: !heic && o.format === "jpg" })),
     };
@@ -189,6 +191,7 @@ function analysis(path: string): FileAnalysis {
         subtitleStreams: 0,
         hasTags: false,
         hasLocation: false,
+        document: null,
         picture: null,
       },
       targets: [
@@ -214,6 +217,7 @@ function analysis(path: string): FileAnalysis {
       subtitleStreams: 0,
       hasTags: true,
       hasLocation: false,
+      document: null,
       picture: null,
     },
     targets: AUDIO,
@@ -285,6 +289,7 @@ export const mockBackend: Backend = {
           render: null,
         },
         removeLocation: false,
+        document: null,
         frames: {
           mode: frames.mode,
           atSecs: frames.mode === "single" ? (frames.atSecs ?? duration / 2) : null,
@@ -329,6 +334,7 @@ export const mockBackend: Backend = {
         estimate: { bytes: Math.round((media.sizeBytes ?? 0) * (png ? 6 : quality / 100)), approximate: true },
         frames: null,
         removeLocation: request.removeLocation,
+        document: null,
       };
       return plan;
     }
@@ -350,6 +356,7 @@ export const mockBackend: Backend = {
       image: null,
       frames: null,
       removeLocation: request.removeLocation,
+      document: null,
       warnings,
       estimate: {
         bytes: Math.round(

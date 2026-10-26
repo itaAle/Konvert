@@ -9,12 +9,16 @@
 //! konvert-cli [--ffmpeg-dir DIR] targets <FILE>
 //! konvert-cli [--ffmpeg-dir DIR] plan    <FILE> --to <FORMAT> [OPTIONS]
 //! konvert-cli [--ffmpeg-dir DIR] convert <FILE> --to <FORMAT> [OPTIONS] [--out-dir DIR]
+//! konvert-cli [--ffmpeg-dir DIR] combine <FILE>... [OPTIONS] [--out-dir DIR]   (one PDF)
 //!
 //! OPTIONS: --preset max|balanced|small  --height N  --fps N
 //!          --audio-bitrate KBPS  --sample-rate HZ  --mono | --stereo
 //!          --quality 1-100  --max-size PIXELS   (pictures)
 //!          --frame-at SECONDS | --every SECONDS | --every-frame   (pictures from a video)
 //!          --remove-location   (erase GPS data and location tags)
+//!          --page-size a4|letter|fit  --orientation auto|portrait|landscape
+//!          --margin none|small|normal   (pictures to PDF)
+//!          --dpi N  --pages "1-3, 5"   (PDF to pictures)
 //! ```
 //!
 //! The engine directory defaults to `$KONVERT_FFMPEG_DIR`, then to
@@ -26,9 +30,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use konvert_core::{
-    AdvancedOptions, Binaries, ChannelLayout, ConversionJob, ConversionRequest, CoreError,
-    FrameMode, FrameOptions, QualityPreset, TargetFormat, Workspace, available_targets,
-    engine_encoders, engine_version, formats::supported_targets, plan_conversion, probe,
+    AdvancedOptions, Binaries, ChannelLayout, CombinedJob, ConversionJob, ConversionRequest,
+    CoreError, FrameMode, FrameOptions, PageMargin, PageOrientation, PageSize, PdfOptions,
+    Progress, QualityPreset, TargetFormat, Workspace, available_targets, engine_encoders,
+    engine_version, formats::supported_targets, plan_conversion, probe, run_combined,
     run_conversion, workspace,
 };
 use tokio_util::sync::CancellationToken;
@@ -39,12 +44,16 @@ const USAGE: &str = "usage:
   konvert-cli [--ffmpeg-dir DIR] targets <FILE>
   konvert-cli [--ffmpeg-dir DIR] plan    <FILE> --to <FORMAT> [OPTIONS]
   konvert-cli [--ffmpeg-dir DIR] convert <FILE> --to <FORMAT> [OPTIONS] [--out-dir DIR]
+  konvert-cli [--ffmpeg-dir DIR] combine <FILE>... [OPTIONS] [--out-dir DIR]   (one PDF)
 
 OPTIONS: --preset max|balanced|small  --height N  --fps N
          --audio-bitrate KBPS  --sample-rate HZ  --mono | --stereo
          --quality 1-100  --max-size PIXELS   (pictures)
          --frame-at SECONDS | --every SECONDS | --every-frame   (pictures from a video)
-         --remove-location   (erase GPS data and location tags)";
+         --remove-location   (erase GPS data and location tags)
+         --page-size a4|letter|fit  --orientation auto|portrait|landscape
+         --margin none|small|normal   (pictures to PDF)
+         --dpi N  --pages \"1-3, 5\"   (PDF to pictures)";
 
 enum Action {
     Version,
@@ -52,6 +61,7 @@ enum Action {
     Targets(PathBuf),
     Plan(PathBuf, ConversionRequest),
     Convert(PathBuf, ConversionRequest, Option<PathBuf>),
+    Combine(Vec<PathBuf>, ConversionRequest, Option<PathBuf>),
 }
 
 struct Cli {
@@ -69,6 +79,7 @@ fn parse_args() -> Result<Cli, String> {
     let mut out_dir = None;
     let mut frames: Option<FrameOptions> = None;
     let mut remove_location = false;
+    let mut pdf: Option<PdfOptions> = None;
 
     fn number<T: std::str::FromStr>(name: &str, v: OsString) -> Result<T, String> {
         v.to_str()
@@ -129,6 +140,35 @@ fn parse_args() -> Result<Cli, String> {
                 })
             }
             Some("--remove-location") => remove_location = true,
+            Some("--page-size") => {
+                pdf.get_or_insert_default().page_size = match value("--page-size")?.to_str() {
+                    Some("a4") => PageSize::A4,
+                    Some("letter") => PageSize::Letter,
+                    Some("fit") => PageSize::Fit,
+                    _ => return Err("page size must be a4, letter or fit".into()),
+                }
+            }
+            Some("--orientation") => {
+                pdf.get_or_insert_default().orientation = match value("--orientation")?.to_str() {
+                    Some("auto") => PageOrientation::Auto,
+                    Some("portrait") => PageOrientation::Portrait,
+                    Some("landscape") => PageOrientation::Landscape,
+                    _ => return Err("orientation must be auto, portrait or landscape".into()),
+                }
+            }
+            Some("--margin") => {
+                pdf.get_or_insert_default().margin = match value("--margin")?.to_str() {
+                    Some("none") => PageMargin::None,
+                    Some("small") => PageMargin::Small,
+                    Some("normal") => PageMargin::Normal,
+                    _ => return Err("margin must be none, small or normal".into()),
+                }
+            }
+            Some("--dpi") => pdf.get_or_insert_default().dpi = number("--dpi", value("--dpi")?)?,
+            Some("--pages") => {
+                pdf.get_or_insert_default().pages =
+                    Some(value("--pages")?.to_string_lossy().into_owned())
+            }
             Some("--mono") => advanced.channels = Some(ChannelLayout::Mono),
             Some("--stereo") => advanced.channels = Some(ChannelLayout::Stereo),
             Some("-h" | "--help") => return Err(String::new()),
@@ -144,6 +184,9 @@ fn parse_args() -> Result<Cli, String> {
 
     let mut positional = positional.into_iter();
     let command = positional.next();
+    if command.as_ref().and_then(|c| c.to_str()) == Some("combine") {
+        target.get_or_insert(TargetFormat::Pdf);
+    }
     let mut file = || -> Result<PathBuf, String> {
         positional
             .next()
@@ -157,6 +200,7 @@ fn parse_args() -> Result<Cli, String> {
             advanced: advanced.clone(),
             frames,
             remove_location,
+            pdf: pdf.clone(),
         })
     };
     let action = match command.as_ref().and_then(|c| c.to_str()) {
@@ -165,6 +209,13 @@ fn parse_args() -> Result<Cli, String> {
         Some("targets") => Action::Targets(file()?),
         Some("plan") => Action::Plan(file()?, request()?),
         Some("convert") => Action::Convert(file()?, request()?, out_dir),
+        Some("combine") => {
+            let files: Vec<PathBuf> = positional.map(PathBuf::from).collect();
+            if files.is_empty() {
+                return Err("missing <FILE>...".into());
+            }
+            Action::Combine(files, request()?, out_dir)
+        }
         _ => return Err(String::new()),
     };
     Ok(Cli { ffmpeg_dir, action })
@@ -238,25 +289,8 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
                 output_dir,
             };
             let ws = Workspace::create(&workspace::default_base_dir())?;
-
-            // Ctrl+C cancels the job (and cleans up the partial file).
-            let cancel = CancellationToken::new();
-            let on_ctrl_c = cancel.clone();
-            tokio::spawn(async move {
-                if tokio::signal::ctrl_c().await.is_ok() {
-                    on_ctrl_c.cancel();
-                }
-            });
-
-            let outcome = run_conversion(&bins, &ws, &job, &cancel, |p| {
-                let pct = p.fraction.map(|f| format!("{:5.1}%", f * 100.0));
-                let eta = p.eta_secs.map(|s| format!("ETA {s:.0}s"));
-                let speed = p.speed.map(|s| format!("{s:.1}x"));
-                let parts: Vec<String> = [pct, speed, eta].into_iter().flatten().collect();
-                eprint!("\r{:<40}", parts.join("  "));
-                let _ = std::io::stderr().flush();
-            })
-            .await;
+            let cancel = cancel_on_ctrl_c();
+            let outcome = run_conversion(&bins, &ws, &job, &cancel, show_progress).await;
             eprintln!();
             let outcome = outcome?;
             if let Some(estimate) = plan.estimate {
@@ -270,14 +304,64 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
                     }
                 );
             }
-            println!(
-                "{} ({} file(s), {} bytes, {:.1}s)",
-                outcome.output.display(),
-                outcome.files,
-                outcome.size_bytes,
-                outcome.elapsed.as_secs_f64()
-            );
+            print_outcome(&outcome);
+        }
+        Action::Combine(inputs, request, out_dir) => {
+            let mut probed = Vec::with_capacity(inputs.len());
+            for input in inputs {
+                let media = probe(&bins, &input).await?;
+                probed.push((input, media));
+            }
+            let output_dir = out_dir.unwrap_or_else(|| {
+                probed[0]
+                    .0
+                    .parent()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("."))
+            });
+            let job = CombinedJob {
+                id: 1,
+                inputs: probed,
+                request,
+                output_dir,
+            };
+            let ws = Workspace::create(&workspace::default_base_dir())?;
+            let cancel = cancel_on_ctrl_c();
+            let outcome = run_combined(&bins, &ws, &job, &cancel, show_progress).await;
+            eprintln!();
+            print_outcome(&outcome?);
         }
     }
     Ok(())
+}
+
+/// Ctrl+C cancels the job (and cleans up the partial files).
+fn cancel_on_ctrl_c() -> CancellationToken {
+    let cancel = CancellationToken::new();
+    let on_ctrl_c = cancel.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            on_ctrl_c.cancel();
+        }
+    });
+    cancel
+}
+
+fn show_progress(p: Progress) {
+    let pct = p.fraction.map(|f| format!("{:5.1}%", f * 100.0));
+    let eta = p.eta_secs.map(|s| format!("ETA {s:.0}s"));
+    let speed = p.speed.map(|s| format!("{s:.1}x"));
+    let parts: Vec<String> = [pct, speed, eta].into_iter().flatten().collect();
+    eprint!("\r{:<40}", parts.join("  "));
+    let _ = std::io::stderr().flush();
+}
+
+fn print_outcome(outcome: &konvert_core::ConversionOutcome) {
+    println!(
+        "{} ({} file(s), {} bytes, {:.1}s)",
+        outcome.output.display(),
+        outcome.files,
+        outcome.size_bytes,
+        outcome.elapsed.as_secs_f64()
+    );
 }

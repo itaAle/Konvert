@@ -3,4 +3,4 @@
 /**
  * Output formats Konvert can produce.
  */
-export type TargetFormat = "mp3" | "m4a" | "alac" | "wav" | "flac" | "ogg" | "opus" | "wma" | "aiff" | "aac" | "ac3" | "eac3" | "mp2" | "caf" | "mka" | "mp4" | "mkv" | "mov" | "webm" | "avi" | "ts" | "mpg" | "3gp" | "flv" | "gif" | "animatedWebp" | "apng" | "jpg" | "png" | "webp" | "avif" | "bmp" | "tiff" | "stillGif" | "ico" | "jxl";
+export type TargetFormat = "mp3" | "m4a" | "alac" | "wav" | "flac" | "ogg" | "opus" | "wma" | "aiff" | "aac" | "ac3" | "eac3" | "mp2" | "caf" | "mka" | "mp4" | "mkv" | "mov" | "webm" | "avi" | "ts" | "mpg" | "3gp" | "flv" | "gif" | "animatedWebp" | "apng" | "jpg" | "png" | "webp" | "avif" | "bmp" | "tiff" | "stillGif" | "ico" | "jxl" | "pdf";

@@ -18,6 +18,9 @@ tokio-util = { workspace = true }
 ts-rs = { workspace = true }
 # SVG pictures are rendered by Konvert (FFmpeg's librsvg is not in every build).
 resvg = { workspace = true }
+# PDF documents: pages rendered by hayro, files read and written by lopdf.
+hayro = { workspace = true }
+lopdf = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [

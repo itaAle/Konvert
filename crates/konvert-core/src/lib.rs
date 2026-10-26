@@ -23,6 +23,7 @@ pub mod exif;
 pub mod formats;
 pub mod metadata;
 pub mod naming;
+pub mod pdf;
 pub mod plan;
 pub mod probe;
 pub mod progress;
@@ -33,7 +34,7 @@ pub mod workspace;
 mod process;
 
 pub use binaries::Binaries;
-pub use convert::{ConversionJob, ConversionOutcome, run_conversion};
+pub use convert::{CombinedJob, ConversionJob, ConversionOutcome, run_combined, run_conversion};
 pub use disk::available_space;
 pub use error::{CoreError, ErrorPayload};
 pub use estimate::SizeEstimate;
@@ -42,7 +43,8 @@ pub use plan::{ConversionPlan, ConversionWarning, plan_conversion};
 pub use probe::{MediaInfo, MediaKind, probe};
 pub use progress::Progress;
 pub use request::{
-    AdvancedOptions, ChannelLayout, ConversionRequest, FrameMode, FrameOptions, QualityPreset,
+    AdvancedOptions, ChannelLayout, ConversionRequest, FrameMode, FrameOptions, PageMargin,
+    PageOrientation, PageSize, PdfOptions, QualityPreset,
 };
 pub use workspace::Workspace;
 

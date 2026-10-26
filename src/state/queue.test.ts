@@ -61,6 +61,7 @@ function file(name: string, kind: "audio" | "videoWithAudio" | "image", duration
       hasTags: false,
       picture: kind === "image" ? { alpha: false, alphaStream: null, gridGroup: null, exif: false, exifCopyable: false } : null,
       hasLocation: false,
+      document: null,
     },
     targets,
   };
@@ -76,6 +77,7 @@ const plan = (target: TargetFormat, bytes: number, approximate = false, warnings
   image: null,
   frames: null,
   removeLocation: false,
+  document: null,
   warnings,
   estimate: { bytes, approximate },
 });
