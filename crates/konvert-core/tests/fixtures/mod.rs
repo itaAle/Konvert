@@ -28,11 +28,51 @@ pub fn exif_tiff(orientation: u16) -> Vec<u8> {
     t
 }
 
+/// EXIF data (big-endian TIFF) with an orientation and a GPS position
+/// (latitude 45° 30′ N, stored as three rationals).
+pub fn exif_tiff_with_gps(orientation: u16) -> Vec<u8> {
+    let mut t = Vec::new();
+    t.extend(b"MM\0\x2a");
+    t.extend(8u32.to_be_bytes());
+    let entry = |t: &mut Vec<u8>, tag: u16, kind: u16, count: u32, value: [u8; 4]| {
+        t.extend(tag.to_be_bytes());
+        t.extend(kind.to_be_bytes());
+        t.extend(count.to_be_bytes());
+        t.extend(value);
+    };
+    // IFD0 at 8: orientation and the GPS link → 8 + 2 + 24 + 4 = 38.
+    t.extend(2u16.to_be_bytes());
+    entry(
+        &mut t,
+        0x0112,
+        3,
+        1,
+        [(orientation >> 8) as u8, orientation as u8, 0, 0],
+    );
+    entry(&mut t, 0x8825, 4, 1, 38u32.to_be_bytes());
+    t.extend(0u32.to_be_bytes());
+    // GPS IFD at 38: latitude ref and latitude (rationals at 38 + 30 = 68).
+    t.extend(2u16.to_be_bytes());
+    entry(&mut t, 0x0001, 2, 2, *b"N\0\0\0");
+    entry(&mut t, 0x0002, 5, 3, 68u32.to_be_bytes());
+    t.extend(0u32.to_be_bytes());
+    for (num, den) in [(45u32, 1u32), (30, 1), (0, 1)] {
+        t.extend(num.to_be_bytes());
+        t.extend(den.to_be_bytes());
+    }
+    t
+}
+
 /// Adds an EXIF segment (APP1) right after the start of a JPEG file.
 pub fn jpeg_with_exif(jpeg: &[u8], orientation: u16) -> Vec<u8> {
+    jpeg_with_exif_block(jpeg, &exif_tiff(orientation))
+}
+
+/// Adds the given EXIF data (TIFF) as an APP1 segment of a JPEG file.
+pub fn jpeg_with_exif_block(jpeg: &[u8], tiff: &[u8]) -> Vec<u8> {
     assert_eq!(&jpeg[..2], [0xff, 0xd8], "not a JPEG file");
     let mut payload = b"Exif\0\0".to_vec();
-    payload.extend(exif_tiff(orientation));
+    payload.extend(tiff);
     let mut out = jpeg[..2].to_vec();
     out.extend([0xff, 0xe1]);
     out.extend(((payload.len() + 2) as u16).to_be_bytes());

@@ -33,4 +33,8 @@ picture: PictureInfo | null,
 /**
  * The file has tags (title, artist, album...).
  */
-hasTags: boolean, };
+hasTags: boolean, 
+/**
+ * The file records where it was made (GPS in a photo, location of a video).
+ */
+hasLocation: boolean, };

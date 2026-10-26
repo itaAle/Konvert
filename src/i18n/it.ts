@@ -53,6 +53,10 @@ export const it = {
     common: "Formati disponibili per tutti i file selezionati.",
     none: "Non esiste un formato comune a tutti i file: rimuovi i file non compatibili.",
   },
+  location: {
+    remove: "Rimuovi la posizione",
+    hint: "Questo file registra il luogo in cui è stato creato (GPS). Attiva per non conservarlo nel file convertito.",
+  },
   frames: {
     title: "Immagini dal video",
     single: "Un fotogramma",

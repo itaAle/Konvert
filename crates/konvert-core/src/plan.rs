@@ -131,6 +131,9 @@ pub struct ImagePlan {
     /// Pictures of a Windows icon, largest last (ICO only).
     #[serde(default)]
     pub icons: Vec<IconFrame>,
+    /// The EXIF data of the photo is copied into the picture (Konvert writes it).
+    #[serde(default)]
+    pub copy_exif: bool,
 }
 
 /// One picture of a Windows icon: the source fitted into a transparent square.
@@ -238,6 +241,9 @@ pub struct ConversionPlan {
     /// Pictures taken from a video (picture formats from a video input).
     #[serde(default)]
     pub frames: Option<FramePlan>,
+    /// Where the file was made is erased (GPS data, location tags).
+    #[serde(default)]
+    pub remove_location: bool,
     pub warnings: Vec<ConversionWarning>,
     pub estimate: Option<SizeEstimate>,
 }
@@ -329,6 +335,7 @@ pub fn plan_conversion(
         cover_art_stream,
         image: None,
         frames: None,
+        remove_location: request.remove_location && media.has_location,
         warnings: Vec::new(),
         estimate: None,
     };
@@ -500,6 +507,13 @@ fn plan_still(
         grid_group: picture.grid_group,
         alpha_stream: picture.alpha_stream,
         icons,
+        // Konvert writes EXIF data into the formats with a standard place for it.
+        copy_exif: picture.exif
+            && picture.exif_copyable
+            && matches!(
+                codec,
+                ImageCodec::Jpeg | ImageCodec::Png | ImageCodec::Webp | ImageCodec::Avif
+            ),
     };
 
     let mut warnings = Vec::new();
@@ -525,8 +539,11 @@ fn plan_still(
     if codec == ImageCodec::Ico && source_size.is_some_and(|(w, h)| w != h) {
         warnings.push(W::PaddedToSquare);
     }
-    // FFmpeg carries EXIF data over only from JPEG/PNG/WebP files into PNG.
-    if picture.exif && (codec != ImageCodec::Png || media.is_heif()) {
+    // Without Konvert's copy, FFmpeg still carries EXIF data from JPEG/PNG/WebP
+    // files into PNG (unless the location must go: then Konvert removes it all).
+    let ffmpeg_keeps_exif =
+        codec == ImageCodec::Png && !media.is_heif() && !request.remove_location;
+    if picture.exif && !image.copy_exif && !ffmpeg_keeps_exif {
         warnings.push(W::MetadataDropped);
     }
     warnings.sort_by_key(|w| *w as u8);
@@ -540,6 +557,7 @@ fn plan_still(
         cover_art_stream: None,
         image: Some(image),
         frames: None,
+        remove_location: request.remove_location && media.has_location,
         warnings,
         estimate: None,
     };

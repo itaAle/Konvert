@@ -17,6 +17,7 @@ use ts_rs::TS;
 use crate::binaries::Binaries;
 use crate::command::{build_from_plan, build_from_plan_with, file_url};
 use crate::error::CoreError;
+use crate::exif;
 use crate::formats;
 use crate::metadata;
 use crate::naming;
@@ -113,6 +114,22 @@ pub async fn run_conversion(
         return Err(e);
     }
 
+    if let Some(image) = plan
+        .image
+        .as_ref()
+        .filter(|i| i.copy_exif || plan.remove_location)
+    {
+        let (input, output) = (job.input.clone(), temp_output.clone());
+        let (copy, remove, size) = (
+            image.copy_exif,
+            plan.remove_location,
+            image.width.zip(image.height),
+        );
+        let _ =
+            tokio::task::spawn_blocking(move || finish_exif(&input, &output, copy, remove, size))
+                .await;
+    }
+
     let stem = output_stem(&job.input);
     let output_dir = job.output_dir.clone();
     let temp = temp_output.clone();
@@ -187,6 +204,33 @@ async fn run_series(
         files,
         elapsed: started.elapsed(),
     })
+}
+
+/// Copies the photo's EXIF data into the converted picture, still in the
+/// private workspace. When the location must go and the data cannot be
+/// copied, any EXIF data FFmpeg wrote is removed instead. If something fails,
+/// the picture stays as FFmpeg wrote it.
+fn finish_exif(
+    input: &Path,
+    output: &Path,
+    copy: bool,
+    remove_location: bool,
+    size: Option<(u32, u32)>,
+) {
+    let Ok(converted) = std::fs::read(output) else {
+        return;
+    };
+    let copied = copy
+        .then(|| {
+            let tiff = exif::extract(&std::fs::read(input).ok()?)?;
+            let tiff = exif::prepare(&tiff, remove_location, size)?;
+            exif::insert(&converted, &tiff).ok()
+        })
+        .flatten();
+    let result = copied.or_else(|| remove_location.then(|| exif::strip(&converted)).flatten());
+    if let Some(bytes) = result {
+        let _ = std::fs::write(output, bytes);
+    }
 }
 
 /// Ogg outputs keep the cover as a picture comment: the picture is copied out

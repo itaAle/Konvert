@@ -11,4 +11,8 @@ export type ConversionRequest = { target: TargetFormat, preset: QualityPreset, a
 /**
  * Only for pictures taken from a video.
  */
-frames?: FrameOptions | null, };
+frames?: FrameOptions | null, 
+/**
+ * Erase where the photo or video was made (GPS data, location tags).
+ */
+removeLocation: boolean, };

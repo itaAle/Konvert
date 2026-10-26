@@ -13,6 +13,7 @@ import { FileCard } from "./FileCard";
 import { FileList } from "./FileList";
 import { FormatGrid } from "./FormatGrid";
 import { FramesPanel } from "./FramesPanel";
+import { LocationRow } from "./LocationRow";
 import { PlanFooterInfo, PlanSummary, hasStrongWarning, isRemux } from "./PlanSummary";
 import { QualityPicker } from "./QualityPicker";
 import { Button } from "./ui/Button";
@@ -44,6 +45,7 @@ export function SetupScreen({ q }: { q: QueueController }) {
   const shortest = durations.every((d) => d != null) && durations.length > 0 ? Math.min(...(durations as number[])) : null;
   const counts = ready.map((i) => i.plan?.frames?.count ?? null);
   const pictures = allPlanned && counts.every((n) => n != null) ? (counts as number[]).reduce((a, b) => a + b, 0) : null;
+  const hasLocation = ready.some((i) => i.file?.media.hasLocation);
 
   // Bring quality and warnings into view once the options have appeared, and
   // whenever an important warning shows up, so it never stays below the fold.
@@ -143,6 +145,9 @@ export function SetupScreen({ q }: { q: QueueController }) {
                 </section>
               )}
               <AdvancedPanel option={option} value={state.advanced} onChange={q.setAdvanced} />
+              {hasLocation && option.group !== "frames" && (
+                <LocationRow checked={state.removeLocation} onChange={q.setRemoveLocation} />
+              )}
               {/* Margin keeps the content clear of the faded edge above the footer. */}
               <div ref={summaryRef} className="flex scroll-mb-10 flex-col gap-4">
                 <PlanSummary warnings={warnings} error={planError} lowSpace={q.lowSpace} />

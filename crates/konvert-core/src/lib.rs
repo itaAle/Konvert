@@ -19,6 +19,7 @@ pub mod convert;
 pub mod disk;
 pub mod error;
 pub mod estimate;
+pub mod exif;
 pub mod formats;
 pub mod metadata;
 pub mod naming;

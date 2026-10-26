@@ -54,6 +54,10 @@ export const en: Messages = {
     common: "Formats available for all the selected files.",
     none: "No format is common to all the files: remove the incompatible ones.",
   },
+  location: {
+    remove: "Remove the location",
+    hint: "This file records where it was made (GPS). Turn this on to leave it out of the converted file.",
+  },
   frames: {
     title: "Pictures from the video",
     single: "One frame",

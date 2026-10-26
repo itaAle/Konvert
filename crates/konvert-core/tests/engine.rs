@@ -564,6 +564,7 @@ async fn advanced_options_are_applied() {
             ..Default::default()
         },
         frames: None,
+        remove_location: false,
     };
     let (_, out) = convert(&bins, &tmp, &input, request).await;
     let video = out.primary_video().unwrap();
@@ -983,13 +984,110 @@ async fn exif_orientation_is_applied_once_and_exif_kept_in_png() {
         let (outcome, out) = convert(&bins, &tmp, &input, req(target, QualityPreset::Max)).await;
         // A kept orientation tag would rotate the picture a second time.
         assert_eq!(size_of(&out), (Some(48), Some(64)), "{target:?}");
-        let exif_kept = out.picture.as_ref().unwrap().exif;
-        assert_eq!(exif_kept, target == TargetFormat::Png, "{target:?}");
+        // Konvert copies the EXIF data, with the orientation set to "normal".
+        assert!(out.picture.as_ref().unwrap().exif, "{target:?}");
+        let tiff = konvert_core::exif::extract(&std::fs::read(&outcome.output).unwrap())
+            .unwrap_or_else(|| panic!("{target:?}: no EXIF data"));
+        assert!(tiff.windows(10).any(|w| w == b"KonvertCam"), "{target:?}");
         let warned = plan_conversion(&media, &req(target, QualityPreset::Max), &input)
             .unwrap()
             .warnings
             .contains(&konvert_core::ConversionWarning::MetadataDropped);
-        assert_eq!(warned, !exif_kept, "{target:?}");
+        assert!(!warned, "{target:?}");
+        std::fs::remove_file(&outcome.output).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn photo_location_is_kept_or_removed_on_request() {
+    let bins = engine();
+    let tmp = TempDir::new("location");
+    let path = sample_picture(
+        &bins,
+        &tmp,
+        "Vacanza.jpg",
+        &["-c:v", "mjpeg", "-f", "image2pipe"],
+    );
+    let jpeg = std::fs::read(&path).unwrap();
+    std::fs::write(
+        &path,
+        fixtures::jpeg_with_exif_block(&jpeg, &fixtures::exif_tiff_with_gps(6)),
+    )
+    .unwrap();
+    let media = probe(&bins, &path).await.unwrap();
+    assert!(media.has_location && media.picture.as_ref().unwrap().exif_copyable);
+
+    for target in [
+        TargetFormat::Jpg,
+        TargetFormat::Webp,
+        TargetFormat::Avif,
+        TargetFormat::Png,
+    ] {
+        for remove in [false, true] {
+            let mut request = req(target, QualityPreset::Balanced);
+            request.remove_location = remove;
+            let (outcome, out) = convert(&bins, &tmp, &path, request).await;
+            assert_eq!(size_of(&out), (Some(48), Some(64)), "{target:?}");
+            // Still a valid picture: FFmpeg decodes it.
+            let _ = pixel(&bins, &outcome.output, 5, 5);
+            assert_eq!(out.has_location, !remove, "{target:?} remove={remove}");
+            let tiff =
+                konvert_core::exif::extract(&std::fs::read(&outcome.output).unwrap()).unwrap();
+            assert_eq!(
+                konvert_core::exif::has_location(&tiff),
+                !remove,
+                "{target:?}"
+            );
+            // The coordinates themselves are gone from the file.
+            let data = std::fs::read(&outcome.output).unwrap();
+            let latitude = 45u32.to_be_bytes();
+            let found = data
+                .windows(8)
+                .any(|w| w[..4] == latitude && w[4..] == 1u32.to_be_bytes());
+            assert_eq!(found, !remove, "{target:?} remove={remove}");
+            std::fs::remove_file(&outcome.output).unwrap();
+        }
+    }
+
+    // HEIC photos from phones keep their EXIF data in JPG too.
+    let heic = sample_heic(&bins, &tmp, "IMG_0002.HEIC", 1);
+    let media = probe(&bins, &heic).await.unwrap();
+    assert!(media.picture.as_ref().unwrap().exif_copyable);
+    let (outcome, _) = convert(
+        &bins,
+        &tmp,
+        &heic,
+        req(TargetFormat::Jpg, QualityPreset::Balanced),
+    )
+    .await;
+    let tiff = konvert_core::exif::extract(&std::fs::read(&outcome.output).unwrap()).unwrap();
+    assert!(tiff.windows(10).any(|w| w == b"KonvertCam"));
+}
+
+#[tokio::test]
+async fn video_location_is_removed_on_request() {
+    let bins = engine();
+    let tmp = TempDir::new("video-location");
+    let plain = sample_mp4(&bins, &tmp);
+    let input = tmp.path("Gita.mov");
+    generate(
+        &bins,
+        &[
+            "-i",
+            plain.to_str().unwrap(),
+            "-c",
+            "copy",
+            "-metadata",
+            "location=+45.4642+009.1900/",
+        ],
+        &input,
+    );
+    assert!(probe(&bins, &input).await.unwrap().has_location);
+    for remove in [false, true] {
+        let mut request = req(TargetFormat::Mkv, QualityPreset::Balanced);
+        request.remove_location = remove;
+        let (outcome, out) = convert(&bins, &tmp, &input, request).await;
+        assert_eq!(out.has_location, !remove, "remove={remove}");
         std::fs::remove_file(&outcome.output).unwrap();
     }
 }

@@ -19,4 +19,8 @@ gridGroup: number | null,
 /**
  * Embedded EXIF data (camera, date, location, ...).
  */
-exif: boolean, };
+exif: boolean, 
+/**
+ * Konvert can copy the EXIF data into the converted picture.
+ */
+exifCopyable: boolean, };

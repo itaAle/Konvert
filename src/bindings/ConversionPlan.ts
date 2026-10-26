@@ -30,4 +30,8 @@ image: ImagePlan | null,
 /**
  * Pictures taken from a video (picture formats from a video input).
  */
-frames: FramePlan | null, warnings: Array<ConversionWarning>, estimate: SizeEstimate | null, };
+frames: FramePlan | null, 
+/**
+ * Where the file was made is erased (GPS data, location tags).
+ */
+removeLocation: boolean, warnings: Array<ConversionWarning>, estimate: SizeEstimate | null, };

@@ -90,6 +90,9 @@ pub struct PictureInfo {
     pub grid_group: Option<u32>,
     /// Embedded EXIF data (camera, date, location, ...).
     pub exif: bool,
+    /// Konvert can copy the EXIF data into the converted picture.
+    #[serde(default)]
+    pub exif_copyable: bool,
 }
 
 /// Result of analysing an input file.
@@ -117,6 +120,9 @@ pub struct MediaInfo {
     /// The file has tags (title, artist, album...).
     #[serde(default)]
     pub has_tags: bool,
+    /// The file records where it was made (GPS in a photo, location of a video).
+    #[serde(default)]
+    pub has_location: bool,
 }
 
 impl MediaInfo {
@@ -166,7 +172,31 @@ pub async fn probe(bins: &Binaries, input: &Path) -> Result<MediaInfo, CoreError
         .await?;
         apply_first_frame_json(&mut info, &json)?;
     }
+    if info.picture.as_ref().is_some_and(|p| p.exif) {
+        let path = input.to_path_buf();
+        let exif = tokio::task::spawn_blocking(move || read_exif(&path))
+            .await
+            .ok()
+            .flatten();
+        if let (Some(tiff), Some(picture)) = (exif, info.picture.as_mut()) {
+            picture.exif_copyable = true;
+            info.has_location |= crate::exif::has_location(&tiff);
+        }
+    }
     Ok(info)
+}
+
+/// The EXIF block of a JPEG, PNG, WebP or HEIF/AVIF file (other files are
+/// not read: their EXIF data stays out of reach).
+fn read_exif(path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut header = [0u8; 16];
+    std::fs::File::open(path)
+        .ok()?
+        .read_exact(&mut header)
+        .ok()?;
+    crate::exif::container_of(&header)?;
+    crate::exif::extract(&std::fs::read(path).ok()?)
 }
 
 async fn run_ffprobe(bins: &Binaries, input: &Path, args: &[&str]) -> Result<Vec<u8>, CoreError> {
@@ -267,6 +297,9 @@ pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
         )
         .any(|key| USER_TAGS.iter().any(|t| key.eq_ignore_ascii_case(t)));
 
+    // Phone videos store where they were shot as a tag.
+    let has_location = format.tags.keys().any(|k| is_location_tag(k));
+
     if audio.is_empty() && is_still_picture(&container, brand, &video) {
         return parse_picture(&raw, container, parse_num(&format.size));
     }
@@ -290,7 +323,14 @@ pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
         subtitle_streams,
         picture: None,
         has_tags,
+        has_location,
     })
+}
+
+/// Location tags of videos (`location`, `location-eng`, Apple's ISO 6709 key).
+pub(crate) fn is_location_tag(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    key.starts_with("location") || key == "com.apple.quicktime.location.iso6709"
 }
 
 /// Tags people care about (technical ones such as `encoder` do not count).
@@ -427,6 +467,7 @@ fn parse_picture(
         subtitle_streams: 0,
         picture: Some(picture),
         has_tags: false,
+        has_location: false,
     })
 }
 

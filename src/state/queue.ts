@@ -50,6 +50,8 @@ export interface QueueState {
   advanced: AdvancedOptions;
   /** Pictures taken from videos (frame targets only). */
   frames: FrameOptions;
+  /** Erase where the files were made (GPS data, location tags). */
+  removeLocation: boolean;
   /** Bumped whenever the request changes: answers for older requests are discarded. */
   planVersion: number;
   notice: "cancelled" | null;
@@ -66,6 +68,7 @@ export type QueueAction =
   | { type: "selectPreset"; preset: QualityPreset }
   | { type: "setAdvanced"; advanced: AdvancedOptions }
   | { type: "setFrames"; frames: FrameOptions }
+  | { type: "setRemoveLocation"; removeLocation: boolean }
   | { type: "defaultPreset"; preset: QualityPreset }
   | { type: "planned"; key: number; version: number; plan: ConversionPlan }
   | { type: "planFailed"; key: number; version: number; error: ErrorPayload }
@@ -90,6 +93,7 @@ export function initialQueue(preset: QualityPreset = "balanced"): QueueState {
     preset,
     advanced: {},
     frames: DEFAULT_FRAMES,
+    removeLocation: false,
     planVersion: 0,
     notice: null,
     cancelling: false,
@@ -136,7 +140,13 @@ export function commonTargets(items: QueueItem[]): TargetOption[] {
 
 export function requestOf(state: QueueState): ConversionRequest | null {
   return state.target
-    ? { target: state.target, preset: state.preset, advanced: state.advanced, frames: state.frames }
+    ? {
+        target: state.target,
+        preset: state.preset,
+        advanced: state.advanced,
+        frames: state.frames,
+        removeLocation: state.removeLocation,
+      }
     : null;
 }
 
@@ -304,6 +314,10 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
     case "setFrames":
       if (state.phase !== "setup") return state;
       return invalidate({ ...state, frames: action.frames, notice: null });
+
+    case "setRemoveLocation":
+      if (state.phase !== "setup") return state;
+      return invalidate({ ...state, removeLocation: action.removeLocation, notice: null });
 
     case "defaultPreset":
       return state.phase === "empty" ? { ...state, preset: action.preset } : state;

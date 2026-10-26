@@ -193,6 +193,7 @@ export function useQueue() {
     selectPreset: (preset: QualityPreset) => dispatch({ type: "selectPreset", preset }),
     setAdvanced: (advanced: AdvancedOptions) => dispatch({ type: "setAdvanced", advanced }),
     setFrames: (frames: FrameOptions) => dispatch({ type: "setFrames", frames }),
+    setRemoveLocation: (removeLocation: boolean) => dispatch({ type: "setRemoveLocation", removeLocation }),
     start,
     cancelAll,
     back: () => dispatch({ type: "back" }),

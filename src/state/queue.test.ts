@@ -59,7 +59,8 @@ function file(name: string, kind: "audio" | "videoWithAudio" | "image", duration
       coverArt: null,
       subtitleStreams: 0,
       hasTags: false,
-      picture: kind === "image" ? { alpha: false, alphaStream: null, gridGroup: null, exif: false } : null,
+      picture: kind === "image" ? { alpha: false, alphaStream: null, gridGroup: null, exif: false, exifCopyable: false } : null,
+      hasLocation: false,
     },
     targets,
   };
@@ -74,6 +75,7 @@ const plan = (target: TargetFormat, bytes: number, approximate = false, warnings
   coverArtStream: null,
   image: null,
   frames: null,
+  removeLocation: false,
   warnings,
   estimate: { bytes, approximate },
 });
@@ -145,6 +147,19 @@ describe("queue state machine", () => {
     expect(commonTargets(s.items)).toEqual([]);
   });
 
+  it("asks to remove the location only when told, and plans again", () => {
+    let s = run(initialQueue(), { type: "add", paths: ["a.jpg"] });
+    s = run(s, { type: "analyzed", key: 1, file: file("a.jpg", "image", null) }, { type: "selectTarget", target: "webp" });
+    expect(requestOf(s)?.removeLocation).toBe(false);
+    const version = s.planVersion;
+    s = reduce(s, { type: "setRemoveLocation", removeLocation: true });
+    expect(s.planVersion).toBe(version + 1);
+    expect(requestOf(s)?.removeLocation).toBe(true);
+    // A new set of files starts again from the default.
+    s = reduce(s, { type: "reset" });
+    expect(s.removeLocation).toBe(false);
+  });
+
   it("sends the frame options with the request and plans again when they change", () => {
     let s = run(initialQueue(), { type: "add", paths: ["b.mp4"] });
     s = run(s, { type: "analyzed", key: 1, file: file("b.mp4", "videoWithAudio", 10) }, { type: "selectTarget", target: "png" });
@@ -208,7 +223,7 @@ describe("queue state machine", () => {
     s = reduce(s, { type: "planned", key: 1, version: old, plan: plan("mp3", 1) });
     expect(s.items[0].plan).toBe(null);
     expect(canStart(s)).toBe(false);
-    expect(requestOf(s)).toEqual({ target: "mp3", preset: "small", advanced: {}, frames: DEFAULT_FRAMES });
+    expect(requestOf(s)).toEqual({ target: "mp3", preset: "small", advanced: {}, frames: DEFAULT_FRAMES, removeLocation: false });
   });
 
   it("changing format resets the advanced options", () => {

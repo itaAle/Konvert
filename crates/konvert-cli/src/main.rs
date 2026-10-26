@@ -14,6 +14,7 @@
 //!          --audio-bitrate KBPS  --sample-rate HZ  --mono | --stereo
 //!          --quality 1-100  --max-size PIXELS   (pictures)
 //!          --frame-at SECONDS | --every SECONDS | --every-frame   (pictures from a video)
+//!          --remove-location   (erase GPS data and location tags)
 //! ```
 //!
 //! The engine directory defaults to `$KONVERT_FFMPEG_DIR`, then to
@@ -41,7 +42,8 @@ const USAGE: &str = "usage:
 OPTIONS: --preset max|balanced|small  --height N  --fps N
          --audio-bitrate KBPS  --sample-rate HZ  --mono | --stereo
          --quality 1-100  --max-size PIXELS   (pictures)
-         --frame-at SECONDS | --every SECONDS | --every-frame   (pictures from a video)";
+         --frame-at SECONDS | --every SECONDS | --every-frame   (pictures from a video)
+         --remove-location   (erase GPS data and location tags)";
 
 enum Action {
     Version,
@@ -65,6 +67,7 @@ fn parse_args() -> Result<Cli, String> {
     let mut advanced = AdvancedOptions::default();
     let mut out_dir = None;
     let mut frames: Option<FrameOptions> = None;
+    let mut remove_location = false;
 
     fn number<T: std::str::FromStr>(name: &str, v: OsString) -> Result<T, String> {
         v.to_str()
@@ -124,6 +127,7 @@ fn parse_args() -> Result<Cli, String> {
                     ..FrameOptions::default()
                 })
             }
+            Some("--remove-location") => remove_location = true,
             Some("--mono") => advanced.channels = Some(ChannelLayout::Mono),
             Some("--stereo") => advanced.channels = Some(ChannelLayout::Stereo),
             Some("-h" | "--help") => return Err(String::new()),
@@ -151,6 +155,7 @@ fn parse_args() -> Result<Cli, String> {
             preset,
             advanced: advanced.clone(),
             frames,
+            remove_location,
         })
     };
     let action = match command.as_ref().and_then(|c| c.to_str()) {

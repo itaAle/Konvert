@@ -123,6 +123,9 @@ pub struct ConversionRequest {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub frames: Option<FrameOptions>,
+    /// Erase where the photo or video was made (GPS data, location tags).
+    #[serde(default)]
+    pub remove_location: bool,
 }
 
 impl ConversionRequest {
@@ -133,6 +136,7 @@ impl ConversionRequest {
             preset,
             advanced: AdvancedOptions::default(),
             frames: None,
+            remove_location: false,
         }
     }
 }

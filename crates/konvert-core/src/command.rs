@@ -142,6 +142,16 @@ fn media_args(a: &mut Args, plan: &ConversionPlan, spec: &FormatSpec, cover_comm
         // The second input's global section holds the picture comment.
         a.push(&["-map_metadata:s:a:0", "1:g"]);
     }
+    if plan.remove_location {
+        // An empty value removes the tag.
+        for key in [
+            "location",
+            "location-eng",
+            "com.apple.quicktime.location.ISO6709",
+        ] {
+            a.push(&["-metadata", &format!("{key}=")]);
+        }
+    }
 
     match &plan.video {
         Some(VideoPlan::Copy { codec }) => {
@@ -700,6 +710,27 @@ mod tests {
              "-c:a", "alac", "-sample_fmt", "s32p", "-bits_per_raw_sample", "24",
              "-c:v", "copy", "-disposition:v:0", "attached_pic", "-movflags", "+faststart"]
         );
+    }
+
+    #[test]
+    fn location_tags_are_emptied_on_request() {
+        let mut src = mp4();
+        src.has_location = true;
+        let mut request = req(TargetFormat::Mkv, QualityPreset::Balanced);
+        let args = body(&src, &request, "clip.mov");
+        assert!(!args.iter().any(|a| a.starts_with("location")));
+        request.remove_location = true;
+        let args = body(&src, &request, "clip.mov");
+        for key in [
+            "location=",
+            "location-eng=",
+            "com.apple.quicktime.location.ISO6709=",
+        ] {
+            assert!(args.windows(2).any(|w| w == ["-metadata", key]), "{key}");
+        }
+        // Nothing to remove: no extra arguments.
+        src.has_location = false;
+        assert!(!body(&src, &request, "clip.mov").contains(&"-metadata".to_owned()));
     }
 
     #[test]

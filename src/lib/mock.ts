@@ -143,7 +143,8 @@ function analysis(path: string): FileAnalysis {
         coverArt: null,
         subtitleStreams: 0,
         hasTags: false,
-        picture: { alpha: false, alphaStream: null, gridGroup: heic ? 0 : null, exif: true },
+        picture: { alpha: false, alphaStream: null, gridGroup: heic ? 0 : null, exif: true, exifCopyable: true },
+        hasLocation: true,
       },
       targets: IMAGES.map((o) => ({ ...o, sameAsInput: !heic && o.format === "jpg" })),
     };
@@ -164,6 +165,7 @@ function analysis(path: string): FileAnalysis {
         coverArt: null,
         subtitleStreams: 0,
         hasTags: false,
+        hasLocation: false,
         picture: null,
       },
       targets: [
@@ -188,6 +190,7 @@ function analysis(path: string): FileAnalysis {
       coverArt: null,
       subtitleStreams: 0,
       hasTags: true,
+      hasLocation: false,
       picture: null,
     },
     targets: AUDIO,
@@ -255,7 +258,9 @@ export const mockBackend: Backend = {
           gridGroup: null,
           alphaStream: null,
           icons: [],
+          copyExif: false,
         },
+        removeLocation: false,
         frames: {
           mode: frames.mode,
           atSecs: frames.mode === "single" ? (frames.atSecs ?? duration / 2) : null,
@@ -289,10 +294,16 @@ export const mockBackend: Backend = {
           gridGroup: media.picture?.gridGroup ?? null,
           alphaStream: null,
           icons: [],
+          copyExif: ["jpg", "png", "webp", "avif"].includes(request.target),
         },
-        warnings: [png ? "lossyToLossless" : "lossyReencode", ...(png ? [] : (["metadataDropped"] as const))],
+        // EXIF data is copied into JPG, PNG, WebP and AVIF; other formats leave it out.
+        warnings: [
+          png ? "lossyToLossless" : "lossyReencode",
+          ...(["jpg", "png", "webp", "avif"].includes(request.target) ? [] : (["metadataDropped"] as const)),
+        ],
         estimate: { bytes: Math.round((media.sizeBytes ?? 0) * (png ? 6 : quality / 100)), approximate: true },
         frames: null,
+        removeLocation: request.removeLocation,
       };
       return plan;
     }
@@ -313,6 +324,7 @@ export const mockBackend: Backend = {
       coverArtStream: null,
       image: null,
       frames: null,
+      removeLocation: request.removeLocation,
       warnings,
       estimate: {
         bytes: Math.round(

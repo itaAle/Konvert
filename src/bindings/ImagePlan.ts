@@ -35,4 +35,8 @@ alphaStream: number | null,
 /**
  * Pictures of a Windows icon, largest last (ICO only).
  */
-icons: Array<IconFrame>, };
+icons: Array<IconFrame>, 
+/**
+ * The EXIF data of the photo is copied into the picture (Konvert writes it).
+ */
+copyExif: boolean, };
