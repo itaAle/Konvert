@@ -7,4 +7,4 @@ export type CoverArt = { index: number,
 /**
  * Picture codec, usually `mjpeg` or `png`.
  */
-codec: string, };
+codec: string, width: number | null, height: number | null, };

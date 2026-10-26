@@ -8,6 +8,7 @@
 //! * [`command`]: pure FFmpeg command builder (plan → arguments).
 //! * [`convert`]: runs FFmpeg, reports progress, supports cancellation.
 //! * [`naming`] / [`workspace`]: safe output naming and temporary files.
+//! * [`metadata`]: cover art comments for Ogg files.
 //!
 //! Privacy: this crate only ever reads and writes local files. FFmpeg and FFprobe
 //! are invoked with `-protocol_whitelist file`, so they cannot open network URLs.
@@ -19,6 +20,7 @@ pub mod disk;
 pub mod error;
 pub mod estimate;
 pub mod formats;
+pub mod metadata;
 pub mod naming;
 pub mod plan;
 pub mod probe;

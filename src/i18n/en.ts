@@ -118,6 +118,7 @@ export const en: Messages = {
     largeFile: "APNG keeps every pixel of every frame: files can get very large.",
     audioDropped: "Animations have no sound: the soundtrack will be dropped.",
     coverArtDropped: "This format cannot store the cover art: it will be left out.",
+    tagsDropped: "This format cannot store tags (title, artist, album): they will be left out.",
     subtitlesDropped: "Subtitles will not be kept.",
     extraAudioTracksDropped: "Only the first audio track will be kept.",
     channelsDownmixed: "This format supports at most two channels: the audio will be downmixed to stereo.",

@@ -64,6 +64,10 @@ pub struct CoverArt {
     pub index: u32,
     /// Picture codec, usually `mjpeg` or `png`.
     pub codec: String,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
 }
 
 impl CoverArt {
@@ -110,6 +114,9 @@ pub struct MediaInfo {
     /// Picture details, for [`MediaKind::Image`] only.
     #[serde(default)]
     pub picture: Option<PictureInfo>,
+    /// The file has tags (title, artist, album...).
+    #[serde(default)]
+    pub has_tags: bool,
 }
 
 impl MediaInfo {
@@ -219,6 +226,8 @@ pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
                 cover_art.get_or_insert(CoverArt {
                     index: s.index,
                     codec,
+                    width: s.width,
+                    height: s.height,
                 });
             }
             Some("video") => {
@@ -246,6 +255,18 @@ pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
         }
     }
 
+    // Ogg and FLAC keep their comments on the audio stream, others on the file.
+    let has_tags = format
+        .tags
+        .keys()
+        .chain(
+            raw.streams
+                .iter()
+                .filter(|s| s.codec_type.as_deref() == Some("audio"))
+                .flat_map(|s| s.tags.keys()),
+        )
+        .any(|key| USER_TAGS.iter().any(|t| key.eq_ignore_ascii_case(t)));
+
     if audio.is_empty() && is_still_picture(&container, brand, &video) {
         return parse_picture(&raw, container, parse_num(&format.size));
     }
@@ -268,8 +289,23 @@ pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
         cover_art,
         subtitle_streams,
         picture: None,
+        has_tags,
     })
 }
+
+/// Tags people care about (technical ones such as `encoder` do not count).
+const USER_TAGS: &[&str] = &[
+    "title",
+    "artist",
+    "album",
+    "album_artist",
+    "composer",
+    "genre",
+    "date",
+    "track",
+    "disc",
+    "comment",
+];
 
 /// Brands of HEIF/AVIF files holding a still picture (not a picture sequence).
 const PICTURE_BRANDS: &[&str] = &["avif", "heic", "heix", "heim", "heis", "mif1", "mif2"];
@@ -390,6 +426,7 @@ fn parse_picture(
         cover_art: None,
         subtitle_streams: 0,
         picture: Some(picture),
+        has_tags: false,
     })
 }
 
@@ -549,6 +586,8 @@ struct RawStream {
     disposition: HashMap<String, i64>,
     #[serde(default)]
     side_data_list: Vec<RawSideData>,
+    #[serde(default)]
+    tags: HashMap<String, String>,
 }
 
 impl RawStream {

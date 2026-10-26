@@ -142,6 +142,7 @@ function analysis(path: string): FileAnalysis {
         audio: [],
         coverArt: null,
         subtitleStreams: 0,
+        hasTags: false,
         picture: { alpha: false, alphaStream: null, gridGroup: heic ? 0 : null, exif: true },
       },
       targets: IMAGES.map((o) => ({ ...o, sameAsInput: !heic && o.format === "jpg" })),
@@ -162,6 +163,7 @@ function analysis(path: string): FileAnalysis {
         audio: [{ index: 1, codec: "aac", sampleRate: 48000, channels: 2, bitRate: 192_000, bitDepth: null }],
         coverArt: null,
         subtitleStreams: 0,
+        hasTags: false,
         picture: null,
       },
       targets: [
@@ -185,6 +187,7 @@ function analysis(path: string): FileAnalysis {
       audio: [{ index: 0, codec: "pcm_s16le", sampleRate: 44100, channels: 2, bitRate: 1_411_200, bitDepth: 16 }],
       coverArt: null,
       subtitleStreams: 0,
+      hasTags: true,
       picture: null,
     },
     targets: AUDIO,

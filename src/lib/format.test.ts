@@ -20,6 +20,7 @@ const media = (overrides: Partial<MediaInfo>): MediaInfo => ({
   coverArt: null,
   subtitleStreams: 0,
   picture: null,
+  hasTags: false,
   ...overrides,
 });
 

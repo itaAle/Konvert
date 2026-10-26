@@ -15,9 +15,10 @@ use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 
 use crate::binaries::Binaries;
-use crate::command::build_from_plan;
+use crate::command::{build_from_plan, build_from_plan_with, file_url};
 use crate::error::CoreError;
 use crate::formats;
+use crate::metadata;
 use crate::naming;
 use crate::plan::{ConversionPlan, plan_conversion};
 use crate::probe::MediaInfo;
@@ -85,7 +86,8 @@ pub async fn run_conversion(
         return run_series(bins, workspace, job, &plan, cancel, on_progress, started).await;
     }
     let temp_output = workspace.job_output(job.id, ext);
-    let command = build_from_plan(&plan, &job.input, &temp_output);
+    let cover_comment = prepare_cover_comment(bins, workspace, job, &plan).await;
+    let command = build_from_plan_with(&plan, &job.input, cover_comment.as_deref(), &temp_output);
 
     let result = run_ffmpeg(
         bins,
@@ -94,8 +96,11 @@ pub async fn run_conversion(
         cancel,
         &mut on_progress,
     )
-    .await
-    .and_then(|()| {
+    .await;
+    if let Some(comment) = &cover_comment {
+        let _ = std::fs::remove_file(comment);
+    }
+    let result = result.and_then(|()| {
         // FFmpeg can succeed without writing anything (e.g. no frame there).
         match std::fs::metadata(&temp_output) {
             Ok(m) if m.len() > 0 => Ok(()),
@@ -182,6 +187,58 @@ async fn run_series(
         files,
         elapsed: started.elapsed(),
     })
+}
+
+/// Ogg outputs keep the cover as a picture comment: the picture is copied out
+/// of the input, then written into an `ffmetadata` file for FFmpeg. `None`
+/// when there is nothing to do or the picture cannot be read (the conversion
+/// then goes on without it).
+async fn prepare_cover_comment(
+    bins: &Binaries,
+    workspace: &Workspace,
+    job: &ConversionJob,
+    plan: &ConversionPlan,
+) -> Option<PathBuf> {
+    let spec = formats::spec(plan.target);
+    let index = plan.cover_art_stream.filter(|_| spec.cover_art_tag)?;
+    let cover = job.media.cover_art.as_ref().filter(|c| c.index == index)?;
+    let mime = metadata::cover_mime(&cover.codec)?;
+
+    let picture = workspace.dir().join(format!("job-{}-cover", job.id));
+    let mut cmd = process::engine_command(&bins.ffmpeg);
+    cmd.args(["-hide_banner", "-nostdin", "-loglevel", "error"])
+        .args(["-protocol_whitelist", "file", "-i"])
+        .arg(file_url(&job.input))
+        .args([
+            "-map",
+            &format!("0:{index}"),
+            "-c",
+            "copy",
+            "-frames:v",
+            "1",
+        ])
+        .args(["-f", "image2pipe", "-y"])
+        .arg(file_url(&picture));
+    let extracted = match process::spawn(&mut cmd) {
+        Ok(child) => child
+            .wait_with_output()
+            .await
+            .is_ok_and(|o| o.status.success()),
+        Err(_) => false,
+    };
+    let data = std::fs::read(&picture).ok();
+    let _ = std::fs::remove_file(&picture);
+    let data = data.filter(|d| extracted && !d.is_empty())?;
+
+    let block = metadata::picture_block(
+        mime,
+        cover.width.unwrap_or(0),
+        cover.height.unwrap_or(0),
+        &data,
+    );
+    let comment = workspace.dir().join(format!("job-{}-cover.txt", job.id));
+    std::fs::write(&comment, metadata::ffmetadata_with_picture(&block)).ok()?;
+    Some(comment)
 }
 
 /// File name pattern of a series for FFmpeg's image2 muxer: `%` in the

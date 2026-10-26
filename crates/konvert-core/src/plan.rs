@@ -190,6 +190,8 @@ pub enum ConversionWarning {
     AudioDropped,
     /// The output format cannot store the cover picture.
     CoverArtDropped,
+    /// The output format cannot store tags (title, artist, album...).
+    TagsDropped,
     /// Subtitles are not kept.
     SubtitlesDropped,
     /// Only the first audio track is kept.
@@ -311,7 +313,11 @@ pub fn plan_conversion(
     let cover_art_stream = media
         .cover_art
         .as_ref()
-        .filter(|c| spec.cover_art && media.kind == MediaKind::Audio && c.is_portable())
+        .filter(|c| {
+            (spec.cover_art || spec.cover_art_tag)
+                && media.kind == MediaKind::Audio
+                && c.is_portable()
+        })
         .map(|c| c.index);
 
     let mut plan = ConversionPlan {
@@ -895,6 +901,10 @@ fn collect_warnings(
     {
         warnings.push(W::CoverArtDropped);
     }
+    let spec = formats::spec(plan.target);
+    if media.has_tags && spec.kind == FormatKind::Audio && !spec.tags {
+        warnings.push(W::TagsDropped);
+    }
     if media.subtitle_streams > 0 {
         warnings.push(W::SubtitlesDropped);
     }
@@ -1039,13 +1049,41 @@ mod tests {
         );
         assert_eq!(m4a.cover_art_stream, Some(1));
         assert_eq!(m4a.warnings, [W::LossyReencode]);
-        let ogg = plan(
+        // Ogg keeps it as a picture comment, AIFF as an ID3 picture.
+        for target in [TargetFormat::Ogg, TargetFormat::Opus, TargetFormat::Aiff] {
+            let p = plan(&src, &req(target, QualityPreset::Balanced), "a.mp3");
+            assert_eq!(p.cover_art_stream, Some(1), "{target:?}");
+            assert!(!p.warnings.contains(&W::CoverArtDropped), "{target:?}");
+        }
+        for target in [TargetFormat::Wav, TargetFormat::Mka, TargetFormat::Caf] {
+            let p = plan(&src, &req(target, QualityPreset::Balanced), "a.mp3");
+            assert_eq!(p.cover_art_stream, None, "{target:?}");
+            assert!(p.warnings.contains(&W::CoverArtDropped), "{target:?}");
+        }
+    }
+
+    #[test]
+    fn raw_dolby_and_mp2_files_lose_the_tags() {
+        let mut src = mp3_with_cover();
+        src.has_tags = true;
+        for target in [TargetFormat::Ac3, TargetFormat::Eac3, TargetFormat::Mp2] {
+            let p = plan(&src, &req(target, QualityPreset::Balanced), "a.mp3");
+            assert!(p.warnings.contains(&W::TagsDropped), "{target:?}");
+        }
+        let aac = plan(
             &src,
-            &req(TargetFormat::Ogg, QualityPreset::Balanced),
+            &req(TargetFormat::Aac, QualityPreset::Balanced),
             "a.mp3",
         );
-        assert_eq!(ogg.cover_art_stream, None);
-        assert!(ogg.warnings.contains(&W::CoverArtDropped));
+        assert!(!aac.warnings.contains(&W::TagsDropped));
+        // No tags, nothing to lose.
+        src.has_tags = false;
+        let p = plan(
+            &src,
+            &req(TargetFormat::Ac3, QualityPreset::Balanced),
+            "a.mp3",
+        );
+        assert!(!p.warnings.contains(&W::TagsDropped));
     }
 
     #[test]

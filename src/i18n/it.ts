@@ -120,6 +120,7 @@ export const it = {
     largeFile: "L'APNG conserva ogni pixel di ogni fotogramma: i file possono diventare molto grandi.",
     audioDropped: "Le animazioni non hanno audio: la traccia audio verrà scartata.",
     coverArtDropped: "Questo formato non può contenere la copertina: verrà omessa.",
+    tagsDropped: "Questo formato non può contenere i tag (titolo, artista, album): verranno omessi.",
     subtitlesDropped: "I sottotitoli non verranno conservati.",
     extraAudioTracksDropped: "Verrà conservata solo la prima traccia audio.",
     channelsDownmixed: "Questo formato supporta al massimo due canali: l'audio verrà convertito in stereo.",

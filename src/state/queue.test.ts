@@ -58,6 +58,7 @@ function file(name: string, kind: "audio" | "videoWithAudio" | "image", duration
       video: [],
       coverArt: null,
       subtitleStreams: 0,
+      hasTags: false,
       picture: kind === "image" ? { alpha: false, alphaStream: null, gridGroup: null, exif: false } : null,
     },
     targets,

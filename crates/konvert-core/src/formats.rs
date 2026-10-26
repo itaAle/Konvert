@@ -273,6 +273,10 @@ pub struct FormatSpec {
     pub copy_audio: &'static [&'static str],
     /// The format can embed a cover picture.
     pub cover_art: bool,
+    /// The cover is stored as a picture comment (Ogg), not as an attached picture.
+    pub cover_art_tag: bool,
+    /// The format keeps tags (title, artist, album...).
+    pub tags: bool,
     /// Extra muxer options.
     pub muxer_args: &'static [&'static str],
     /// Picture encoder (picture formats only).
@@ -297,6 +301,8 @@ const SPEC: FormatSpec = FormatSpec {
     copy_video: &[],
     copy_audio: &[],
     cover_art: false,
+    cover_art_tag: false,
+    tags: true,
     muxer_args: &[],
     image_codec: None,
     secondary: false,
@@ -422,6 +428,7 @@ pub static FORMATS: &[FormatSpec] = &[
         copy_video: &[],
         copy_audio: &["vorbis"],
         cover_art: false,
+        cover_art_tag: true,
         muxer_args: &[],
         image_codec: None,
         ..SPEC
@@ -438,6 +445,7 @@ pub static FORMATS: &[FormatSpec] = &[
         copy_video: &[],
         copy_audio: &["opus"],
         cover_art: false,
+        cover_art_tag: true,
         muxer_args: &[],
         image_codec: None,
         ..SPEC
@@ -469,8 +477,9 @@ pub static FORMATS: &[FormatSpec] = &[
         audio_codecs: &[AudioCodec::Pcm],
         copy_video: &[],
         copy_audio: &[],
-        cover_art: false,
-        muxer_args: &[],
+        cover_art: true,
+        // ID3 tags, with the cover picture.
+        muxer_args: &["-write_id3v2", "1"],
         image_codec: None,
         ..SPEC
     },
@@ -482,6 +491,8 @@ pub static FORMATS: &[FormatSpec] = &[
         muxer: "adts",
         audio_codecs: &[AudioCodec::Aac],
         copy_audio: &["aac"],
+        // ID3 tags before the audio.
+        muxer_args: &["-write_id3v2", "1"],
         secondary: true,
         ..SPEC
     },
@@ -493,6 +504,7 @@ pub static FORMATS: &[FormatSpec] = &[
         muxer: "ac3",
         audio_codecs: &[AudioCodec::Ac3],
         copy_audio: &["ac3"],
+        tags: false,
         secondary: true,
         ..SPEC
     },
@@ -504,6 +516,7 @@ pub static FORMATS: &[FormatSpec] = &[
         muxer: "eac3",
         audio_codecs: &[AudioCodec::Eac3],
         copy_audio: &["eac3"],
+        tags: false,
         secondary: true,
         ..SPEC
     },
@@ -515,6 +528,7 @@ pub static FORMATS: &[FormatSpec] = &[
         muxer: "mp2",
         audio_codecs: &[AudioCodec::Mp2],
         copy_audio: &["mp2"],
+        tags: false,
         secondary: true,
         ..SPEC
     },

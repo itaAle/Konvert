@@ -29,4 +29,8 @@ coverArt: CoverArt | null, subtitleStreams: number,
 /**
  * Picture details, for [`MediaKind::Image`] only.
  */
-picture: PictureInfo | null, };
+picture: PictureInfo | null, 
+/**
+ * The file has tags (title, artist, album...).
+ */
+hasTags: boolean, };

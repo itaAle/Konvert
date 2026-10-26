@@ -474,31 +474,78 @@ async fn cover_art_and_tags_are_preserved() {
     );
     let media = probe(&bins, &input).await.unwrap();
     assert_eq!(media.kind, MediaKind::Audio);
-    assert!(media.cover_art.is_some());
+    assert!(media.cover_art.is_some() && media.has_tags);
+    let cover = media.cover_art.as_ref().unwrap();
+    assert_eq!((cover.width, cover.height), (Some(64), Some(64)));
 
-    for target in [TargetFormat::Flac, TargetFormat::M4a, TargetFormat::Mp3] {
-        let (outcome, out) =
-            convert(&bins, &tmp, &input, req(target, QualityPreset::Balanced)).await;
-        assert!(out.cover_art.is_some(), "{target:?} lost the cover");
-        assert_eq!(out.kind, MediaKind::Audio, "{target:?}");
-        let tags = Command::new(&bins.ffprobe)
+    // Tags of the file or, for Ogg and FLAC, of the audio stream.
+    let artist = |path: &Path| {
+        let out = Command::new(&bins.ffprobe)
             .args([
                 "-v",
                 "error",
                 "-show_entries",
-                "format_tags=artist",
+                "format_tags=artist:stream_tags=artist",
                 "-of",
                 "default=nw=1:nk=1",
             ])
-            .arg(&outcome.output)
+            .arg(path)
             .output()
             .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+
+    for target in [
+        TargetFormat::Flac,
+        TargetFormat::M4a,
+        TargetFormat::Mp3,
+        TargetFormat::Alac,
+        TargetFormat::Aiff,
+        TargetFormat::Ogg,
+        TargetFormat::Opus,
+    ] {
+        let (outcome, out) =
+            convert(&bins, &tmp, &input, req(target, QualityPreset::Balanced)).await;
+        let cover = out
+            .cover_art
+            .as_ref()
+            .unwrap_or_else(|| panic!("{target:?} lost the cover"));
         assert_eq!(
-            String::from_utf8_lossy(&tags.stdout).trim(),
-            "Artista è",
+            (cover.width, cover.height),
+            (Some(64), Some(64)),
             "{target:?}"
         );
+        assert_eq!(out.kind, MediaKind::Audio, "{target:?}");
+        assert_eq!(artist(&outcome.output), "Artista è", "{target:?}");
     }
+
+    // Tags only.
+    for target in [
+        TargetFormat::Aac,
+        TargetFormat::Caf,
+        TargetFormat::Mka,
+        TargetFormat::Wav,
+    ] {
+        let (outcome, out) =
+            convert(&bins, &tmp, &input, req(target, QualityPreset::Balanced)).await;
+        assert!(
+            out.cover_art.is_none() && out.video.is_empty(),
+            "{target:?}"
+        );
+        assert_eq!(artist(&outcome.output), "Artista è", "{target:?}");
+    }
+
+    // Raw Dolby Digital has no room for tags: the plan says so.
+    let plan = plan_conversion(
+        &media,
+        &req(TargetFormat::Ac3, QualityPreset::Balanced),
+        &input,
+    )
+    .unwrap();
+    assert!(
+        plan.warnings
+            .contains(&konvert_core::ConversionWarning::TagsDropped)
+    );
 }
 
 #[tokio::test]

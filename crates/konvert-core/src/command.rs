@@ -58,6 +58,17 @@ pub fn build_command(
 
 /// Translates a plan into FFmpeg arguments.
 pub fn build_from_plan(plan: &ConversionPlan, input: &Path, output: &Path) -> FfmpegCommand {
+    build_from_plan_with(plan, input, None, output)
+}
+
+/// Like [`build_from_plan`], with an `ffmetadata` file holding the cover
+/// picture comment of an Ogg output (see [`crate::metadata`]).
+pub fn build_from_plan_with(
+    plan: &ConversionPlan,
+    input: &Path,
+    cover_comment: Option<&Path>,
+    output: &Path,
+) -> FfmpegCommand {
     let spec = formats::spec(plan.target);
     let mut a = Args::default();
 
@@ -79,6 +90,10 @@ pub fn build_from_plan(plan: &ConversionPlan, input: &Path, output: &Path) -> Ff
     }
     a.push(&["-i"]);
     a.push_os(file_url(input));
+    if let Some(comment) = cover_comment {
+        a.push(&["-protocol_whitelist", "file", "-f", "ffmetadata", "-i"]);
+        a.push_os(file_url(comment));
+    }
 
     match &plan.image {
         Some(image) => picture_args(
@@ -87,7 +102,7 @@ pub fn build_from_plan(plan: &ConversionPlan, input: &Path, output: &Path) -> Ff
             plan.video_stream.unwrap_or(0),
             plan.frames.as_ref(),
         ),
-        None => media_args(&mut a, plan, spec),
+        None => media_args(&mut a, plan, spec, cover_comment.is_some()),
     }
 
     // A series of pictures: one file per picture, named from a pattern.
@@ -100,7 +115,9 @@ pub fn build_from_plan(plan: &ConversionPlan, input: &Path, output: &Path) -> Ff
 }
 
 /// Stream selection and codecs of an audio or video conversion.
-fn media_args(a: &mut Args, plan: &ConversionPlan, spec: &FormatSpec) {
+fn media_args(a: &mut Args, plan: &ConversionPlan, spec: &FormatSpec, cover_comment: bool) {
+    // The cover travels as an attached picture, or as a comment (Ogg).
+    let attached_cover = plan.cover_art_stream.filter(|_| spec.cover_art);
     // Stream selection: explicit maps, so subtitles/data/extra tracks are left out.
     match (&plan.video, plan.video_stream) {
         (Some(VideoPlan::Encode(enc)), Some(index)) if enc.codec == VideoCodec::Gif => {
@@ -117,10 +134,14 @@ fn media_args(a: &mut Args, plan: &ConversionPlan, spec: &FormatSpec) {
     if let (Some(_), Some(index)) = (&plan.audio, plan.audio_stream) {
         a.push(&["-map", &format!("0:{index}")]);
     }
-    if let Some(index) = plan.cover_art_stream {
+    if let Some(index) = attached_cover {
         a.push(&["-map", &format!("0:{index}")]);
     }
     a.push(&["-map_metadata", "0"]);
+    if cover_comment {
+        // The second input's global section holds the picture comment.
+        a.push(&["-map_metadata:s:a:0", "1:g"]);
+    }
 
     match &plan.video {
         Some(VideoPlan::Copy { codec }) => {
@@ -141,7 +162,7 @@ fn media_args(a: &mut Args, plan: &ConversionPlan, spec: &FormatSpec) {
     }
 
     // Cover art is only planned for audio outputs, so `v:0` is the picture.
-    if plan.cover_art_stream.is_some() {
+    if attached_cover.is_some() {
         a.push(&["-c:v", "copy", "-disposition:v:0", "attached_pic"]);
     }
 }
@@ -617,9 +638,9 @@ mod tests {
             (TargetFormat::Ogg, &["-map", "0:0", "-map_metadata", "0", "-c:a", "libvorbis", "-q:a", "6"]),
             (TargetFormat::Opus, &["-map", "0:0", "-map_metadata", "0", "-c:a", "libopus", "-b:a", "128k", "-vbr", "on", "-ar", "48000"]),
             (TargetFormat::Wma, &["-map", "0:0", "-map_metadata", "0", "-c:a", "wmav2", "-b:a", "160k"]),
-            (TargetFormat::Aiff, &["-map", "0:0", "-map_metadata", "0", "-c:a", "pcm_s16be"]),
+            (TargetFormat::Aiff, &["-map", "0:0", "-map_metadata", "0", "-c:a", "pcm_s16be", "-write_id3v2", "1"]),
             (TargetFormat::Alac, &["-map", "0:0", "-map_metadata", "0", "-c:a", "alac", "-sample_fmt", "s16p", "-movflags", "+faststart"]),
-            (TargetFormat::Aac, &["-map", "0:0", "-map_metadata", "0", "-c:a", "aac", "-b:a", "192k"]),
+            (TargetFormat::Aac, &["-map", "0:0", "-map_metadata", "0", "-c:a", "aac", "-b:a", "192k", "-write_id3v2", "1"]),
             (TargetFormat::Ac3, &["-map", "0:0", "-map_metadata", "0", "-c:a", "ac3", "-b:a", "384k"]),
             (TargetFormat::Eac3, &["-map", "0:0", "-map_metadata", "0", "-c:a", "eac3", "-b:a", "256k"]),
             (TargetFormat::Mp2, &["-map", "0:0", "-map_metadata", "0", "-c:a", "mp2", "-b:a", "256k"]),
@@ -679,6 +700,21 @@ mod tests {
              "-c:a", "alac", "-sample_fmt", "s32p", "-bits_per_raw_sample", "24",
              "-c:v", "copy", "-disposition:v:0", "attached_pic", "-movflags", "+faststart"]
         );
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn ogg_covers_travel_as_a_comment_file() {
+        let src = flac_with_cover();
+        let plan = plan_conversion(&src, &req(TargetFormat::Opus, QualityPreset::Balanced), Path::new("a.flac")).unwrap();
+        let cmd = build_from_plan_with(&plan, Path::new("a.flac"), Some(Path::new("cover.txt")), Path::new("o.opus"))
+            .args_lossy();
+        let i = cmd.iter().position(|a| a == "file:a.flac").unwrap();
+        assert_eq!(cmd[i + 1..i + 7], ["-protocol_whitelist", "file", "-f", "ffmetadata", "-i", "file:cover.txt"]);
+        // The picture itself is not mapped: Ogg cannot hold it as a stream.
+        assert!(!cmd.contains(&"0:1".to_owned()));
+        assert!(cmd.windows(2).any(|w| w == ["-map_metadata:s:a:0", "1:g"]));
+        assert!(!cmd.contains(&"attached_pic".to_owned()));
     }
 
     #[test]
