@@ -1,5 +1,6 @@
 //! Application state shared by the IPC commands.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -23,6 +24,8 @@ pub struct AppState {
     pub vibrancy: bool,
     /// The user confirmed closing the window while conversions were running.
     pub close_confirmed: AtomicBool,
+    /// Encoders of the bundled FFmpeg, read once (some formats depend on them).
+    pub encoders: tokio::sync::OnceCell<HashSet<String>>,
 }
 
 impl AppState {
@@ -53,6 +56,7 @@ impl AppState {
             log,
             vibrancy,
             close_confirmed: AtomicBool::new(false),
+            encoders: tokio::sync::OnceCell::new(),
         })
     }
 

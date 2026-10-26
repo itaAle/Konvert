@@ -311,6 +311,13 @@
         ],
         "name": "Windows icon",
         "mimeType": "image/vnd.microsoft.icon"
+      },
+      {
+        "ext": [
+          "jxl"
+        ],
+        "name": "JPEG XL",
+        "mimeType": "image/jxl"
       }
     ],
     "linux": {

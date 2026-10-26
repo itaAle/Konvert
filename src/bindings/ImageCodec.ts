@@ -3,4 +3,4 @@
 /**
  * Picture encoders Konvert uses.
  */
-export type ImageCodec = "jpeg" | "png" | "webp" | "avif" | "bmp" | "tiff" | "gif" | "ico";
+export type ImageCodec = "jpeg" | "png" | "webp" | "avif" | "bmp" | "tiff" | "gif" | "ico" | "jxl";

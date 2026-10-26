@@ -57,3 +57,19 @@ pub async fn engine_version(bins: &Binaries) -> Result<String, CoreError> {
         .filter(|l| output.status.success() && !l.is_empty())
         .ok_or(CoreError::EngineMissing)
 }
+
+/// Encoders of the bundled FFmpeg (`ffmpeg -encoders`): some formats are only
+/// offered where the engine has their encoder (see [`formats::supported_targets`]).
+pub async fn engine_encoders(
+    bins: &Binaries,
+) -> Result<std::collections::HashSet<String>, CoreError> {
+    let mut cmd = process::engine_command(&bins.ffmpeg);
+    cmd.args(["-hide_banner", "-encoders"]);
+    let output = process::spawn(&mut cmd)?.wait_with_output().await?;
+    if !output.status.success() {
+        return Err(CoreError::EngineMissing);
+    }
+    Ok(formats::parse_encoders(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
+}

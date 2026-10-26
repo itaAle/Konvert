@@ -464,6 +464,10 @@ fn plan_still(
         // Nothing to tune: BMP is uncompressed, TIFF uses Deflate.
         (ImageCodec::Bmp | ImageCodec::Tiff, _) => ImageQuality::Lossless { effort: 0 },
         (ImageCodec::Gif, _) => ImageQuality::Palette,
+        // From a lossless source, the best JPEG XL keeps every pixel.
+        (ImageCodec::Jxl, None) if preset == QualityPreset::Max && source_lossless => {
+            ImageQuality::Lossless { effort: 7 }
+        }
         // From a lossless source, the best WebP keeps every pixel.
         (ImageCodec::Webp, None) if preset == QualityPreset::Max && source_lossless => {
             ImageQuality::Lossless { effort: 4 }
@@ -478,6 +482,10 @@ fn plan_still(
         // Same scale as libavif's quality (60 is its default).
         (ImageCodec::Avif, None) => ImageQuality::Lossy {
             quality: pick(preset, 75, 60, 45),
+        },
+        // Same scale as cjxl's quality (90 is about distance 1, "visually lossless").
+        (ImageCodec::Jxl, None) => ImageQuality::Lossy {
+            quality: pick(preset, 95, 90, 75),
         },
     };
 

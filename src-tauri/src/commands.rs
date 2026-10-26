@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 
 use konvert_core::{
     ConversionPlan, ConversionRequest, CoreError, ErrorPayload, MediaInfo, TargetOption,
-    available_targets, plan_conversion as plan,
+    available_targets, formats::supported_targets, plan_conversion as plan,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State, WebviewWindow};
@@ -35,6 +35,20 @@ const MEDIA_EXTENSIONS: &[&str] = &[
     "gif", "apng", "jpg", "jpeg", "jpe", "jfif", "png", "webp", "avif", "heic", "heif", "hif",
     "bmp", "tif", "tiff", "ico",
 ];
+
+/// Extensions FFmpeg reads only when built with libjxl: the Windows and Linux
+/// builds, not the macOS one (offered there neither by the picker nor by "Open With").
+const LIBJXL_EXTENSIONS: &[&str] = &["jxl"];
+
+/// Every extension the file picker offers on this platform.
+fn picker_extensions() -> Vec<&'static str> {
+    let libjxl = if cfg!(target_os = "macos") {
+        &[][..]
+    } else {
+        LIBJXL_EXTENSIONS
+    };
+    MEDIA_EXTENSIONS.iter().chain(libjxl).copied().collect()
+}
 
 fn payload(e: CoreError) -> ErrorPayload {
     e.payload()
@@ -187,7 +201,16 @@ pub async fn analyze_file(
 ) -> Result<FileAnalysis, ErrorPayload> {
     let bins = state.binaries().map_err(payload)?;
     let media = konvert_core::probe(bins, &path).await.map_err(payload)?;
-    let targets = available_targets(&media, &path);
+    // If the engine cannot be asked, formats needing an optional encoder are left out.
+    let encoders = state
+        .encoders
+        .get_or_init(|| async {
+            konvert_core::engine_encoders(bins)
+                .await
+                .unwrap_or_default()
+        })
+        .await;
+    let targets = supported_targets(available_targets(&media, &path), encoders);
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -307,7 +330,7 @@ pub async fn pick_files(
     app.dialog()
         .file()
         .set_title(title)
-        .add_filter(filter_name, MEDIA_EXTENSIONS)
+        .add_filter(filter_name, &picker_extensions())
         .pick_files(move |picked| {
             let _ = tx.send(picked);
         });
@@ -324,26 +347,39 @@ pub async fn pick_files(
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::MEDIA_EXTENSIONS;
+    use super::{LIBJXL_EXTENSIONS, MEDIA_EXTENSIONS};
+
+    /// Extensions a platform registers: libjxl is not in the macOS engine.
+    fn expected(platform: &str) -> BTreeSet<String> {
+        let libjxl = if platform == "macos" {
+            &[][..]
+        } else {
+            LIBJXL_EXTENSIONS
+        };
+        MEDIA_EXTENSIONS
+            .iter()
+            .chain(libjxl)
+            .map(|e| e.to_string())
+            .collect()
+    }
 
     #[test]
     fn open_with_covers_every_file_picker_extension() {
         let hooks = include_str!("../windows/installer-hooks.nsh");
-        let registered: BTreeSet<&str> = hooks
+        let registered: BTreeSet<String> = hooks
             .lines()
             .filter_map(|l| {
                 l.trim()
                     .strip_prefix("!insertmacro ${OP} \"")?
                     .strip_suffix('"')
             })
+            .map(str::to_owned)
             .collect();
-        let picker: BTreeSet<&str> = MEDIA_EXTENSIONS.iter().copied().collect();
-        assert_eq!(registered, picker);
+        assert_eq!(registered, expected("windows"));
     }
 
     #[test]
     fn macos_and_linux_open_with_cover_every_file_picker_extension() {
-        let picker: BTreeSet<String> = MEDIA_EXTENSIONS.iter().map(|e| e.to_string()).collect();
         for (platform, conf) in [
             ("macos", include_str!("../tauri.macos.conf.json")),
             ("linux", include_str!("../tauri.linux.conf.json")),
@@ -355,7 +391,7 @@ mod tests {
                 .flat_map(|a| a["ext"].as_array().unwrap())
                 .map(|e| e.as_str().unwrap().to_owned())
                 .collect();
-            assert_eq!(registered, picker, "{platform}");
+            assert_eq!(registered, expected(platform), "{platform}");
             for a in associations {
                 match platform {
                     // Listed in "Open With", never the default app.

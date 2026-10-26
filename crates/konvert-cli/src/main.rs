@@ -28,7 +28,8 @@ use std::process::ExitCode;
 use konvert_core::{
     AdvancedOptions, Binaries, ChannelLayout, ConversionJob, ConversionRequest, CoreError,
     FrameMode, FrameOptions, QualityPreset, TargetFormat, Workspace, available_targets,
-    engine_version, plan_conversion, probe, run_conversion, workspace,
+    engine_encoders, engine_version, formats::supported_targets, plan_conversion, probe,
+    run_conversion, workspace,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -207,7 +208,11 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
         Action::Probe(input) => print_json(&probe(&bins, &input).await?),
         Action::Targets(input) => {
             let media = probe(&bins, &input).await?;
-            print_json(&available_targets(&media, &input));
+            let encoders = engine_encoders(&bins).await.unwrap_or_default();
+            print_json(&supported_targets(
+                available_targets(&media, &input),
+                &encoders,
+            ));
         }
         Action::Plan(input, request) => {
             let media = probe(&bins, &input).await?;

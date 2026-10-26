@@ -115,6 +115,7 @@ const IMAGES: TargetOption[] = [
   option("tiff", "TIFF", "image", true, true),
   option("stillGif", "GIF", "image", false, true),
   option("ico", "ICO", "image", true, true),
+  option("jxl", "JPEG XL", "image", false, true),
 ];
 
 const FRAMES: TargetOption[] = [

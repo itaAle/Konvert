@@ -781,6 +781,7 @@ fn picture_codec(target: TargetFormat) -> &'static str {
         TargetFormat::Bmp => "bmp",
         TargetFormat::Tiff => "tiff",
         TargetFormat::StillGif => "gif",
+        TargetFormat::Jxl => "jpegxl",
         other => panic!("{other:?} is not a picture format"),
     }
 }
@@ -803,6 +804,7 @@ fn expected_size(target: TargetFormat, (width, height): (u32, u32)) -> (Option<u
 #[tokio::test]
 async fn every_picture_format_from_every_picture_input() {
     let bins = engine();
+    let encoders = konvert_core::engine_encoders(&bins).await.unwrap();
     let tmp = TempDir::new("pictures");
     let inputs = [
         (sample_jpeg(&bins, &tmp, "Foto è.jpg", None), (64, 48)),
@@ -866,7 +868,9 @@ async fn every_picture_format_from_every_picture_input() {
         let media = probe(&bins, input).await.unwrap();
         assert_eq!(media.kind, MediaKind::Image, "{input:?}");
         assert_eq!(size_of(&media), (Some(*width), Some(*height)), "{input:?}");
-        let targets = konvert_core::available_targets(&media, input);
+        // Only what this engine can write (no JPEG XL without libjxl).
+        let targets =
+            formats::supported_targets(konvert_core::available_targets(&media, input), &encoders);
         assert!(targets.len() >= 3, "{input:?}");
         for target in targets {
             let request = req(target.format, QualityPreset::Balanced);
@@ -893,6 +897,59 @@ async fn every_picture_format_from_every_picture_input() {
             std::fs::remove_file(&outcome.output).unwrap();
         }
     }
+}
+
+#[tokio::test]
+async fn jpeg_xl_where_the_engine_has_libjxl() {
+    let bins = engine();
+    if !konvert_core::engine_encoders(&bins)
+        .await
+        .unwrap()
+        .contains("libjxl")
+    {
+        eprintln!("skipped: this FFmpeg build has no libjxl (macOS)");
+        return;
+    }
+    let tmp = TempDir::new("jxl");
+    let input = sample_transparent_png(&bins, &tmp);
+    // Lossless from a lossless source: every pixel, transparency included.
+    let (outcome, jxl) = convert(
+        &bins,
+        &tmp,
+        &input,
+        req(TargetFormat::Jxl, QualityPreset::Max),
+    )
+    .await;
+    assert_eq!(jxl.kind, MediaKind::Image);
+    assert_eq!(jxl.primary_video().unwrap().codec, "jpegxl");
+    assert_eq!(size_of(&jxl), (Some(64), Some(48)));
+    assert_eq!(
+        pixel(&bins, &outcome.output, 5, 5),
+        pixel(&bins, &input, 5, 5)
+    );
+    assert_eq!(
+        pixel(&bins, &outcome.output, 50, 5),
+        pixel(&bins, &input, 50, 5)
+    );
+    // And back: a JPEG XL file is a picture like any other.
+    let (_, png) = convert(
+        &bins,
+        &tmp,
+        &outcome.output,
+        req(TargetFormat::Png, QualityPreset::Max),
+    )
+    .await;
+    assert_eq!(size_of(&png), (Some(64), Some(48)));
+    // Lossy from a photo.
+    let photo = sample_jpeg(&bins, &tmp, "Foto.jpg", None);
+    let (small, _) = convert(
+        &bins,
+        &tmp,
+        &photo,
+        req(TargetFormat::Jxl, QualityPreset::Small),
+    )
+    .await;
+    assert!(small.size_bytes > 0);
 }
 
 #[tokio::test]

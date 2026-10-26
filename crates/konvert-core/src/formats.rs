@@ -15,6 +15,7 @@
 //! identifier of a format is its serialized [`TargetFormat`] name, and the
 //! same-format detection also looks at the kind of input and its codec.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -70,6 +71,8 @@ pub enum TargetFormat {
     StillGif,
     /// Windows icon (16, 32, 48 and 256 px).
     Ico,
+    /// JPEG XL (only with an engine built with libjxl).
+    Jxl,
 }
 
 impl TargetFormat {
@@ -189,6 +192,8 @@ pub enum ImageCodec {
     Gif,
     /// Windows icon: PNG pictures of several sizes in one file
     Ico,
+    /// JPEG XL (libjxl), lossy or lossless
+    Jxl,
 }
 
 impl ImageCodec {
@@ -210,7 +215,7 @@ impl ImageCodec {
         match self {
             ImageCodec::Gif => Some(65_535),
             ImageCodec::Ico => Some(256),
-            ImageCodec::Bmp | ImageCodec::Tiff => None,
+            ImageCodec::Bmp | ImageCodec::Tiff | ImageCodec::Jxl => None,
             ImageCodec::Jpeg => Some(65_535),
             ImageCodec::Webp => Some(16_383),
             ImageCodec::Avif => Some(65_536),
@@ -286,6 +291,9 @@ pub struct FormatSpec {
     /// For formats sharing an extension: source codecs (FFmpeg names) that
     /// identify this format. Empty: any codec.
     pub detect_codecs: &'static [&'static str],
+    /// FFmpeg encoder that is not in every engine build (the format is only
+    /// offered where the engine has it).
+    pub requires_encoder: Option<&'static str>,
 }
 
 /// Fields most formats leave empty (`..SPEC` in the catalog).
@@ -307,6 +315,7 @@ const SPEC: FormatSpec = FormatSpec {
     image_codec: None,
     secondary: false,
     detect_codecs: &[],
+    requires_encoder: None,
 };
 
 impl FormatSpec {
@@ -887,6 +896,18 @@ pub static FORMATS: &[FormatSpec] = &[
         secondary: true,
         ..SPEC
     },
+    FormatSpec {
+        format: TargetFormat::Jxl,
+        label: "JPEG XL",
+        extension: "jxl",
+        input_extensions: &["jxl"],
+        muxer: "image2pipe",
+        kind: FormatKind::Image,
+        image_codec: Some(ImageCodec::Jxl),
+        secondary: true,
+        requires_encoder: Some("libjxl"),
+        ..SPEC
+    },
 ];
 
 /// Catalog entry of a format.
@@ -939,6 +960,7 @@ const IMAGE_TARGETS: &[TargetFormat] = &[
     TargetFormat::Tiff,
     TargetFormat::StillGif,
     TargetFormat::Ico,
+    TargetFormat::Jxl,
 ];
 
 /// Pictures taken from a video (one frame or a series).
@@ -1068,6 +1090,32 @@ pub fn source_format(media: &MediaInfo, input: &Path) -> Option<TargetFormat> {
         .find(|s| s.detect_codecs.contains(&codec))
         .or_else(|| candidates.iter().find(|s| s.detect_codecs.is_empty()))
         .map(|s| s.format)
+}
+
+/// Encoder names listed by `ffmpeg -encoders` (the table after the `------` line).
+pub fn parse_encoders(text: &str) -> HashSet<String> {
+    text.lines()
+        .skip_while(|l| !l.trim_start().starts_with("------"))
+        .skip(1)
+        .filter_map(|l| l.split_whitespace().nth(1))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Keeps the formats this engine can write: some encoders (libjxl) are not in
+/// every platform's FFmpeg build.
+pub fn supported_targets(
+    targets: Vec<TargetOption>,
+    encoders: &HashSet<String>,
+) -> Vec<TargetOption> {
+    targets
+        .into_iter()
+        .filter(|t| {
+            spec(t.format)
+                .requires_encoder
+                .is_none_or(|e| encoders.contains(e))
+        })
+        .collect()
 }
 
 /// Whether `format` is proposed for this input.
@@ -1218,6 +1266,7 @@ mod tests {
         TargetFormat::Tiff,
         TargetFormat::StillGif,
         TargetFormat::Ico,
+        TargetFormat::Jxl,
     ];
 
     fn media(json: &str) -> MediaInfo {
@@ -1320,6 +1369,7 @@ mod tests {
                 TargetFormat::Tiff,
                 TargetFormat::StillGif,
                 TargetFormat::Ico,
+                TargetFormat::Jxl,
             ]
         );
         // JPG → JPG is offered (to make the file lighter), flagged as the same format.
@@ -1340,6 +1390,24 @@ mod tests {
             Path::new("a.png"),
             TargetFormat::Mp4
         ));
+    }
+
+    #[test]
+    fn formats_need_the_encoders_of_this_engine() {
+        let listing = "Encoders:\n V..... = Video\n ------\n V....D libjxl               libjxl JPEG XL (codec jpegxl)\n A....D aac                  AAC (Advanced Audio Coding)\n";
+        let encoders = parse_encoders(listing);
+        assert_eq!(
+            encoders,
+            HashSet::from(["libjxl".to_owned(), "aac".to_owned()])
+        );
+        let photo = picture("mjpeg", "image2");
+        let all = available_targets(&photo, Path::new("a.jpg"));
+        assert!(formats(&all).contains(&TargetFormat::Jxl));
+        // An engine without libjxl (the macOS build) does not offer JPEG XL.
+        let without = supported_targets(all.clone(), &HashSet::from(["aac".to_owned()]));
+        assert!(!formats(&without).contains(&TargetFormat::Jxl));
+        assert_eq!(without.len(), all.len() - 1);
+        assert_eq!(supported_targets(all.clone(), &encoders), all);
     }
 
     #[test]

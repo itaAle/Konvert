@@ -187,6 +187,14 @@ fn estimate_picture(media: &MediaInfo, image: &ImagePlan) -> Option<SizeEstimate
             }
         }
         (_, ImageQuality::Palette) => 6.0,
+        (ImageCodec::Jxl, ImageQuality::Lossless { .. }) => {
+            if image.alpha {
+                13.0
+            } else {
+                10.0
+            }
+        }
+        (ImageCodec::Jxl, ImageQuality::Lossy { quality }) => jpeg_bits_per_pixel(quality) * 0.6,
         (ImageCodec::Png, _) => {
             if image.alpha {
                 16.0

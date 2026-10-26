@@ -73,6 +73,7 @@
   !insertmacro ${OP} "tif"
   !insertmacro ${OP} "tiff"
   !insertmacro ${OP} "ico"
+  !insertmacro ${OP} "jxl"
 !macroend
 
 !macro KONVERT_REGISTER_EXTENSION EXT

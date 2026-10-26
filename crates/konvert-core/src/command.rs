@@ -315,6 +315,27 @@ fn picture_args(a: &mut Args, image: &ImagePlan, index: u32, frames: Option<&Fra
             ]);
         }
         (ImageCodec::Gif, _) => a.push(&["-c:v", "gif"]),
+        (ImageCodec::Jxl, quality) => {
+            let distance = match quality {
+                ImageQuality::Lossy { quality } => jxl_distance(quality),
+                _ => 0.0,
+            };
+            let effort = match quality {
+                ImageQuality::Lossless { effort } => effort,
+                _ => 7,
+            };
+            let pix_fmt = if image.alpha { "rgba" } else { "rgb24" };
+            a.push(&[
+                "-c:v",
+                "libjxl",
+                "-distance",
+                &format_number(distance),
+                "-effort",
+                &effort.to_string(),
+                "-pix_fmt",
+                pix_fmt,
+            ]);
+        }
         (codec, quality) => unreachable!("invalid plan: {codec:?} with {quality:?}"),
     }
 }
@@ -346,6 +367,21 @@ fn icon_args(a: &mut Args, image: &ImagePlan, inputs: &str, mut steps: Vec<Strin
 fn jpeg_qscale(quality: u8) -> u8 {
     let steps = (100 - quality.min(100)) as f64 / 5.0;
     (steps.round() as u8 + 1).clamp(2, 31)
+}
+
+/// JPEG XL distance (0 = lossless, 1 = visually lossless … 25) for a quality
+/// from 1 to 100, with libjxl's own mapping.
+fn jxl_distance(quality: u8) -> f64 {
+    let q = quality.min(100) as f64;
+    // 100 means mathematically lossless.
+    let distance = if q >= 100.0 {
+        0.0
+    } else if q >= 30.0 {
+        0.1 + (100.0 - q) * 0.09
+    } else {
+        53.0 / 3000.0 * q * q - 23.0 / 20.0 * q + 25.0
+    };
+    (distance * 100.0).round() / 100.0
 }
 
 /// AV1 constant quality (0 = best … 63) for a quality from 1 to 100, with the
@@ -1017,6 +1053,18 @@ mod tests {
             .unwrap()
             .args_lossy();
         assert!(!cmd.contains(&"-ss".to_owned()));
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn jpeg_xl_uses_a_distance() {
+        let (args, muxer) = picture_body(&jpeg(), &req(TargetFormat::Jxl, QualityPreset::Balanced), "a.jpg");
+        assert_eq!(muxer, "image2pipe");
+        assert!(args.ends_with(&strings(&["-c:v", "libjxl", "-distance", "1", "-effort", "7", "-pix_fmt", "rgb24"])));
+        // A lossless source at the best quality stays lossless, with transparency.
+        let (args, _) = picture_body(&transparent_png(), &req(TargetFormat::Jxl, QualityPreset::Max), "a.png");
+        assert!(args.ends_with(&strings(&["-c:v", "libjxl", "-distance", "0", "-effort", "7", "-pix_fmt", "rgba"])));
+        assert_eq!([100, 95, 90, 75, 30, 1].map(jxl_distance), [0.0, 0.55, 1.0, 2.35, 6.4, 23.87]);
     }
 
     #[test]
