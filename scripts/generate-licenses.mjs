@@ -158,6 +158,8 @@ Corresponding source code
     - FFmpeg at the exact commit: ${ffmpeg.source.ffmpegCommit}
     - Build recipe pinning every library version and the configure flags:
       ${ffmpeg.source.buildRecipe}
+    - Copy of the binaries and of both source archives in the Konvert
+      repository: ${ffmpeg.source.mirror}
     - The archive and its SHA-256 are pinned in scripts/ffmpeg-manifest.json
       of the Konvert repository (https://github.com/itaAle/Konvert).
     On request, the maintainers will provide a copy of the corresponding

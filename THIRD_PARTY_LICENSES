@@ -42,6 +42,8 @@ Corresponding source code
     - FFmpeg at the exact commit: https://github.com/FFmpeg/FFmpeg/commit/6882969ce9
     - Build recipe pinning every library version and the configure flags:
       https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-10-25-13-00
+    - Copy of the binaries and of both source archives in the Konvert
+      repository: https://github.com/itaAle/Konvert/releases/tag/ffmpeg-n9.0.2-36
     - The archive and its SHA-256 are pinned in scripts/ffmpeg-manifest.json
       of the Konvert repository (https://github.com/itaAle/Konvert).
     On request, the maintainers will provide a copy of the corresponding
