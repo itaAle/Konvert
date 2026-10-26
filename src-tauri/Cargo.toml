@@ -26,6 +26,9 @@ tauri = { version = "~2.11", features = [] }  # keep in sync with @tauri-apps/ap
 # the frontend is granted no permission for these plugins.
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+# "Open with" while Konvert is already running: the files go to the open window
+# (local named pipe/window message, no network).
+tauri-plugin-single-instance = "2"
 konvert-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -36,3 +39,5 @@ ts-rs = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 # Mica backdrop on Windows 11 (same version Tauri already depends on).
 window-vibrancy = "0.6"
+# Native message box when the window cannot be created (e.g. WebView2 missing).
+windows-sys = { workspace = true, features = ["Win32_UI_WindowsAndMessaging"] }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-take-launch-files"
+description = "Enables the take_launch_files command without any pre-configured scope."
+commands.allow = ["take_launch_files"]
+
+[[permission]]
+identifier = "deny-take-launch-files"
+description = "Denies the take_launch_files command without any pre-configured scope."
+commands.deny = ["take_launch_files"]

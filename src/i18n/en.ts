@@ -173,6 +173,7 @@ export const en: Messages = {
     updates:
       "Updates are manual: download the new installer from the releases page and install it over this version. Your preferences are kept.",
     releases: "Releases page",
+    licenses: "Third-party licenses",
     license: "Free software under the MIT license. Includes FFmpeg (LGPL 3.0 or later).",
   },
   errors: {

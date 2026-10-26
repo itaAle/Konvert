@@ -21,6 +21,8 @@ const COMMANDS: &[&str] = &[
     "open_output",
     "reveal_output",
     "pick_files",
+    "take_launch_files",
+    "open_licenses",
 ];
 
 fn main() {

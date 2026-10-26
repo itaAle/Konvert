@@ -176,6 +176,7 @@ export const it = {
     updates:
       "Gli aggiornamenti sono manuali: scarica il nuovo installer dalla pagina dei rilasci e installalo sopra questa versione. Le preferenze vengono mantenute.",
     releases: "Pagina dei rilasci",
+    licenses: "Licenze di terze parti",
     license: "Software libero con licenza MIT. Include FFmpeg (LGPL 3.0 o successiva).",
   },
   errors: {

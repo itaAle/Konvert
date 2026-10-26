@@ -7,6 +7,7 @@
 mod commands;
 mod debug_log;
 mod jobs;
+mod launch;
 mod prefs;
 mod state;
 
@@ -22,7 +23,19 @@ const CLOSE_REQUESTED_EVENT: &str = "close-requested";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
+        // Must be the first plugin: a second launch ("Open with" while Konvert
+        // is running) hands its files to this instance and exits.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            let files = launch::files_from_args(argv.into_iter().map(Into::into), cwd.as_ref());
+            if !files.is_empty() {
+                let _ = app.emit(launch::OPEN_FILES_EVENT, files);
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         // Used from Rust only (no frontend permissions): native pickers and
         // "open file / show in folder / releases page".
         .plugin(tauri_plugin_dialog::init())
@@ -66,16 +79,21 @@ pub fn run() {
             commands::open_output,
             commands::reveal_output,
             commands::pick_files,
+            commands::take_launch_files,
+            commands::open_licenses,
         ])
-        .build(tauri::generate_context!())
-        .expect("error while building Konvert")
-        .run(|app, event| {
-            if let RunEvent::Exit = event
-                && let Some(state) = app.try_state::<AppState>()
-            {
-                state.shutdown();
-            }
-        });
+        .build(tauri::generate_context!());
+
+    // Without a window (e.g. WebView2 missing) explain the problem instead of
+    // exiting silently.
+    let app = app.unwrap_or_else(|e| launch::fatal_startup_error(&e.to_string()));
+    app.run(|app, event| {
+        if let RunEvent::Exit = event
+            && let Some(state) = app.try_state::<AppState>()
+        {
+            state.shutdown();
+        }
+    });
 }
 
 /// Window theme (title bar and Mica tint). The web content follows the same

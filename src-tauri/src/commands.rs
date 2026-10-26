@@ -274,6 +274,25 @@ pub fn reveal_output(
     app.opener().reveal_item_in_dir(path).map_err(io_payload)
 }
 
+/// Files Konvert was launched with ("Open with"); returned once.
+#[tauri::command]
+pub fn take_launch_files(state: State<'_, AppState>) -> Vec<PathBuf> {
+    std::mem::take(&mut *state.launch_files.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// Opens the bundled third-party licenses with the default text editor.
+#[tauri::command]
+pub fn open_licenses(app: AppHandle) -> Result<(), ErrorPayload> {
+    let path = app
+        .path()
+        .resource_dir()
+        .map_err(io_payload)?
+        .join("THIRD_PARTY_LICENSES.txt");
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(io_payload)
+}
+
 /// Native "open files" dialog. Returns `None` when cancelled.
 #[tauri::command]
 pub async fn pick_files(

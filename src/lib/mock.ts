@@ -216,4 +216,11 @@ export const mockBackend: Backend = {
   async onCloseRequested() {
     return () => {};
   },
+  async takeLaunchFiles() {
+    return [];
+  },
+  async openLicenses() {},
+  async onOpenFiles() {
+    return () => {};
+  },
 };

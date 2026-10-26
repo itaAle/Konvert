@@ -125,7 +125,13 @@ export function useQueue() {
         drop: (paths) => dispatch({ type: "add", paths }),
       }),
       backend.onCloseRequested(() => setCloseRequested(true)),
+      backend.onOpenFiles((paths) => dispatch({ type: "add", paths })),
     ];
+    // Files passed by "Open with Konvert" when the app was launched.
+    backend.takeLaunchFiles().then(
+      (paths) => paths.length > 0 && dispatch({ type: "add", paths }),
+      () => {},
+    );
     return () => {
       unlisten.forEach((p) => p.then((stop) => stop()));
     };

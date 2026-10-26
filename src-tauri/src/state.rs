@@ -1,7 +1,8 @@
 //! Application state shared by the IPC commands.
 
-use std::sync::Arc;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use konvert_core::{Binaries, CoreError, Workspace, workspace};
 use tauri::{AppHandle, Manager};
@@ -23,6 +24,8 @@ pub struct AppState {
     pub vibrancy: bool,
     /// The user confirmed closing the window while conversions were running.
     pub close_confirmed: AtomicBool,
+    /// Files passed on the command line, handed to the UI once.
+    pub launch_files: Mutex<Vec<PathBuf>>,
 }
 
 impl AppState {
@@ -53,6 +56,10 @@ impl AppState {
             log,
             vibrancy,
             close_confirmed: AtomicBool::new(false),
+            launch_files: Mutex::new(crate::launch::files_from_args(
+                std::env::args_os(),
+                &std::env::current_dir().unwrap_or_default(),
+            )),
         })
     }
 

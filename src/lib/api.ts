@@ -39,6 +39,11 @@ export interface Backend {
   openOutput(jobId: number): Promise<void>;
   revealOutput(jobId: number): Promise<void>;
   pickFiles(title: string, filterName: string): Promise<string[] | null>;
+  /** Files Konvert was launched with ("Open with"); returned only once. */
+  takeLaunchFiles(): Promise<string[]>;
+  openLicenses(): Promise<void>;
+  /** Files opened with Konvert while it is already running. */
+  onOpenFiles(handler: (paths: string[]) => void): Promise<() => void>;
   onJobUpdate(handler: (event: JobEvent) => void): Promise<() => void>;
   onFileDrop(handlers: DropHandlers): Promise<() => void>;
   /** The window close button was pressed while conversions are running. */
@@ -81,6 +86,9 @@ const tauriBackend: Backend = {
   openOutput: (jobId) => call("open_output", { jobId }),
   revealOutput: (jobId) => call("reveal_output", { jobId }),
   pickFiles: (title, filterName) => call("pick_files", { title, filterName }),
+  takeLaunchFiles: () => call("take_launch_files"),
+  openLicenses: () => call("open_licenses"),
+  onOpenFiles: (handler) => listen<string[]>("open-files", (e) => handler(e.payload)),
   onJobUpdate: (handler) => listen<JobEvent>("job-update", (e) => handler(e.payload)),
   onFileDrop: (handlers) =>
     getCurrentWebview().onDragDropEvent(({ payload }) => {

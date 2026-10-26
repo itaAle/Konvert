@@ -136,7 +136,12 @@ function About() {
       >
         {t("about.releases")}
       </Button>
-      <p className="text-[11px] text-label-tertiary">{t("about.license")}</p>
+      <div className="flex flex-col items-center gap-1">
+        <p className="text-[11px] text-label-tertiary">{t("about.license")}</p>
+        <Button variant="plain" size="sm" onClick={() => void backend.openLicenses().catch(() => {})}>
+          {t("about.licenses")}
+        </Button>
+      </div>
     </div>
   );
 }
