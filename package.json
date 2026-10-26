@@ -2,7 +2,7 @@
   "name": "konvert",
   "private": true,
   "version": "0.1.0",
-  "description": "Audio and video converter that works entirely on your computer",
+  "description": "Audio, video and image converter that works entirely on your computer",
   "license": "MIT",
   "type": "module",
   "scripts": {

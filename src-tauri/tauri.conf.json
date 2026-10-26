@@ -69,8 +69,8 @@
     "publisher": "Konvert contributors",
     "copyright": "Copyright (c) 2026 Konvert contributors. MIT License.",
     "category": "Utility",
-    "shortDescription": "Convertitore audio e video",
-    "longDescription": "Konvert converte file audio e video interamente sul tuo computer. Nessun dato lascia il dispositivo.",
+    "shortDescription": "Convertitore audio, video e immagini",
+    "longDescription": "Konvert converte file audio, video e immagini interamente sul tuo computer. Nessun dato lascia il dispositivo.",
     "resources": {
       "binaries/ffmpeg/*": "ffmpeg/",
       "../LICENSE": "LICENSE.txt",

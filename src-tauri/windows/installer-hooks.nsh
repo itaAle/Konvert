@@ -51,6 +51,19 @@
   !insertmacro ${OP} "ogv"
   !insertmacro ${OP} "vob"
   !insertmacro ${OP} "gif"
+  !insertmacro ${OP} "jpg"
+  !insertmacro ${OP} "jpeg"
+  !insertmacro ${OP} "jpe"
+  !insertmacro ${OP} "jfif"
+  !insertmacro ${OP} "png"
+  !insertmacro ${OP} "webp"
+  !insertmacro ${OP} "avif"
+  !insertmacro ${OP} "heic"
+  !insertmacro ${OP} "heif"
+  !insertmacro ${OP} "hif"
+  !insertmacro ${OP} "bmp"
+  !insertmacro ${OP} "tif"
+  !insertmacro ${OP} "tiff"
 !macroend
 
 !macro KONVERT_REGISTER_EXTENSION EXT

@@ -175,8 +175,19 @@ impl JobQueue {
                 Some(AudioPlan::Encode(e)) => format!("encode {:?} {:?}", e.codec, e.rate),
                 None => "none".into(),
             };
+            let image = match &plan.image {
+                Some(i) => format!(
+                    "encode {:?} {:?} {}x{}{}",
+                    i.codec,
+                    i.quality,
+                    i.width.unwrap_or(0),
+                    i.height.unwrap_or(0),
+                    if i.flatten { " on white" } else { "" }
+                ),
+                None => "none".into(),
+            };
             line.push_str(&format!(
-                "; video {video}; audio {audio}; warnings {:?}",
+                "; video {video}; audio {audio}; picture {image}; warnings {:?}",
                 plan.warnings
             ));
         }

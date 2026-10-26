@@ -1,6 +1,6 @@
 [package]
 name = "konvert"
-description = "Konvert: audio and video converter that works entirely on your computer"
+description = "Konvert: audio, video and image converter that works entirely on your computer"
 authors = ["Konvert contributors"]
 version.workspace = true
 edition.workspace = true

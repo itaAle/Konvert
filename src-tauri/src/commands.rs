@@ -30,7 +30,8 @@ pub const RELEASES_URL: &str = "https://github.com/itaAle/Konvert/releases";
 const MEDIA_EXTENSIONS: &[&str] = &[
     "mp3", "m4a", "m4b", "aac", "wav", "wave", "flac", "ogg", "oga", "opus", "wma", "aif", "aiff",
     "aifc", "alac", "ape", "wv", "mka", "ac3", "mp4", "m4v", "mkv", "mov", "qt", "webm", "avi",
-    "wmv", "flv", "mpg", "mpeg", "ts", "m2ts", "mts", "3gp", "ogv", "vob", "gif",
+    "wmv", "flv", "mpg", "mpeg", "ts", "m2ts", "mts", "3gp", "ogv", "vob", "gif", "jpg", "jpeg",
+    "jpe", "jfif", "png", "webp", "avif", "heic", "heif", "hif", "bmp", "tif", "tiff",
 ];
 
 fn payload(e: CoreError) -> ErrorPayload {
