@@ -33,19 +33,25 @@ The `ffmpeg-n9.0.2-36` pre-release mirrors the FFmpeg build and its sources (req
 Cargo workspace (`Cargo.toml`, resolver 3, toolchain pinned to 1.99.1 in `rust-toolchain.toml`):
 
 - `crates/konvert-core/`: pure domain logic, no Tauri.
-  - `formats.rs`: declarative catalog with `TargetFormat`, `FORMATS` (FormatSpec), `RULES`, `available_targets`, `is_offered`. Pictures are `FormatKind::Image` with a single `ImageCodec` (JPG, PNG, WebP, AVIF).
+  - `formats.rs`: declarative catalog with `TargetFormat`, `FORMATS` (FormatSpec), `RULES`, `available_targets`, `is_offered`. Pictures are `FormatKind::Image` with a single `ImageCodec` (JPG, PNG, WebP, AVIF, BMP, TIFF, GIF, ICO).
+    - A format's id is its serialized `TargetFormat` name (`TargetFormat::id`/`from_id`, CLI `--to alac`). Formats may share an extension (ALAC/AAC `.m4a`, still/animated WebP and GIF): `source_format(media, input)` uses the extension, the kind of content and `detect_codecs`.
+    - `secondary: true` formats are shown under "More formats" in the UI.
+    - Groups (`TargetGroup`): video, audio, audioOnly, image, frames (pictures from a video). Animations (GIF, animated WebP, APNG) share the GIF limits (`VideoCodec::is_animation`).
   - `probe.rs`: ffprobe (including `-show_stream_groups`) → `MediaInfo`.
     - Still pictures (`image2`/`*_pipe` demuxers, HEIF/AVIF brands) are `MediaKind::Image` with `PictureInfo` (alpha, AVIF alpha plane, HEIC grid, EXIF); animated GIF/APNG/WebP stay videos.
     - For non-HEIF pictures a second ffprobe reads the first frame (`apply_first_frame_json`): EXIF orientation and EXIF presence. Stored dimensions are the displayed (already rotated) ones.
     - FFmpeg applies the rotation (EXIF or `irot`) by itself before the filters; `[0:g:N]` in a filter graph returns the reassembled HEIC grid.
+    - Video streams also report their displayed size: a quarter-turn display matrix swaps width and height, so resized portrait videos keep their proportions.
   - `request.rs` → `plan.rs` (`plan_conversion`, pure) → `command.rs` (`build_from_plan`, pure FFmpeg arguments) → `convert.rs` (execution).
   - `estimate.rs`: size estimate and warnings.
   - Other modules: `naming.rs` (`name (n).ext`, never overwrite), `workspace.rs` (`%TEMP%\Konvert\run-…` with a lock and cleanup after crashes), `process.rs` (kill-on-close Job Object and `CREATE_NO_WINDOW`), `progress.rs`, `disk.rs`, `binaries.rs`, `error.rs`.
   - Stable error codes in `error.rs`: `engine_missing`, `input_not_found`, `output_unavailable`, `not_media`, `corrupt_input`, `unsupported_conversion`, `disk_full`, `permission_denied`, `cancelled`, `engine_failed`, `io`. Each has an i18n message.
   - FFmpeg always runs with `-protocol_whitelist file`, and inputs are passed as `file:` URLs.
-  - Pictures: `plan.rs::plan_picture` → `ImagePlan` (always re-encoded); `command.rs::picture_args` (one filter graph: grid/alphamerge, scale, white background for JPG, alpha plane for AVIF; encoders mjpeg, png, libwebp, libaom-av1 still-picture; muxers `image2pipe`/`webp`/`avif`).
+  - Pictures: `plan.rs::plan_picture` → `plan_still` → `ImagePlan` (always re-encoded); `command.rs::picture_args` (one filter graph: grid/alphamerge, scale, white background for JPG/BMP, alpha plane for AVIF, palette for GIF; encoders mjpeg, png, libwebp, libaom-av1 still-picture, bmp, tiff, gif; muxers `image2pipe`/`webp`/`avif`/`gif`/`ico`).
+    - ICO: `ImagePlan::icons` (16/32/48/256 px up to the picture's size, each fitted into a transparent square), one PNG stream per size into the `ico` muxer (`command.rs::icon_args`). `.ico` inputs are pictures (largest stream; the first-frame probe selects that stream by index).
+    - Frames from videos: `plan_frames` → `ConversionPlan::frames` (`FramePlan`). One frame: `-ss` before `-i`, clamped inside the video. A series: `fps=1/N` (or every frame with `-fps_mode passthrough`) into the `image2` muxer, written in `workspace.job_dir(id)` (`%` escaped in the pattern), then `naming::move_series` creates a new folder `name[ (n)]` with `name-001.ext`…; `ConversionOutcome::files` > 1 means `output` is a folder.
   - EXIF: FFmpeg keeps it only when converting to PNG (from JPEG/PNG/WebP, not from HEIF); otherwise the `MetadataDropped` warning is shown.
-  - Tests: unit tests in the modules and `tests/engine.rs` (16 integration tests with real FFmpeg). `tests/fixtures/mod.rs` builds JPEGs with EXIF and grid HEIC files in memory (HEVC tiles made with libkvazaar).
+  - Tests: unit tests in the modules and `tests/engine.rs` (22 integration tests with real FFmpeg). `tests/fixtures/mod.rs` builds JPEGs with EXIF and grid HEIC files in memory (HEVC tiles made with libkvazaar).
 - `crates/konvert-cli/`: development CLI (`npm run cli -- targets|plan|convert …`), not shipped.
 - `src-tauri/`: thin IPC layer.
   - `commands.rs` holds 20 commands, also listed in `build.rs::COMMANDS` and `capabilities/default.json`: **a new command must be added in all three places**.
@@ -57,7 +63,8 @@ Cargo workspace (`Cargo.toml`, resolver 3, toolchain pinned to 1.99.1 in `rust-t
   - `lib/api.ts` (IPC) and `lib/mock.ts` (fake backend, only for `npm run dev` in the browser).
   - `state/queue.ts`: pure queue reducer, with tests.
   - `i18n/it.ts` and `en.ts`: typed; a test checks that the keys match.
-  - `components/`: DropScreen, FormatGrid, QualityPicker, AdvancedPanel, PlanSummary, ConvertingScreen, DoneScreen, SettingsSheet, …
+  - `components/`: DropScreen, FormatGrid ("More formats"), FramesPanel (one frame or a series), QualityPicker, AdvancedPanel, PlanSummary, ConvertingScreen, DoneScreen (folder outputs), SettingsSheet, …
+  - `state/queue.ts::commonTargets` intersects formats by group too: photos and videos never share a picture format (converted photo vs frame).
 - `src/bindings/`: TypeScript types **generated** by ts-rs during `cargo test`. If you change an exported Rust type, regenerate and commit them.
 - `scripts/`:
   - `ffmpeg-manifest.json`: FFmpeg n9.0.2-36 per platform with pinned SHA-256 (BtbN `win64-lgpl-shared`, `linux64-lgpl`, `linuxarm64-lgpl`; `macos-aarch64` is our own build), upstream URL plus the mirror.
@@ -73,8 +80,10 @@ Cargo workspace (`Cargo.toml`, resolver 3, toolchain pinned to 1.99.1 in `rust-t
 
 ## FFmpeg and licenses
 - LGPL-3.0-or-later build, no GPL or nonfree parts: **no libx264/libx265/fdk-aac**.
-- Available encoders: libopenh264 (H.264), libvpx/libvpx-vp9, libsvtav1, mpeg4, gif, libmp3lame, aac, libopus, libvorbis, flac, wmav2.
-- The build also has picture decoders and encoders (mjpeg, png, libwebp, libaom-av1, libkvazaar, …): check them with `ffmpeg -encoders`.
+- Available encoders: libopenh264 (H.264), libvpx/libvpx-vp9, libsvtav1, mpeg4, mpeg2video, gif, libwebp_anim, apng, libmp3lame, aac, alac, ac3, eac3, mp2, libopus, libvorbis, flac, wmav2.
+- The build also has picture decoders and encoders (mjpeg, png, libwebp, libaom-av1, bmp, tiff, libkvazaar, …): check them with `ffmpeg -encoders`.
+- Every encoder and muxer Konvert uses is native or in all three platform builds, except libjxl and librsvg: present in the BtbN Windows/Linux builds, missing from our macOS build.
+- FFmpeg limits found while adding formats: the CAF muxer only takes ALAC/PCM (no AAC or Opus); the Ogg/Opus muxers reject attached pictures (cover art there needs a `METADATA_BLOCK_PICTURE` tag); an image2 output pattern treats `%` in folder names as a pattern, so it must be escaped as `%%`.
 - H.264 patents are not covered by OpenH264's BSD license: the README already says so.
 - A new Rust or npm library must have a compatible license and pass the privacy check. Then run `npm run licenses`.
 
@@ -126,9 +135,14 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
   - v0.3.0 ships Windows, macOS arm64 and Linux x64 only: the first Linux arm64 packaging failed (missing `xdg-utils`, fixed). The owner will run **Release packages** with `platform: linux-arm64` later; then restore arm64 in the README (platforms line and installation table).
   - Not verified on real hardware yet: drag & drop and "Open With" on macOS/Linux, Gatekeeper, the Linux desktop integration.
 
+- 2026-10-26: **more formats, phase A** on `main` (not pushed): the stretched portrait video bug is fixed; new outputs ALAC, AAC, AC3, E-AC3, MP2, CAF, MKA, TS, MPG, 3GP, FLV, animated WebP, APNG, BMP, TIFF, still GIF, ICO; frames from videos (one frame or a series in a folder); new inputs .eac3/.mp2/.caf/.apng/.ico.
+  - Owner's decisions for the whole plan: runtime encoder detection (JPEG XL only where the engine has libjxl, so not on macOS), SVG through resvg on every platform, no RAW input, PDF in pure Rust (spike first; PDFium only after asking), frames as a "Frames" group in the format grid, series in a subfolder, "remove location" off by default.
+  - Green tests (Windows): 28 Vitest, 139 core unit tests, 22 integration tests, 17 app tests.
+  - Not verified by hand yet: the new formats in the installed app, "Open with" on the new extensions, drag & drop of videos into the Frames flow.
+
 ## Backlog (next work, by priority)
 1. **More formats and PDF**, in three phases agreed with the owner (in progress):
-   - A: easy formats FFmpeg already has (ALAC, AAC, AC3, E-AC3, MP2, CAF, MKA, TS, MPG, 3GP, FLV, animated WebP, APNG, BMP, TIFF, still GIF, ICO, frames from videos);
+   - A: done (see Current status);
    - B: tags and cover art in more containers, EXIF kept in JPG/WebP/AVIF (with a "remove location" option), JPEG XL where the engine has libjxl, SVG input with resvg (no RAW);
    - C: PDF in pure Rust (hayro, lopdf, pdf-writer): pictures → PDF, PDF → pictures, merge; split/rotate/reorder only after a further OK.
 2. Finish the macOS/Linux rollout (see Current status), and macOS window vibrancy (needs `macOSPrivateApi`).

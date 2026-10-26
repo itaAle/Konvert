@@ -32,27 +32,47 @@ and the Mica effect on Windows 11.
 
 Konvert only offers the conversions that make sense for the file you give it:
 
-| Input file                                         | Formats offered                                                       |
-| -------------------------------------------------- | --------------------------------------------------------------------- |
-| Audio                                              | MP3, M4A (AAC), WAV, FLAC, OGG (Vorbis), OPUS, WMA, AIFF              |
-| Video with audio                                   | MP4, MKV, MOV, WebM, AVI, GIF, and **audio only** in every audio format |
-| Video without audio                                | MP4, MKV, MOV, WebM, AVI, GIF                                         |
-| Picture (JPG/JPEG, PNG, WebP, AVIF, HEIC/HEIF, BMP, TIFF) | JPG, PNG, WebP, AVIF                                           |
+| Input file | Formats offered |
+| --- | --- |
+| Audio | MP3, M4A (AAC), ALAC (M4A), WAV, FLAC, OGG (Vorbis), OPUS, WMA, AIFF; more formats: AAC, AC3, E-AC3, MP2, CAF (ALAC), MKA |
+| Video with audio | MP4, MKV, MOV, WebM, AVI, GIF, animated WebP; more formats: TS, MPG (MPEG-2), 3GP, FLV, APNG. Also **audio only** in every audio format and **frames** as JPG, PNG or WebP |
+| Video without audio | The same, without the audio formats |
+| Picture (JPG/JPEG, PNG, WebP, AVIF, HEIC/HEIF, BMP, TIFF, ICO) | JPG, PNG, WebP, AVIF; more formats: BMP, TIFF, GIF, ICO |
+
+Less common formats are behind **More formats**, so the usual choices stay in front.
 
 - When the streams are already compatible with the chosen format (e.g. MP4 H.264/AAC →
-  MKV), they are copied **without re-encoding**: instant and lossless.
+  MKV, TS or FLV), they are copied **without re-encoding**: instant and lossless.
 - Clear warnings when a conversion loses quality or cannot bring it back (e.g. MP3 → WAV)
   and when cover art, subtitles or extra audio tracks are dropped.
-- Metadata and cover art are kept where the format allows it (MP3, M4A, FLAC).
-- H.264 video with OpenH264, VP9 for WebM, AV1 (SVT-AV1) among the advanced options.
+- Metadata and cover art are kept where the format allows it (MP3, M4A, ALAC, FLAC).
+- H.264 video with OpenH264, VP9 for WebM, AV1 (SVT-AV1) among the advanced options; MPG
+  uses MPEG-2 video with MP2 audio, like DVDs.
+- ALAC and AAC both use the `.m4a` extension: the cards say which is which
+  (**ALAC · M4A · Lossless**). CAF holds Apple Lossless (FFmpeg cannot write AAC or Opus
+  into CAF). MKA keeps the original soundtrack whenever it can.
+- Animated WebP and APNG work like GIF (frame rate and size limits, no sound) and keep
+  transparency; APNG is lossless, so its files can get very large.
 - Videos recorded with the phone upright keep their proportions when they are resized.
+
+Pictures from a video (**Frames**):
+
+- **One frame**: choose the moment with a slider (the middle of the video by default).
+- **A series**: one picture every 0.5 s to 1 min, or every frame. The pictures go into a new
+  folder named after the video (`Holiday/Holiday-001.jpg`, `Holiday-002.jpg`, …), never
+  over an existing one; Konvert tells you how many pictures to expect.
 
 Pictures:
 
 - Photos are turned the right way up (EXIF orientation, HEIC rotation), and HEIC photos from
   phones, stored as a grid of tiles, are put back together.
 - Pictures keep their size unless you choose a maximum size under **Advanced**.
-- Transparency is kept in PNG, WebP and AVIF; in JPG, transparent areas become white.
+- Transparency is kept in PNG, WebP, AVIF, TIFF, GIF and ICO; in JPG and BMP, transparent
+  areas become white.
+- **ICO** makes a Windows icon with the standard sizes 16, 32, 48 and 256 px (only the ones
+  that fit the picture, never enlarged); a picture that is not square is centered on a
+  transparent square.
+- GIF pictures have at most 256 colors: fine for logos, not for photos.
 - EXIF data (camera, date, location) is kept when a JPEG, PNG or WebP picture becomes a PNG;
   the other conversions leave it out, and Konvert tells you so before converting.
 - Animated GIF, WebP and PNG files are treated as videos.
@@ -279,6 +299,7 @@ npm run cli -- targets "C:\path\video.mp4"              # formats offered
 npm run cli -- plan "C:\path\video.mp4" --to webm         # decisions, warnings, estimate
 npm run cli -- convert "C:\path\song.wav" --to mp3 --preset balanced
 npm run cli -- convert "C:\path\photo.heic" --to jpg --max-size 1920
+npm run cli -- convert "C:\path\video.mp4" --to png --every 2   # a series of frames
 ```
 
 `konvert-cli` is a development tool that uses the same engine as the app; it is not
