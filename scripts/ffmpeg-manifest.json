@@ -68,11 +68,11 @@
       ]
     },
     "macos-aarch64": {
-      "note": "Built by scripts/build-ffmpeg-macos.sh (.github/workflows/ffmpeg-macos.yml) with the same libraries and --disable-network; sources are in the mirror release next to the archive. Fill sha256 after uploading the archive.",
+      "note": "Built by scripts/build-ffmpeg-macos.sh (.github/workflows/ffmpeg-macos.yml) with the same libraries as the BtbN builds and --disable-network; the sources archive is in the mirror release next to it.",
       "urls": [
         "https://github.com/itaAle/Konvert/releases/download/ffmpeg-n9.0.2-36/ffmpeg-n9.0.2-36-g6882969ce9-macos-arm64-lgpl.tar.xz"
       ],
-      "sha256": "",
+      "sha256": "826c17e369074a1e5006428acfbcf6e63b56328de1d6b634f5fca89669acf4c0",
       "archive": "tar.xz",
       "binDir": "bin",
       "files": [
