@@ -1,175 +1,174 @@
 # Konvert
 Audio and video file converter with a modern interface.
 
-Konvert converte file audio e video da un formato all'altro, **interamente sul tuo
-computer**: nessuna connessione di rete, nessuna telemetria, nessun account.
+Konvert converts audio and video files from one format to another **entirely on your
+computer**: no network connections, no telemetry, no account.
 
-Piattaforma: Windows 10/11 (64 bit). Linux e macOS sono previsti in una fase successiva.
+Platform: Windows 10/11 (64-bit). Linux and macOS are planned for a later phase.
 
-## Come si usa
+## How to use it
 
-1. Trascina uno o più file audio o video nella finestra (oppure **Scegli file…**, Ctrl+O,
-   o tasto destro sul file → **Apri con** → **Konvert**).
-2. Konvert li analizza e propone solo i formati sensati (per più file: quelli comuni a tutti).
-3. Scegli il formato e la qualità (**Massima qualità**, **Bilanciata**, **File piccolo**):
-   vedi subito la dimensione stimata e gli eventuali avvisi. In **Avanzate** puoi
-   regolare bitrate, frequenza, canali, risoluzione, fotogrammi al secondo e codec.
-4. Premi **Converti**: avanzamento per ogni file e totale, tempo rimanente e **Annulla**
-   in ogni momento. A fine lavoro puoi aprire i file o mostrarli nella cartella.
+1. Drag one or more audio or video files into the window (or use **Choose files…**,
+   Ctrl+O, or right-click the file → **Open with** → **Konvert**).
+2. Konvert analyzes them and offers only the formats that make sense (for several files:
+   the ones they all have in common).
+3. Pick the format and the quality (**Best quality**, **Balanced**, **Small file**): the
+   estimated size and any warnings appear right away. Under **Advanced** you can adjust
+   bitrate, sample rate, channels, resolution, frame rate and codec.
+4. Press **Convert**: progress for each file and overall, time remaining, and **Cancel**
+   at any moment. When it is done you can open the files or show them in their folder.
 
-I file convertiti vengono salvati accanto all'originale (oppure in una cartella a scelta)
-e non ne sovrascrivono mai altri (`brano.mp3` esiste già? → `brano (1).mp3`).
-Se chiudi la finestra durante una conversione, Konvert chiede conferma.
+Converted files are saved next to the original (or in a folder of your choice) and never
+overwrite other files (`song.mp3` already exists? → `song (1).mp3`).
+If you close the window during a conversion, Konvert asks for confirmation.
 
-Interfaccia in stile macOS, in italiano o inglese, con tema chiaro/scuro (automatico o
-a scelta) ed effetto Mica su Windows 11.
+macOS-style interface in English or Italian, with light/dark theme (automatic or manual)
+and the Mica effect on Windows 11.
 
-## Formati
+## Formats
 
-Konvert propone solo le conversioni sensate per il file che gli dai:
+Konvert only offers the conversions that make sense for the file you give it:
 
-| File in ingresso  | Formati proposti                                                        |
-| ----------------- | ----------------------------------------------------------------------- |
-| Audio             | MP3, M4A (AAC), WAV, FLAC, OGG (Vorbis), OPUS, WMA, AIFF                |
-| Video con audio   | MP4, MKV, MOV, WebM, AVI, GIF e **solo audio** in tutti i formati audio |
-| Video senza audio | MP4, MKV, MOV, WebM, AVI, GIF                                           |
+| Input file          | Formats offered                                                       |
+| ------------------- | --------------------------------------------------------------------- |
+| Audio               | MP3, M4A (AAC), WAV, FLAC, OGG (Vorbis), OPUS, WMA, AIFF              |
+| Video with audio    | MP4, MKV, MOV, WebM, AVI, GIF, and **audio only** in every audio format |
+| Video without audio | MP4, MKV, MOV, WebM, AVI, GIF                                         |
 
-- Se i flussi sono già compatibili con il formato scelto (es. MP4 H.264/AAC → MKV),
-  vengono copiati **senza ricodifica**: istantaneo e senza perdita.
-- Avvisi chiari quando la conversione perde qualità o non può recuperarla
-  (es. MP3 → WAV) e quando si perdono copertina, sottotitoli o tracce audio extra.
-- Metadati e copertina conservati dove il formato lo permette (MP3, M4A, FLAC).
-- Video H.264 con OpenH264, VP9 per WebM, AV1 (SVT-AV1) tra le opzioni avanzate.
+- When the streams are already compatible with the chosen format (e.g. MP4 H.264/AAC →
+  MKV), they are copied **without re-encoding**: instant and lossless.
+- Clear warnings when a conversion loses quality or cannot bring it back (e.g. MP3 → WAV)
+  and when cover art, subtitles or extra audio tracks are dropped.
+- Metadata and cover art are kept where the format allows it (MP3, M4A, FLAC).
+- H.264 video with OpenH264, VP9 for WebM, AV1 (SVT-AV1) among the advanced options.
 
-La tabella dei formati è dichiarativa: `crates/konvert-core/src/formats.rs`.
+The format table is declarative: `crates/konvert-core/src/formats.rs`.
 
-## Installazione
+## Installation
 
-1. Scarica dalla pagina [Releases](https://github.com/itaAle/Konvert/releases) l'installer
-   `Konvert_<versione>_x64-setup.exe` e il file `Konvert_<versione>_x64-setup.exe.sha256`.
-2. **Verifica il checksum** (vedi sotto) prima di aprire l'installer.
-3. Avvia l'installer: installa Konvert solo per il tuo utente (nessun permesso di
-   amministratore), crea la voce nel menu Start e aggiunge Konvert al menu **Apri con**
-   dei formati supportati, senza cambiare i programmi predefiniti.
+1. From the [Releases](https://github.com/itaAle/Konvert/releases) page, download the
+   installer `Konvert_<version>_x64-setup.exe` and the file
+   `Konvert_<version>_x64-setup.exe.sha256`.
+2. **Verify the checksum** (see below) before opening the installer.
+3. Run the installer: it installs Konvert for your user only (no administrator rights),
+   creates the Start menu entry and adds Konvert to the **Open with** menu of the
+   supported formats, without changing your default programs.
 
-Konvert usa Microsoft Edge WebView2, già presente in Windows 11 e in Windows 10
-aggiornato. Se manca, l'installer lo segnala: installalo dal sito Microsoft
-("WebView2 Runtime"). L'installer non scarica mai nulla da Internet.
+Konvert uses Microsoft Edge WebView2, which is already part of Windows 11 and of an
+up-to-date Windows 10. If it is missing, the installer tells you: install the
+"WebView2 Runtime" from the Microsoft website. The installer never downloads anything.
 
-### Verificare il checksum SHA-256
+### Verifying the SHA-256 checksum
 
-Il file `.sha256` contiene l'impronta dell'installer. In PowerShell, nella cartella dei
-download:
+The `.sha256` file contains the fingerprint of the installer. In PowerShell, in your
+downloads folder:
 
 ```powershell
 (Get-FileHash .\Konvert_0.1.0_x64-setup.exe -Algorithm SHA256).Hash
 Get-Content .\Konvert_0.1.0_x64-setup.exe.sha256
 ```
 
-Le due impronte devono coincidere (maiuscole e minuscole non contano). In alternativa:
-`certutil -hashfile Konvert_0.1.0_x64-setup.exe SHA256`. Su Linux/macOS:
-`sha256sum -c Konvert_0.1.0_x64-setup.exe.sha256`. Se non coincidono, non avviare il file.
+The two fingerprints must match (upper/lower case does not matter). Alternatively:
+`certutil -hashfile Konvert_0.1.0_x64-setup.exe SHA256`. On Linux/macOS:
+`sha256sum -c Konvert_0.1.0_x64-setup.exe.sha256`. If they do not match, do not run the file.
 
-### Avviso di Windows SmartScreen
+### Windows SmartScreen warning
 
-Finché l'installer non è firmato con un certificato di code signing, Windows SmartScreen
-può mostrare **"Windows ha protetto il PC"** (app non riconosciuta). Per procedere in
-sicurezza:
+Until the installer is signed with a code-signing certificate, Windows SmartScreen may
+show **"Windows protected your PC"** (unrecognized app). To proceed safely:
 
-1. scarica l'installer **solo** dalla pagina Releases di questo repository;
-2. verifica il checksum come descritto sopra;
-3. nella finestra di SmartScreen scegli **Ulteriori informazioni** → **Esegui comunque**.
+1. download the installer **only** from the Releases page of this repository;
+2. verify the checksum as described above;
+3. in the SmartScreen window choose **More info** → **Run anyway**.
 
-Il codice sorgente è pubblico: chiunque può controllarlo e ricompilare l'installer
-(vedi [Creare una release](#creare-una-release)).
+The source code is public: anyone can review it and rebuild the installer
+(see [Building a release](#building-a-release)).
 
-## Aggiornamenti
+## Updates
 
-Konvert **non controlla e non scarica aggiornamenti** (né automaticamente né su
-richiesta). Per aggiornare:
+Konvert **does not check for or download updates** (neither automatically nor on
+request). To update:
 
-1. in **Impostazioni → Informazioni** trovi la versione installata e il link
-   **Pagina dei rilasci**, che si apre nel browser solo quando lo clicchi;
-2. scarica il nuovo installer, verifica il checksum e installalo sopra la versione
-   precedente.
+1. **Settings → About** shows the installed version and the **Releases page** link, which
+   opens in your browser only when you click it;
+2. download the new installer, verify the checksum and install it over the previous
+   version.
 
-Le preferenze vengono mantenute. Se l'installer propone di disinstallare prima la
-versione precedente, lascia **non selezionata** la casella "Cancella i dati
-dell'applicazione".
+Your preferences are kept. If the installer offers to uninstall the previous version
+first, leave the "Delete the application data" checkbox **unchecked**.
 
-## Disinstallazione
+## Uninstalling
 
-Da **Impostazioni di Windows → App → App installate → Konvert → Disinstalla**.
-La casella **Cancella i dati dell'applicazione** (non selezionata di default) elimina
-anche le preferenze e l'eventuale registro di debug. Le voci "Apri con" vengono rimosse.
+From **Windows Settings → Apps → Installed apps → Konvert → Uninstall**.
+The **Delete the application data** checkbox (unchecked by default) also removes your
+preferences and the debug log, if any. The "Open with" entries are removed.
 
 ## Privacy
 
-Konvert funziona interamente sul tuo computer. Nessun dato lascia il dispositivo.
+Konvert works entirely on your computer. No data leaves your device.
 
-**Rete**
-- Nessuna connessione di rete, neanche all'avvio: niente telemetria, analytics, crash
-  reporting, controllo aggiornamenti, licenze o account.
-- Font, icone e librerie sono inclusi nell'app: nessun CDN o servizio esterno.
-- Content Security Policy restrittiva (`default-src 'self'`, connessioni solo verso l'IPC
-  interno), nessun plugin Tauri di rete (updater, http, …), interfaccia WebView2 avviata
-  con le funzioni di rete in background disattivate.
-- FFmpeg e FFprobe sono eseguiti con `-protocol_whitelist file`: possono aprire solo file
-  locali, mai indirizzi di rete.
-- L'unico indirizzo web noto all'app è la pagina dei rilasci, che si apre nel browser
-  solo se la clicchi.
+**Network**
+- No network connections, not even at startup: no telemetry, analytics, crash
+  reporting, update checks, licensing or accounts.
+- Fonts, icons and libraries are bundled with the app: no CDN or external service.
+- Strict Content Security Policy (`default-src 'self'`, connections only to the internal
+  IPC), no networking Tauri plugin (updater, http, …), WebView2 interface started with
+  its background networking features disabled.
+- FFmpeg and FFprobe run with `-protocol_whitelist file`: they can open local files only,
+  never network addresses.
+- The only web address the app knows is the releases page, which opens in your browser
+  only if you click it.
 
-**Dati sul disco**
-- Nessuna cronologia di file convertiti, nomi, percorsi o anteprime.
-- Le uniche impostazioni salvate sono le preferenze (lingua, aspetto, qualità predefinita,
-  cartella di destinazione, modalità debug) in un file JSON leggibile:
-  `%APPDATA%\app.konvert.desktop\preferences.json`. Nessun identificativo di installazione
-  o del dispositivo.
-- I file in lavorazione stanno in una cartella temporanea dedicata (`%TEMP%\Konvert`) e
-  vengono eliminati al termine, all'annullamento o, dopo un crash, all'avvio successivo.
-- Il registro di debug è **disattivato di default**. Se lo attivi in Impostazioni, resta
-  in `%LOCALAPPDATA%\app.konvert.desktop\logs\konvert.log`, senza nomi né percorsi dei
-  file (sostituiti da segnaposto), e non viene mai inviato.
+**Data on disk**
+- No history of converted files, names, paths or thumbnails.
+- The only saved settings are your preferences (language, appearance, default quality,
+  destination folder, debug mode) in a readable JSON file:
+  `%APPDATA%\app.konvert.desktop\preferences.json`. No installation or device identifier.
+- Files being processed live in a dedicated temporary folder (`%TEMP%\Konvert`) and are
+  deleted when the job ends, when it is cancelled or, after a crash, at the next launch.
+- The debug log is **off by default**. If you turn it on in Settings, it stays in
+  `%LOCALAPPDATA%\app.konvert.desktop\logs\konvert.log`, without file names or paths
+  (replaced by placeholders), and it is never sent anywhere.
 
-**Come verificarlo**
-- **Resource Monitor** (`resmon`) → scheda **Rete**: durante l'uso, i processi
-  `konvert.exe`, `msedgewebview2.exe` e `ffmpeg.exe` non compaiono tra i processi con
-  attività di rete.
-- **Wireshark**: con Konvert in uso non compare traffico generato dall'app.
-- Lo script `scripts/monitor-network.ps1` osserva i socket di Konvert e di tutti i suoi
-  processi figli (WebView2, FFmpeg):
+**How to verify it**
+- **Resource Monitor** (`resmon`) → **Network** tab: while you use the app, the
+  `konvert.exe`, `msedgewebview2.exe` and `ffmpeg.exe` processes do not appear among the
+  processes with network activity.
+- **Wireshark**: with Konvert in use, no traffic generated by the app shows up.
+- The script `scripts/monitor-network.ps1` watches the sockets of Konvert and of all its
+  child processes (WebView2, FFmpeg):
   `powershell -ExecutionPolicy Bypass -File scripts/monitor-network.ps1 -Seconds 60`
-  mentre usi l'app (exit code 0 = nessuna connessione).
-- `npm run check:privacy` fallisce se nel grafo delle dipendenze compaiono librerie
-  HTTP/TLS/WebSocket o di telemetria, se la CSP viene allentata, se l'installer
-  scaricherebbe qualcosa o se nel codice compaiono indirizzi esterni non autorizzati.
+  while you use the app (exit code 0 = no connection).
+- `npm run check:privacy` fails if HTTP/TLS/WebSocket or telemetry libraries appear in the
+  dependency graph, if the CSP is loosened, if the installer would download anything or
+  if unauthorized external addresses appear in the code.
 
-Tutte le dipendenze e le loro licenze sono elencate in
-[`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES): nessuna effettua traffico di rete in Konvert.
+Every dependency and its license is listed in
+[`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES): none of them makes network traffic in Konvert.
 
-## Funzionalità future
+## Future features
 
-Idee raccolte per i prossimi aggiornamenti:
+Ideas collected for upcoming updates:
 
-- **Immagini**: conversione di file JPG/JPEG, PNG, WebP, AVIF (oggi i file immagine
-  vengono rifiutati perché Konvert gestisce solo audio e video).
-- Versioni per **Linux** e **macOS**.
-- **Accelerazione hardware** del video (NVIDIA NVENC, Intel Quick Sync, AMD AMF),
-  con rilevamento automatico.
-- FFmpeg compilato **senza alcun supporto di rete** (oggi la rete è bloccata a runtime).
-- Installer **firmato** con certificato di code signing (niente avviso SmartScreen).
+- **Images**: conversion of JPG/JPEG, PNG, WebP, AVIF files (image files are rejected
+  today because Konvert handles audio and video only).
+- **Linux** and **macOS** versions.
+- **Hardware-accelerated** video (NVIDIA NVENC, Intel Quick Sync, AMD AMF), with
+  automatic detection.
+- FFmpeg built **without any network support** (today the network is blocked at runtime).
+- **Signed** installer with a code-signing certificate (no SmartScreen warning).
 
-## Sviluppo
+## Development
 
-### Prerequisiti (Windows)
+### Prerequisites (Windows)
 
-- [Node.js](https://nodejs.org/) 20 o successivo (con npm)
-- [Rust](https://rustup.rs/) (la versione esatta è fissata in `rust-toolchain.toml`:
-  rustup la installa da solo)
-- Visual Studio Build Tools con il carico di lavoro **Sviluppo di applicazioni desktop con C++**
+- [Node.js](https://nodejs.org/) 20 or later (with npm)
+- [Rust](https://rustup.rs/) (the exact version is pinned in `rust-toolchain.toml`:
+  rustup installs it by itself)
+- Visual Studio Build Tools with the **Desktop development with C++** workload
 - WebView2 Runtime
 
-Con winget:
+With winget:
 
 ```powershell
 winget install Rustlang.Rustup
@@ -180,81 +179,82 @@ winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passi
 
 ```powershell
 npm install
-npm run setup:ffmpeg      # scarica FFmpeg/FFprobe (LGPL), ne verifica lo SHA-256
+npm run setup:ffmpeg      # downloads FFmpeg/FFprobe (LGPL) and verifies the SHA-256
 ```
 
-Lo script `scripts/setup-ffmpeg.ps1` (o `scripts/setup-ffmpeg.sh` su Linux/macOS) scarica
-la build di FFmpeg fissata in `scripts/ffmpeg-manifest.json`, ne verifica l'hash SHA-256 e
-copia solo i file necessari in `src-tauri/binaries/ffmpeg/`. I binari non sono nel
-repository. Il download avviene **solo in fase di sviluppo**: l'app non scarica mai nulla.
+The script `scripts/setup-ffmpeg.ps1` (or `scripts/setup-ffmpeg.sh` on Linux/macOS)
+downloads the FFmpeg build pinned in `scripts/ffmpeg-manifest.json`, verifies its SHA-256
+hash and copies only the needed files into `src-tauri/binaries/ffmpeg/`. The binaries are
+not in the repository. The download happens **at development time only**: the app never
+downloads anything.
 
-### Comandi
+### Commands
 
 ```powershell
-npm run tauri dev         # avvia l'app in modalità sviluppo
-npm run dev               # solo interfaccia nel browser, con un backend simulato (design)
-npm test                  # privacy, licenze, test interfaccia (Vitest) e test Rust
-npm run check:privacy     # solo il controllo privacy
-npm run licenses          # rigenera THIRD_PARTY_LICENSES
-npm run cli -- targets "C:\percorso\video.mp4"          # formati proposti
-npm run cli -- plan "C:\percorso\video.mp4" --to webm     # decisioni, avvisi, stima
-npm run cli -- convert "C:\percorso\brano.wav" --to mp3 --preset balanced
+npm run tauri dev         # start the app in development mode
+npm run dev               # interface only, in the browser, with a mocked backend (design)
+npm test                  # privacy, licenses, interface tests (Vitest) and Rust tests
+npm run check:privacy     # privacy check only
+npm run licenses          # regenerate THIRD_PARTY_LICENSES
+npm run cli -- targets "C:\path\video.mp4"              # formats offered
+npm run cli -- plan "C:\path\video.mp4" --to webm         # decisions, warnings, estimate
+npm run cli -- convert "C:\path\song.wav" --to mp3 --preset balanced
 ```
 
-`konvert-cli` è uno strumento di sviluppo che usa lo stesso motore dell'app; non viene
-installato con Konvert.
+`konvert-cli` is a development tool that uses the same engine as the app; it is not
+installed with Konvert.
 
-### Struttura
+### Structure
 
 ```
-crates/konvert-core/   logica di dominio in Rust (senza dipendenze da Tauri): analisi,
-                       catalogo formati, pianificazione, stima, builder dei comandi FFmpeg,
-                       esecuzione, nomi univoci, file temporanei
-crates/konvert-cli/    CLI di sviluppo sopra konvert-core
-src-tauri/             app Tauri: comandi IPC, coda, preferenze, registro, permessi,
-                       configurazione e hook dell'installer (windows/installer-hooks.nsh)
-src/                   interfaccia React + TypeScript (Tailwind, Motion)
-src/bindings/          tipi TypeScript generati dai tipi Rust (ts-rs, durante `cargo test`)
-scripts/               setup di FFmpeg, controllo privacy, monitor di rete, licenze, release
+crates/konvert-core/   domain logic in Rust (no Tauri dependency): probing, format
+                       catalog, planning, estimates, FFmpeg command builder, execution,
+                       unique names, temporary files
+crates/konvert-cli/    development CLI on top of konvert-core
+src-tauri/             Tauri app: IPC commands, queue, preferences, log, permissions,
+                       configuration and installer hooks (windows/installer-hooks.nsh)
+src/                   React + TypeScript interface (Tailwind, Motion)
+src/bindings/          TypeScript types generated from the Rust types (ts-rs, during `cargo test`)
+scripts/               FFmpeg setup, privacy check, network monitor, licenses, release
 ```
 
-## Creare una release
+## Building a release
 
 ```powershell
 npm run release
 ```
 
-Lo script `scripts/build-release.ps1`:
+The script `scripts/build-release.ps1`:
 
-1. controlla che la versione coincida in `package.json`, `Cargo.toml` e
+1. checks that the version matches in `package.json`, `Cargo.toml` and
    `src-tauri/tauri.conf.json`;
-2. installa le dipendenze npm esatte (`npm ci`) e la build di FFmpeg verificata;
-3. esegue controllo privacy, controllo licenze e tutti i test;
-4. compila l'installer NSIS con i percorsi locali rimappati e verifica che l'eseguibile
-   non contenga il nome utente o cartelle della macchina di build;
-5. copia in `release/` l'installer e il suo file `.sha256`.
+2. installs the exact npm dependencies (`npm ci`) and the verified FFmpeg build;
+3. runs the privacy check, the license check and every test;
+4. builds the NSIS installer with local paths remapped and verifies that the executable
+   contains neither the user name nor folders of the build machine;
+5. copies the installer and its `.sha256` file into `release/`.
 
-Tutti gli input sono fissati (toolchain Rust, `Cargo.lock`, `package-lock.json`, archivio
-FFmpeg con hash). La prima build scarica una volta gli strumenti NSIS usati da Tauri.
-Pubblica sulla pagina Releases sia l'installer sia il file `.sha256`.
+Every input is pinned (Rust toolchain, `Cargo.lock`, `package-lock.json`, FFmpeg archive
+with its hash). The first build downloads the NSIS tools used by Tauri once.
+Publish both the installer and the `.sha256` file on the Releases page.
 
-## Licenze
+## Licenses
 
-Konvert è distribuito con licenza [MIT](LICENSE).
+Konvert is released under the [MIT](LICENSE) license.
 
-Include FFmpeg (build BtbN `win64-lgpl-shared`), distribuito con licenza **LGPL v3 o
-successiva**. FFmpeg gira come programma separato e i suoi file sono installati senza
-modifiche nella cartella `ffmpeg` dell'installazione, dove possono essere sostituiti. La
-build non contiene componenti GPL (nessun libx264/libx265) né non liberi. Il commit esatto
-dei sorgenti di FFmpeg e la ricetta di build sono indicati in
-[`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES) e in `scripts/ffmpeg-manifest.json`.
+It bundles FFmpeg (BtbN build `win64-lgpl-shared`), distributed under the **LGPL version 3
+or later**. FFmpeg runs as a separate program and its files are installed unmodified in
+the `ffmpeg` folder of the installation, where they can be replaced. The build contains no
+GPL components (no libx264/libx265) and no non-free ones. The exact FFmpeg source commit
+and the build recipe are listed in [`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES) and in
+`scripts/ffmpeg-manifest.json`.
 
-**Brevetti H.264**: il video H.264 è codificato con OpenH264, la cui licenza BSD copre
-solo il codice sorgente. **I brevetti H.264 non sono coperti dalla licenza BSD di
-OpenH264** (la copertura brevettuale di Cisco vale solo per i binari OpenH264 distribuiti
-da Cisco stessa). Alcuni codec (H.264, AAC) possono essere soggetti a brevetti in alcuni
-paesi: chi usa o ridistribuisce Konvert è responsabile delle eventuali licenze necessarie.
+**H.264 patents**: H.264 video is encoded with OpenH264, whose BSD license covers the
+source code only. **H.264 patents are not covered by the BSD license of OpenH264**
+(Cisco's patent coverage applies only to the OpenH264 binaries distributed by Cisco
+itself). Some codecs (H.264, AAC) may be subject to patents in some countries: whoever
+uses or redistributes Konvert is responsible for any licenses that may be required.
 
-Tutte le dipendenze, con licenza e testo completo, sono in
-[`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES) (incluso anche nell'installazione e
-consultabile da **Impostazioni → Informazioni → Licenze di terze parti**).
+Every dependency, with its license and full text, is in
+[`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES) (also included in the installation and
+viewable from **Settings → About → Third-party licenses**).
