@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import type { AdvancedOptions } from "../bindings/AdvancedOptions";
+import type { FrameOptions } from "../bindings/FrameOptions";
 import type { JobEvent } from "../bindings/JobEvent";
 import type { QualityPreset } from "../bindings/QualityPreset";
 import type { TargetFormat } from "../bindings/TargetFormat";
@@ -191,6 +192,7 @@ export function useQueue() {
     selectTarget: (target: TargetFormat) => dispatch({ type: "selectTarget", target }),
     selectPreset: (preset: QualityPreset) => dispatch({ type: "selectPreset", preset }),
     setAdvanced: (advanced: AdvancedOptions) => dispatch({ type: "setAdvanced", advanced }),
+    setFrames: (frames: FrameOptions) => dispatch({ type: "setFrames", frames }),
     start,
     cancelAll,
     back: () => dispatch({ type: "back" }),

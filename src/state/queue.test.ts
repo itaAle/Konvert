@@ -4,6 +4,7 @@ import {
   canStart,
   commonTargets,
   counts,
+  DEFAULT_FRAMES,
   initialQueue,
   overallProgress,
   queueReducer as reduce,
@@ -25,7 +26,7 @@ const option = (format: TargetFormat, group: TargetOption["group"]): TargetOptio
   lossless: false,
   secondary: false,
   sameAsInput: false,
-  kind: group === "video" ? "video" : group === "image" ? "image" : "audio",
+  kind: group === "video" ? "video" : group === "image" || group === "frames" ? "image" : "audio",
   videoCodecs: [],
   audioCodecs: [],
 });
@@ -36,7 +37,14 @@ function file(name: string, kind: "audio" | "videoWithAudio" | "image", duration
       ? [option("mp3", "audio"), option("flac", "audio")]
       : kind === "image"
         ? [option("jpg", "image"), option("png", "image"), option("webp", "image")]
-        : [option("mp4", "video"), option("mkv", "video"), option("mp3", "audioOnly"), option("flac", "audioOnly")];
+        : [
+            option("mp4", "video"),
+            option("mkv", "video"),
+            option("mp3", "audioOnly"),
+            option("flac", "audioOnly"),
+            option("jpg", "frames"),
+            option("png", "frames"),
+          ];
   return {
     path: `C:\\m\\${name}`,
     name,
@@ -123,6 +131,34 @@ describe("queue state machine", () => {
     expect(commonTargets(s.items)).toEqual([]);
   });
 
+  it("never mixes converted photos with frames of a video", () => {
+    let s = run(initialQueue(), { type: "add", paths: ["a.jpg", "b.mp4", "c.mp4"] });
+    s = run(
+      s,
+      { type: "analyzed", key: 2, file: file("b.mp4", "videoWithAudio", 10) },
+      { type: "analyzed", key: 3, file: file("c.mp4", "videoWithAudio", 20) },
+    );
+    // Two videos: frames are common.
+    expect(commonTargets(s.items).filter((t) => t.group === "frames").map((t) => t.format)).toEqual(["jpg", "png"]);
+    s = reduce(s, { type: "analyzed", key: 1, file: file("a.jpg", "image", null) });
+    expect(commonTargets(s.items)).toEqual([]);
+  });
+
+  it("sends the frame options with the request and plans again when they change", () => {
+    let s = run(initialQueue(), { type: "add", paths: ["b.mp4"] });
+    s = run(s, { type: "analyzed", key: 1, file: file("b.mp4", "videoWithAudio", 10) }, { type: "selectTarget", target: "png" });
+    expect(requestOf(s)?.frames).toEqual({ mode: "single", atSecs: null, everySecs: null });
+    s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("png", 10, true) });
+    const version = s.planVersion;
+    s = reduce(s, { type: "setFrames", frames: { mode: "sequence", atSecs: null, everySecs: 2 } });
+    expect(s.planVersion).toBe(version + 1);
+    expect(s.items[0].plan).toBeNull();
+    expect(requestOf(s)?.frames).toEqual({ mode: "sequence", atSecs: null, everySecs: 2 });
+    // Another picture format keeps the choice.
+    s = reduce(s, { type: "selectTarget", target: "jpg" });
+    expect(s.frames.mode).toBe("sequence");
+  });
+
   it("weights photos without a duration equally in the overall progress", () => {
     let s = run(initialQueue(), { type: "add", paths: ["a.jpg", "b.jpg"] });
     s = run(
@@ -171,7 +207,7 @@ describe("queue state machine", () => {
     s = reduce(s, { type: "planned", key: 1, version: old, plan: plan("mp3", 1) });
     expect(s.items[0].plan).toBe(null);
     expect(canStart(s)).toBe(false);
-    expect(requestOf(s)).toEqual({ target: "mp3", preset: "small", advanced: {} });
+    expect(requestOf(s)).toEqual({ target: "mp3", preset: "small", advanced: {}, frames: DEFAULT_FRAMES });
   });
 
   it("changing format resets the advanced options", () => {

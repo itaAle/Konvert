@@ -8,6 +8,7 @@ import type { ConversionRequest } from "../bindings/ConversionRequest";
 import type { ConversionWarning } from "../bindings/ConversionWarning";
 import type { ErrorPayload } from "../bindings/ErrorPayload";
 import type { FileAnalysis } from "../bindings/FileAnalysis";
+import type { FrameOptions } from "../bindings/FrameOptions";
 import type { JobEvent } from "../bindings/JobEvent";
 import type { Progress } from "../bindings/Progress";
 import type { QualityPreset } from "../bindings/QualityPreset";
@@ -47,6 +48,8 @@ export interface QueueState {
   target: TargetFormat | null;
   preset: QualityPreset;
   advanced: AdvancedOptions;
+  /** Pictures taken from videos (frame targets only). */
+  frames: FrameOptions;
   /** Bumped whenever the request changes: answers for older requests are discarded. */
   planVersion: number;
   notice: "cancelled" | null;
@@ -62,6 +65,7 @@ export type QueueAction =
   | { type: "selectTarget"; target: TargetFormat }
   | { type: "selectPreset"; preset: QualityPreset }
   | { type: "setAdvanced"; advanced: AdvancedOptions }
+  | { type: "setFrames"; frames: FrameOptions }
   | { type: "defaultPreset"; preset: QualityPreset }
   | { type: "planned"; key: number; version: number; plan: ConversionPlan }
   | { type: "planFailed"; key: number; version: number; error: ErrorPayload }
@@ -75,6 +79,9 @@ export type QueueAction =
 
 export const NO_TARGETS = "no_targets";
 
+/** One frame, in the middle of the video. */
+export const DEFAULT_FRAMES: FrameOptions = { mode: "single", atSecs: null, everySecs: null };
+
 export function initialQueue(preset: QualityPreset = "balanced"): QueueState {
   return {
     phase: "empty",
@@ -82,6 +89,7 @@ export function initialQueue(preset: QualityPreset = "balanced"): QueueState {
     target: null,
     preset,
     advanced: {},
+    frames: DEFAULT_FRAMES,
     planVersion: 0,
     notice: null,
     cancelling: false,
@@ -101,13 +109,23 @@ export function readyItems(state: QueueState): QueueItem[] {
   return state.items.filter((i) => i.status === "ready" && i.file);
 }
 
-/** Target formats offered for every analysed file (intersection). */
+/** Same kind of conversion: "audio" and "audio only" are both audio files. */
+const sameGroup = (a: TargetOption["group"], b: TargetOption["group"]) =>
+  a === b || (["audio", "audioOnly"].includes(a) && ["audio", "audioOnly"].includes(b));
+
+/**
+ * Target formats offered for every analysed file (intersection). A format must
+ * mean the same thing for every file: JPG is a converted photo for a picture
+ * but a frame for a video, so photos and videos share no picture format.
+ */
 export function commonTargets(items: QueueItem[]): TargetOption[] {
   const files = items.filter((i) => i.file && i.status !== "invalid").map((i) => i.file!);
   if (files.length === 0) return [];
   const mixedKinds = new Set(files.map((f) => f.media.kind === "audio")).size > 1;
   return files[0].targets
-    .filter((option) => files.every((f) => f.targets.some((o) => o.format === option.format)))
+    .filter((option) =>
+      files.every((f) => f.targets.some((o) => o.format === option.format && sameGroup(o.group, option.group))),
+    )
     .map((option) => ({
       ...option,
       // Audio files and videos together: the audio formats are just "audio".
@@ -117,7 +135,9 @@ export function commonTargets(items: QueueItem[]): TargetOption[] {
 }
 
 export function requestOf(state: QueueState): ConversionRequest | null {
-  return state.target ? { target: state.target, preset: state.preset, advanced: state.advanced } : null;
+  return state.target
+    ? { target: state.target, preset: state.preset, advanced: state.advanced, frames: state.frames }
+    : null;
 }
 
 export function canStart(state: QueueState): boolean {
@@ -280,6 +300,10 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
     case "setAdvanced":
       if (state.phase !== "setup") return state;
       return invalidate({ ...state, advanced: action.advanced, notice: null });
+
+    case "setFrames":
+      if (state.phase !== "setup") return state;
+      return invalidate({ ...state, frames: action.frames, notice: null });
 
     case "defaultPreset":
       return state.phase === "empty" ? { ...state, preset: action.preset } : state;

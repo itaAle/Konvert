@@ -36,23 +36,30 @@ function Checkmark() {
 
 const outputName = (item: QueueItem) => item.outcome?.output.split(/[\\/]/).pop() ?? item.name;
 
-/** Single file converted successfully. */
+/** Number of files when a series of pictures was saved in a new folder. */
+const folderFiles = (item: QueueItem) => ((item.outcome?.files ?? 1) > 1 ? item.outcome!.files : null);
+
+/** Single file (or one folder of pictures) converted successfully. */
 export function DoneScreen({ q, item }: { q: QueueController; item: QueueItem }) {
+  const files = folderFiles(item);
   return (
     <div className="flex flex-col items-center justify-center text-center">
       <Checkmark />
       <h1 className="mt-6 text-[26px] font-semibold tracking-[-0.02em]">{t("done.title")}</h1>
       <p className="mt-2 max-w-lg truncate text-[15px] text-label-secondary" title={item.outcome?.output}>
-        {t("done.saved", { name: outputName(item) })} · {formatBytes(item.outcome?.sizeBytes ?? 0)}
+        {files != null
+          ? t("done.savedFolder", { n: files, name: outputName(item) })
+          : t("done.saved", { name: outputName(item) })}{" "}
+        · {formatBytes(item.outcome?.sizeBytes ?? 0)}
       </p>
       <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
         <Button
           variant="primary"
           size="lg"
-          icon={<ExternalLink size={18} aria-hidden />}
+          icon={files != null ? <FolderOpen size={18} aria-hidden /> : <ExternalLink size={18} aria-hidden />}
           onClick={() => item.jobId != null && q.openOutput(item.jobId)}
         >
-          {t("actions.open")}
+          {files != null ? t("actions.openFolder") : t("actions.open")}
         </Button>
         <Button
           size="lg"
@@ -95,7 +102,9 @@ export function BatchDoneScreen({ q }: { q: QueueController }) {
               </p>
               <p className={`truncate text-[12px] ${item.status === "done" ? "text-label-secondary" : "text-danger"}`}>
                 {item.status === "done"
-                  ? formatBytes(item.outcome?.sizeBytes ?? 0)
+                  ? [folderFiles(item) != null && t("done.pictures", { n: folderFiles(item)! }), formatBytes(item.outcome?.sizeBytes ?? 0)]
+                      .filter(Boolean)
+                      .join(" · ")
                   : item.status === "cancelled"
                     ? t("status.cancelled")
                     : errorMessage(item.error?.code ?? "unknown")}

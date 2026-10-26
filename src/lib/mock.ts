@@ -32,19 +32,44 @@ const audioCodec = (codec: AudioCodecInfo["codec"]): AudioCodecInfo => ({
   maxChannels: codec === "mp3" ? 2 : null,
 });
 
-const option = (format: TargetFormat, label: string, group: TargetOption["group"], lossless = false): TargetOption => ({
+const ANIMATIONS: TargetFormat[] = ["gif", "animatedWebp", "apng"];
+const EXTENSIONS: Partial<Record<TargetFormat, string>> = {
+  alac: "m4a",
+  animatedWebp: "webp",
+  stillGif: "gif",
+};
+
+const option = (
+  format: TargetFormat,
+  label: string,
+  group: TargetOption["group"],
+  lossless = false,
+  secondary = false,
+): TargetOption => ({
   format,
   label,
-  extension: format,
+  extension: EXTENSIONS[format] ?? format,
   group,
   lossless,
   sameAsInput: false,
-  kind: group === "video" ? "video" : group === "image" ? "image" : "audio",
-  secondary: false,
+  kind: group === "video" ? "video" : group === "image" || group === "frames" ? "image" : "audio",
+  secondary,
   videoCodecs:
-    group !== "video" ? [] : format === "webm" ? ["vp9", "av1"] : format === "gif" ? ["gif"] : ["h264", "av1"],
+    group !== "video"
+      ? []
+      : format === "webm"
+        ? ["vp9", "av1"]
+        : format === "gif"
+          ? ["gif"]
+          : format === "animatedWebp"
+            ? ["webp"]
+            : format === "apng"
+              ? ["apng"]
+              : format === "mpg"
+                ? ["mpeg2"]
+                : ["h264", "av1"],
   audioCodecs:
-    format === "gif" || group === "image"
+    ANIMATIONS.includes(format) || group === "image" || group === "frames"
       ? []
       : [audioCodec(lossless ? "flac" : format === "webm" || format === "opus" ? "opus" : "aac")],
 });
@@ -52,11 +77,33 @@ const option = (format: TargetFormat, label: string, group: TargetOption["group"
 const AUDIO: TargetOption[] = [
   option("mp3", "MP3", "audio"),
   option("m4a", "M4A (AAC)", "audio"),
+  option("alac", "ALAC (M4A)", "audio", true),
   option("flac", "FLAC", "audio", true),
   option("ogg", "OGG (Vorbis)", "audio"),
   option("opus", "OPUS", "audio"),
   option("wma", "WMA", "audio"),
   option("aiff", "AIFF", "audio", true),
+  option("aac", "AAC", "audio", false, true),
+  option("ac3", "AC3", "audio", false, true),
+  option("eac3", "E-AC3", "audio", false, true),
+  option("mp2", "MP2", "audio", false, true),
+  option("caf", "CAF (ALAC)", "audio", true, true),
+  option("mka", "MKA", "audio", false, true),
+];
+
+const VIDEO: TargetOption[] = [
+  option("mp4", "MP4", "video"),
+  option("mkv", "MKV", "video"),
+  option("mov", "MOV", "video"),
+  option("webm", "WebM", "video"),
+  option("avi", "AVI", "video"),
+  option("ts", "TS", "video", false, true),
+  option("mpg", "MPG (MPEG-2)", "video", false, true),
+  option("3gp", "3GP", "video", false, true),
+  option("flv", "FLV", "video", false, true),
+  option("gif", "GIF", "video"),
+  option("animatedWebp", "WebP", "video"),
+  option("apng", "APNG", "video", true, true),
 ];
 
 const IMAGES: TargetOption[] = [
@@ -64,6 +111,16 @@ const IMAGES: TargetOption[] = [
   option("png", "PNG", "image", true),
   option("webp", "WebP", "image"),
   option("avif", "AVIF", "image"),
+  option("bmp", "BMP", "image", true, true),
+  option("tiff", "TIFF", "image", true, true),
+  option("stillGif", "GIF", "image", false, true),
+  option("ico", "ICO", "image", true, true),
+];
+
+const FRAMES: TargetOption[] = [
+  option("jpg", "JPG", "frames"),
+  option("png", "PNG", "frames", true),
+  option("webp", "WebP", "frames"),
 ];
 
 function analysis(path: string): FileAnalysis {
@@ -108,12 +165,10 @@ function analysis(path: string): FileAnalysis {
         picture: null,
       },
       targets: [
-        ...(["mp4", "mkv", "mov", "webm", "avi", "gif"] as TargetFormat[]).map((f) => ({
-          ...option(f, f === "webm" ? "WebM" : f.toUpperCase(), "video"),
-          sameAsInput: f === "mp4",
-        })),
+        ...VIDEO.map((o) => ({ ...o, sameAsInput: o.format === "mp4" })),
         ...AUDIO.map((o) => ({ ...o, group: "audioOnly" as const })),
         option("wav", "WAV", "audioOnly", true),
+        ...FRAMES,
       ],
     };
   }
@@ -171,6 +226,44 @@ export const mockBackend: Backend = {
     return analysis(path);
   },
   async planConversion(_path, media, request) {
+    const fromVideo = media.kind !== "image" && ["jpg", "png", "webp"].includes(request.target);
+    if (fromVideo) {
+      const frames = request.frames ?? { mode: "single", atSecs: null, everySecs: null };
+      const duration = media.durationSecs ?? 0;
+      const fps = media.video[0]?.fps ?? 25;
+      const count =
+        frames.mode === "single" ? 1 : Math.max(1, Math.ceil(frames.everySecs ? duration / frames.everySecs : duration * fps));
+      const source = media.video[0];
+      const plan: ConversionPlan = {
+        target: request.target,
+        videoStream: 0,
+        video: null,
+        audioStream: null,
+        audio: null,
+        coverArtStream: null,
+        image: {
+          codec: request.target === "jpg" ? "jpeg" : (request.target as "png" | "webp"),
+          quality: request.target === "png" ? { kind: "lossless", effort: 6 } : { kind: "lossy", quality: 85 },
+          width: source?.width ?? null,
+          height: source?.height ?? null,
+          resize: false,
+          alpha: false,
+          flatten: false,
+          gridGroup: null,
+          alphaStream: null,
+          icons: [],
+        },
+        frames: {
+          mode: frames.mode,
+          atSecs: frames.mode === "single" ? (frames.atSecs ?? duration / 2) : null,
+          everySecs: frames.mode === "single" ? null : (frames.everySecs ?? null),
+          count,
+        },
+        warnings: count > 300 ? ["manyFiles"] : [],
+        estimate: { bytes: count * 350_000, approximate: true },
+      };
+      return plan;
+    }
     if (media.kind === "image") {
       const png = request.target === "png";
       const quality = { max: 95, balanced: 82, small: 65 }[request.preset];
@@ -245,11 +338,15 @@ export const mockBackend: Backend = {
         });
         if (fraction >= 1) {
           clearInterval(timer);
+          // A series of frames is saved in a folder named after the video.
+          const series = request.frames?.mode === "sequence" && ["jpg", "png", "webp"].includes(request.target);
           emit({
             jobId,
             update: {
               state: "done",
-              outcome: { output: `C:\\Musica\\${name}.${request.target}`, sizeBytes: 5_400_000, files: 1, elapsed: 6.2 },
+              outcome: series
+                ? { output: `C:\\Video\\${name}`, sizeBytes: 42_000_000, files: 120, elapsed: 9.8 }
+                : { output: `C:\\Musica\\${name}.${request.target}`, sizeBytes: 5_400_000, files: 1, elapsed: 6.2 },
             },
           });
         }

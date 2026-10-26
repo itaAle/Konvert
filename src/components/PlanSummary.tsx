@@ -16,6 +16,8 @@ const STRONG: ConversionWarning[] = [
   "channelsDownmixed",
   "transparencyLost",
   "pictureDownscaled",
+  "largeFile",
+  "manyFiles",
 ];
 
 export function hasStrongWarning(warnings: ConversionWarning[]): boolean {

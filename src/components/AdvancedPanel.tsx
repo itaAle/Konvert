@@ -48,7 +48,8 @@ export function AdvancedPanel({ option, value, onChange }: AdvancedPanelProps) {
   const num = (v: string) => (v === AUTO ? null : Number(v));
   const str = (v: number | null | undefined) => (v == null ? AUTO : String(v));
 
-  const isGif = option.format === "gif";
+  // GIF, animated WebP and APNG: short loops with their own size and frame rate limits.
+  const isGif = option.format === "gif" || option.format === "animatedWebp" || option.format === "apng";
   const isVideo = option.kind === "video";
   const audioCodec = option.audioCodecs.find((c) => c.codec === value.audioCodec) ?? option.audioCodecs[0];
   const autoLabel = t("advanced.auto");
@@ -57,18 +58,22 @@ export function AdvancedPanel({ option, value, onChange }: AdvancedPanelProps) {
   const fields: ReactElement[] = [];
 
   if (option.kind === "image") {
-    if (!option.lossless) {
+    // Lossless formats and GIF (a palette) have no quality to tune.
+    if (!option.lossless && option.format !== "stillGif") {
       fields.push(
         <Select key="iquality" label={t("advanced.imageQuality")} value={str(value.imageQuality)}
           options={[{ value: AUTO, label: autoLabel }, ...IMAGE_QUALITIES.map((q) => ({ value: String(q), label: String(q) }))]}
           onChange={(v) => set({ imageQuality: num(v) })} />,
       );
     }
-    fields.push(
-      <Select key="maxdim" label={t("advanced.maxDimension")} value={str(value.maxDimension)}
-        options={[{ value: AUTO, label: originalLabel }, ...MAX_DIMENSIONS.map((d) => ({ value: String(d), label: t("advanced.pixels", { n: d }) }))]}
-        onChange={(v) => set({ maxDimension: num(v) })} />,
-    );
+    // An icon has fixed sizes.
+    if (option.format !== "ico") {
+      fields.push(
+        <Select key="maxdim" label={t("advanced.maxDimension")} value={str(value.maxDimension)}
+          options={[{ value: AUTO, label: originalLabel }, ...MAX_DIMENSIONS.map((d) => ({ value: String(d), label: t("advanced.pixels", { n: d }) }))]}
+          onChange={(v) => set({ maxDimension: num(v) })} />,
+      );
+    }
   }
   if (isVideo && !isGif && option.videoCodecs.length > 1) {
     const opts: SelectOption<string>[] = [
@@ -134,6 +139,8 @@ export function AdvancedPanel({ option, value, onChange }: AdvancedPanelProps) {
         onChange={(v) => set({ channels: v === AUTO ? null : (v as AdvancedOptions["channels"]) })} />,
     );
   }
+
+  if (fields.length === 0) return null;
 
   return (
     <section>

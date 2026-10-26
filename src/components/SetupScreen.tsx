@@ -2,6 +2,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Info, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 
+import type { TargetFormat } from "../bindings/TargetFormat";
 import { t } from "../i18n";
 import { revealVariants } from "../lib/motion";
 import { allWarnings, canStart, commonTargets, readyItems, totalEstimate } from "../state/queue";
@@ -11,10 +12,14 @@ import { DestinationRow } from "./DestinationRow";
 import { FileCard } from "./FileCard";
 import { FileList } from "./FileList";
 import { FormatGrid } from "./FormatGrid";
+import { FramesPanel } from "./FramesPanel";
 import { PlanFooterInfo, PlanSummary, hasStrongWarning, isRemux } from "./PlanSummary";
 import { QualityPicker } from "./QualityPicker";
 import { Button } from "./ui/Button";
 import { Page } from "./ui/Page";
+
+/** Formats whose result does not depend on the quality preset. */
+const FIXED_QUALITY: TargetFormat[] = ["bmp", "tiff", "stillGif", "ico"];
 
 function SectionTitle({ children }: { children: string }) {
   return <h2 className="mb-3 px-1 text-[17px] font-semibold tracking-[-0.01em]">{children}</h2>;
@@ -34,6 +39,11 @@ export function SetupScreen({ q }: { q: QueueController }) {
   const allPlanned = ready.length > 0 && ready.every((i) => i.plan);
   const estimate = allPlanned ? totalEstimate(ready) : null;
   const remux = allPlanned && ready.every((i) => isRemux(i.plan!));
+  // Pictures from videos: the moment must exist in every video.
+  const durations = ready.map((i) => i.file?.media.durationSecs ?? null);
+  const shortest = durations.every((d) => d != null) && durations.length > 0 ? Math.min(...(durations as number[])) : null;
+  const counts = ready.map((i) => i.plan?.frames?.count ?? null);
+  const pictures = allPlanned && counts.every((n) => n != null) ? (counts as number[]).reduce((a, b) => a + b, 0) : null;
 
   // Bring quality and warnings into view once the options have appeared, and
   // whenever an important warning shows up, so it never stays below the fold.
@@ -120,10 +130,18 @@ export function SetupScreen({ q }: { q: QueueController }) {
               }}
               className="flex flex-col gap-6"
             >
-              <section>
-                <SectionTitle>{t("quality.title")}</SectionTitle>
-                <QualityPicker value={state.preset} onChange={q.selectPreset} />
-              </section>
+              {option.group === "frames" && (
+                <section>
+                  <SectionTitle>{t("frames.title")}</SectionTitle>
+                  <FramesPanel value={state.frames} onChange={q.setFrames} duration={shortest} count={pictures} />
+                </section>
+              )}
+              {!FIXED_QUALITY.includes(option.format) && (
+                <section>
+                  <SectionTitle>{t("quality.title")}</SectionTitle>
+                  <QualityPicker value={state.preset} onChange={q.selectPreset} />
+                </section>
+              )}
               <AdvancedPanel option={option} value={state.advanced} onChange={q.setAdvanced} />
               {/* Margin keeps the content clear of the faded edge above the footer. */}
               <div ref={summaryRef} className="flex scroll-mb-10 flex-col gap-4">
