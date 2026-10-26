@@ -130,7 +130,7 @@ echo "==> Building FFmpeg"
 mkdir -p "$BUILD/ffmpeg"
 ( cd "$BUILD/ffmpeg" && "$SRC/ffmpeg/configure" \
     --prefix="$PREFIX" --pkg-config-flags=--static --extra-version=konvert \
-    --extra-cflags="-I$PREFIX/include" --extra-ldflags="-L$PREFIX/lib" --extra-libs="-lc++" \
+    --extra-cflags="-I$PREFIX/include" --extra-ldflags="-L$PREFIX/lib" --extra-libs="-lc++ -liconv" \
     --enable-version3 --disable-gpl --disable-nonfree \
     --enable-static --disable-shared --disable-autodetect --disable-network \
     --disable-ffplay --disable-doc --disable-debug \
