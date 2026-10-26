@@ -1,0 +1,90 @@
+# Builds the macOS and Linux packages of a release with scripts/build-release.sh.
+# Run it by hand. It only produces workflow artifacts (packages + .sha256): the
+# owner downloads them, checks them and attaches them to the GitHub release.
+# The Windows installer is built locally with `npm run release`.
+#
+# macOS signing and notarization need these repository secrets:
+#   APPLE_CERTIFICATE           Developer ID Application certificate (.p12), base64
+#   APPLE_CERTIFICATE_PASSWORD  password of the .p12
+#   APPLE_SIGNING_IDENTITY      "Developer ID Application: Name (TEAMID)"
+#   APPLE_ID                    Apple Account e-mail used for notarization
+#   APPLE_PASSWORD              app-specific password of that account
+#   APPLE_TEAM_ID               Team ID
+name: Release packages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macOS arm64, os: macos-15 }
+          - { name: Linux x64, os: ubuntu-22.04 }
+          - { name: Linux arm64, os: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+        with:
+          require-pinned-ffmpeg: "true"
+
+      - name: Import the signing certificate (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          if [[ -z "$APPLE_CERTIFICATE" ]]; then
+            echo "::error::The APPLE_* secrets are missing: see the header of this workflow."
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/certificate.p12"
+
+      - name: Build, check and package
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash scripts/build-release.sh
+
+      - name: No network activity (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          src-tauri/binaries/ffmpeg/ffmpeg -hide_banner -loglevel error -f lavfi -i sine=d=3 "$RUNNER_TEMP/test.wav"
+          xvfb-run -a bash scripts/monitor-network.sh --seconds 30 target/release/konvert "$RUNNER_TEMP/test.wav"
+
+      - name: No network activity (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          src-tauri/binaries/ffmpeg/ffmpeg -hide_banner -loglevel error -f lavfi -i sine=d=3 "$RUNNER_TEMP/test.wav"
+          # The signed app as shipped (its main executable is the only file in Contents/MacOS).
+          app_exe="$(find target/release/bundle/macos/Konvert.app/Contents/MacOS -maxdepth 1 -type f | head -n1)"
+          bash scripts/monitor-network.sh --seconds 30 "$app_exe" "$RUNNER_TEMP/test.wav"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: konvert-${{ runner.os }}-${{ runner.arch }}
+          path: release/
+          if-no-files-found: error

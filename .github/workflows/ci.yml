@@ -1,0 +1,57 @@
+# Tests on every supported platform, then a network check of the real app on Linux
+# and macOS: it runs for a while with a file open and must not touch the network.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows x64, os: windows-2025 }
+          - { name: macOS arm64, os: macos-15 }
+          - { name: Linux x64, os: ubuntu-22.04 }
+          - { name: Linux arm64, os: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+
+      - name: Privacy, licenses and tests
+        shell: bash
+        run: npm test
+
+      - name: Build the app (debug, no packages)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: npx tauri build --debug --no-bundle
+
+      - name: No network activity (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          src-tauri/binaries/ffmpeg/ffmpeg -hide_banner -loglevel error -f lavfi -i sine=d=3 "$RUNNER_TEMP/test.wav"
+          xvfb-run -a bash scripts/monitor-network.sh --seconds 30 target/debug/konvert "$RUNNER_TEMP/test.wav"
+
+      - name: No network activity (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          src-tauri/binaries/ffmpeg/ffmpeg -hide_banner -loglevel error -f lavfi -i sine=d=3 "$RUNNER_TEMP/test.wav"
+          bash scripts/monitor-network.sh --seconds 30 target/debug/konvert "$RUNNER_TEMP/test.wav"
