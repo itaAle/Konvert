@@ -1,20 +1,21 @@
 # Konvert
-Audio and video file converter with a modern interface.
+Audio, video and image file converter with a modern interface.
 
-Konvert converts audio and video files from one format to another **entirely on your
-computer**: no network connections, no telemetry, no account.
+Konvert converts audio, video and image files from one format to another **entirely on
+your computer**: no network connections, no telemetry, no account.
 
 Platform: Windows 10/11 (64-bit). Linux and macOS are planned for a later phase.
 
 ## How to use it
 
-1. Drag one or more audio or video files into the window (or use **Choose files…**,
+1. Drag one or more audio, video or image files into the window (or use **Choose files…**,
    Ctrl+O, or right-click the file → **Open with** → **Konvert**).
 2. Konvert analyzes them and offers only the formats that make sense (for several files:
    the ones they all have in common).
 3. Pick the format and the quality (**Best quality**, **Balanced**, **Small file**): the
    estimated size and any warnings appear right away. Under **Advanced** you can adjust
-   bitrate, sample rate, channels, resolution, frame rate and codec.
+   bitrate, sample rate, channels, resolution, frame rate and codec (for pictures: quality
+   and maximum size).
 4. Press **Convert**: progress for each file and overall, time remaining, and **Cancel**
    at any moment. When it is done you can open the files or show them in their folder.
 
@@ -29,11 +30,12 @@ and the Mica effect on Windows 11.
 
 Konvert only offers the conversions that make sense for the file you give it:
 
-| Input file          | Formats offered                                                       |
-| ------------------- | --------------------------------------------------------------------- |
-| Audio               | MP3, M4A (AAC), WAV, FLAC, OGG (Vorbis), OPUS, WMA, AIFF              |
-| Video with audio    | MP4, MKV, MOV, WebM, AVI, GIF, and **audio only** in every audio format |
-| Video without audio | MP4, MKV, MOV, WebM, AVI, GIF                                         |
+| Input file                                         | Formats offered                                                       |
+| -------------------------------------------------- | --------------------------------------------------------------------- |
+| Audio                                              | MP3, M4A (AAC), WAV, FLAC, OGG (Vorbis), OPUS, WMA, AIFF              |
+| Video with audio                                   | MP4, MKV, MOV, WebM, AVI, GIF, and **audio only** in every audio format |
+| Video without audio                                | MP4, MKV, MOV, WebM, AVI, GIF                                         |
+| Picture (JPG/JPEG, PNG, WebP, AVIF, HEIC/HEIF, BMP, TIFF) | JPG, PNG, WebP, AVIF                                           |
 
 - When the streams are already compatible with the chosen format (e.g. MP4 H.264/AAC →
   MKV), they are copied **without re-encoding**: instant and lossless.
@@ -41,6 +43,16 @@ Konvert only offers the conversions that make sense for the file you give it:
   and when cover art, subtitles or extra audio tracks are dropped.
 - Metadata and cover art are kept where the format allows it (MP3, M4A, FLAC).
 - H.264 video with OpenH264, VP9 for WebM, AV1 (SVT-AV1) among the advanced options.
+
+Pictures:
+
+- Photos are turned the right way up (EXIF orientation, HEIC rotation), and HEIC photos from
+  phones, stored as a grid of tiles, are put back together.
+- Pictures keep their size unless you choose a maximum size under **Advanced**.
+- Transparency is kept in PNG, WebP and AVIF; in JPG, transparent areas become white.
+- EXIF data (camera, date, location) is kept when a JPEG, PNG or WebP picture becomes a PNG;
+  the other conversions leave it out, and Konvert tells you so before converting.
+- Animated GIF, WebP and PNG files are treated as videos.
 
 The format table is declarative: `crates/konvert-core/src/formats.rs`.
 
@@ -150,8 +162,9 @@ Every dependency and its license is listed in
 
 Ideas collected for upcoming updates:
 
-- **Images**: conversion of JPG/JPEG, PNG, WebP, AVIF files (image files are rejected
-  today because Konvert handles audio and video only).
+- **Bug fix: portrait videos.** Videos recorded with the phone upright come out stretched
+  when Konvert resizes them (GIF, or **Maximum resolution** under **Advanced**): the new
+  size is computed without the rotation stored in the video.
 - **Linux** and **macOS** versions.
 - **Hardware-accelerated** video (NVIDIA NVENC, Intel Quick Sync, AMD AMF), with
   automatic detection.
@@ -199,6 +212,7 @@ npm run licenses          # regenerate THIRD_PARTY_LICENSES
 npm run cli -- targets "C:\path\video.mp4"              # formats offered
 npm run cli -- plan "C:\path\video.mp4" --to webm         # decisions, warnings, estimate
 npm run cli -- convert "C:\path\song.wav" --to mp3 --preset balanced
+npm run cli -- convert "C:\path\photo.heic" --to jpg --max-size 1920
 ```
 
 `konvert-cli` is a development tool that uses the same engine as the app; it is not
@@ -252,7 +266,7 @@ and the build recipe are listed in [`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES
 **H.264 patents**: H.264 video is encoded with OpenH264, whose BSD license covers the
 source code only. **H.264 patents are not covered by the BSD license of OpenH264**
 (Cisco's patent coverage applies only to the OpenH264 binaries distributed by Cisco
-itself). Some codecs (H.264, AAC) may be subject to patents in some countries: whoever
+itself). Some codecs (H.264, HEVC, AAC) may be subject to patents in some countries: whoever
 uses or redistributes Konvert is responsible for any licenses that may be required.
 
 Every dependency, with its license and full text, is in
