@@ -18,10 +18,12 @@
 # Packages: macOS .dmg; Linux .deb, .rpm and .AppImage (x86_64 or arm64, the
 # architecture of the build machine).
 #
-# macOS signing and notarization use these environment variables (all optional
-# for a local test build, which is then signed ad hoc and not notarized):
+# macOS signing and notarization are optional and use these environment variables:
 #   APPLE_SIGNING_IDENTITY  "Developer ID Application: Name (TEAMID)", in the keychain
 #   APPLE_ID, APPLE_PASSWORD (app-specific password), APPLE_TEAM_ID
+# Without them (no Apple Developer account) the app is signed ad hoc and not
+# notarized: it runs on Apple Silicon, but Gatekeeper asks the user to allow it
+# once (see "Installation" in README.md).
 #
 # Network is used only here, at build time (npm, FFmpeg archive, the AppImage
 # tools that Tauri downloads, Apple's notary service). The app never connects.
@@ -60,6 +62,11 @@ if [[ "$OS" == Darwin ]]; then
     echo "warning: APPLE_SIGNING_IDENTITY is not set: ad hoc signature, no notarization." >&2
     SIGNING_IDENTITY="-"
     export APPLE_SIGNING_IDENTITY="-"
+  fi
+  # Tauri notarizes whenever these variables exist, even empty (CI passes missing
+  # secrets as empty strings): keep them only for a Developer ID build.
+  if [[ "$SIGNING_IDENTITY" == "-" || -z "${APPLE_ID:-}" ]]; then
+    unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
   fi
   # Tauri signs the app, not the executables among its resources: sign FFmpeg first
   # (hardened runtime and secure timestamp, both required for notarization).

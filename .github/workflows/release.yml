@@ -3,7 +3,9 @@
 # owner downloads them, checks them and attaches them to the GitHub release.
 # The Windows installer is built locally with `npm run release`.
 #
-# macOS signing and notarization need these repository secrets:
+# macOS: without secrets the app is signed ad hoc and not notarized (no Apple
+# Developer account needed; users allow it once in Gatekeeper, see README.md).
+# For a Developer ID signature and notarization, add these repository secrets:
 #   APPLE_CERTIFICATE           Developer ID Application certificate (.p12), base64
 #   APPLE_CERTIFICATE_PASSWORD  password of the .p12
 #   APPLE_SIGNING_IDENTITY      "Developer ID Application: Name (TEAMID)"
@@ -46,8 +48,8 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
           if [[ -z "$APPLE_CERTIFICATE" ]]; then
-            echo "::error::The APPLE_* secrets are missing: see the header of this workflow."
-            exit 1
+            echo "::warning::No APPLE_* secrets: the app is signed ad hoc and not notarized."
+            exit 0
           fi
           keychain="$RUNNER_TEMP/signing.keychain-db"
           keychain_password="$(uuidgen)"

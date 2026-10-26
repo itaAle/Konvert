@@ -79,9 +79,9 @@ WebView2, which is already part of Windows 11 and of an up-to-date Windows 10. I
 missing, the installer tells you: install the "WebView2 Runtime" from the Microsoft
 website. The installer never downloads anything.
 
-**macOS.** Open the `.dmg` and drag Konvert into **Applications**. The app is signed with
-a Developer ID and notarized by Apple, so it opens without warnings. Konvert appears in
+**macOS.** Open the `.dmg` and drag Konvert into **Applications**. Konvert appears in
 Finder's **Open With** menu for the supported formats, without becoming the default app.
+The app is not notarized by Apple yet (see [macOS Gatekeeper warning](#macos-gatekeeper-warning)).
 
 **Linux.** Install the `.deb` (`sudo apt install ./Konvert_<version>_amd64.deb`) or the
 `.rpm` (`sudo dnf install ./Konvert-<version>-1.x86_64.rpm`): the package manager adds the
@@ -115,6 +115,21 @@ show **"Windows protected your PC"** (unrecognized app). To proceed safely:
 
 The source code is public: anyone can review it and rebuild the installer
 (see [Building a release](#building-a-release)).
+
+### macOS Gatekeeper warning
+
+Konvert for macOS is signed ad hoc but not notarized (that needs a paid Apple Developer
+account), so the first time you open it macOS says that it **cannot verify** Konvert. To
+proceed safely:
+
+1. download the `.dmg` **only** from the Releases page of this repository and verify the
+   checksum as described above;
+2. open Konvert once and close the warning (do not move it to the Bin);
+3. go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway**
+   next to the message about Konvert, then confirm.
+
+macOS remembers the choice: later launches open normally. Alternatively, in Terminal:
+`xattr -dr com.apple.quarantine /Applications/Konvert.app`.
 
 ## Updates
 
@@ -309,9 +324,9 @@ with its hash). The first build downloads the NSIS or AppImage tools used by Tau
 
 The macOS and Linux packages are built by the **Release packages** GitHub Actions workflow
 (started by hand), which also runs the network monitor on the finished app. On macOS it
-signs FFmpeg and the app with the Developer ID and notarizes the app and the `.dmg`: the
-certificate and the Apple account are read from repository secrets, listed at the top of
-`.github/workflows/release.yml`. Publish every package with its `.sha256` file on the
+signs FFmpeg and the app ad hoc. If the repository secrets listed at the top of
+`.github/workflows/release.yml` exist (Apple Developer ID certificate and account), it
+signs with the Developer ID and notarizes the app and the `.dmg` instead. Publish every package with its `.sha256` file on the
 Releases page.
 
 ## Licenses

@@ -68,7 +68,7 @@ Cargo workspace (`Cargo.toml`, resolver 3, toolchain pinned to 1.99.1 in `rust-t
   - `generate-licenses.mjs` (regenerates `THIRD_PARTY_LICENSES` from the crates of every shipped platform; rerun it when dependencies or the version change).
   - `monitor-network.ps1` (Windows) and `monitor-network.sh` (strace on Linux, lsof on macOS).
   - `build-release.ps1` (Windows installer) and `build-release.sh` (macOS/Linux packages; signs FFmpeg for the hardened runtime, checks FFmpeg is executable in each package). 7 steps: version, npm ci, FFmpeg, checks and tests, build with `--remap-path-prefix`, check that the executable contains no local paths, copy to `release/` with SHA-256.
-- `.github/`: `ci.yml` (npm test on Windows, macOS arm64, Linux x64/arm64 + network monitor of the app), `release.yml` (manual; signed and notarized .dmg, Linux packages, as artifacts; needs the `APPLE_*` secrets listed in its header), `ffmpeg-macos.yml`, shared `actions/setup`. Actions are pinned by commit SHA.
+- `.github/`: `ci.yml` (npm test on Windows, macOS arm64, Linux x64/arm64 + network monitor of the app), `release.yml` (manual; .dmg signed ad hoc, or with Developer ID + notarization when the optional `APPLE_*` secrets listed in its header exist; Linux packages; as artifacts), `ffmpeg-macos.yml`, shared `actions/setup`. Actions are pinned by commit SHA.
 - Process lifetime: Windows Job Object; Linux `PR_SET_PDEATHSIG`; macOS has no equivalent (an orphan after a crash only writes into the temp run dir, cleaned at next start).
 
 ## FFmpeg and licenses
@@ -119,12 +119,12 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
   - the low disk space warning;
   - 0.2.0 installer: upgrade over 0.1.0, "Open with" on pictures, real iPhone HEIC photos (tests use synthetic HEIC files).
 
-- 2026-10-26: **macOS (Apple Silicon) and Linux support** on `main`, not pushed, not yet run on real CI. Owner's decisions: Developer ID signing + notarization; .deb + .rpm + AppImage; Linux x86_64 + arm64.
+- 2026-10-26: **macOS (Apple Silicon) and Linux support** on `main`, not pushed, not yet run on real CI. Owner's decisions: macOS without an Apple Developer account for now (ad hoc signature, no notarization, Gatekeeper "Open Anyway" documented in the README); .deb + .rpm + AppImage; Linux x86_64 + arm64.
   To do by the owner, in order:
   1. push, then run the **FFmpeg for macOS** workflow;
   2. upload its two archives, plus the BtbN `linux64-lgpl` and `linuxarm64-lgpl` archives, to the `ffmpeg-n9.0.2-36` mirror release;
   3. pin the macOS archive's SHA-256 in `ffmpeg-manifest.json` (`platforms.macos-aarch64.sha256`) and regenerate the licenses;
-  4. add the `APPLE_*` secrets, then run **Release packages**.
+  4. run **Release packages** (no secrets needed).
   Not verified on real hardware yet: drag & drop and "Open With" on macOS/Linux, Gatekeeper, the Linux desktop integration.
 
 ## Backlog (next work, by priority)
@@ -135,7 +135,7 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
 2. Finish the macOS/Linux rollout (see Current status), and macOS window vibrancy (needs `macOSPrivateApi`).
 3. Hardware encoders NVENC/QSV/AMF/h264_mf/VideoToolbox, with automatic detection.
 4. FFmpeg built without any network support on Windows and Linux (macOS already is).
-5. Code signing of the installer.
+5. Code signing of the Windows installer; Developer ID signing + notarization on macOS (add the `APPLE_*` secrets, the workflow is ready).
 6. Maybe: keep EXIF in JPG/WebP/AVIF too (FFmpeg does not write it: it would have to be copied by hand, with the orientation reset).
 
 ## Workflow for every feature
