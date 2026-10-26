@@ -469,6 +469,15 @@ async fn run_pages(
     let output_dir = job.output_dir.clone();
     let temp = temp_dir.clone();
     let moved = tokio::task::spawn_blocking(move || {
+        // One page: a single picture next to the others, no folder.
+        if let [number] = numbers[..] {
+            let mut name = stem.clone();
+            name.push(format!("-{label}-{number:0digits$}"));
+            let file = temp.join(format!("page-{number:06}.{ext}"));
+            let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+            return naming::move_to_unique(&file, &output_dir, &name, ext)
+                .map(|path| (path, 1, size));
+        }
         naming::move_series_named(&temp, &output_dir, &stem, ext, |i, _| {
             let mut name = stem.clone();
             name.push(format!("-{label}-{:0digits$}.{ext}", numbers[i]));

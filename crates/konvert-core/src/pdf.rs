@@ -106,7 +106,7 @@ pub fn probe(path: &Path) -> Result<MediaInfo, CoreError> {
 /// Pages chosen by the user, 1-based and in document order: `None` or an
 /// empty text means every page; otherwise `"1-3, 5, 8-"` (open ranges allowed).
 pub fn parse_pages(text: Option<&str>, count: u32) -> Result<Vec<u32>, CoreError> {
-    let invalid = |part: &str| CoreError::UnsupportedConversion {
+    let invalid = |part: &str| CoreError::InvalidPages {
         details: format!("invalid page range \"{part}\" (the document has {count} pages)"),
     };
     let text = text.map(str::trim).unwrap_or_default();
@@ -519,7 +519,7 @@ mod tests {
         assert_eq!(parse_pages(Some("-2"), 6).unwrap(), [1, 2]);
         for wrong in ["0", "7", "3-2", "a", "1-x", "2--3"] {
             let err = parse_pages(Some(wrong), 6).unwrap_err();
-            assert_eq!(err.code(), "unsupported_conversion", "{wrong}");
+            assert_eq!(err.code(), "invalid_pages", "{wrong}");
         }
     }
 

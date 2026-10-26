@@ -34,6 +34,10 @@ pub enum CoreError {
     #[error("this conversion is not supported")]
     UnsupportedConversion { details: String },
 
+    /// The pages chosen in a PDF do not exist or cannot be read (`"1-3, 5"`).
+    #[error("invalid page range")]
+    InvalidPages { details: String },
+
     /// The PDF needs a password to be opened (Konvert does not ask for passwords).
     #[error("the PDF is protected by a password")]
     PdfEncrypted,
@@ -69,6 +73,7 @@ impl CoreError {
             CoreError::NotMedia => "not_media",
             CoreError::CorruptInput { .. } => "corrupt_input",
             CoreError::UnsupportedConversion { .. } => "unsupported_conversion",
+            CoreError::InvalidPages { .. } => "invalid_pages",
             CoreError::PdfEncrypted => "pdf_encrypted",
             CoreError::DiskFull { .. } => "disk_full",
             CoreError::PermissionDenied { .. } => "permission_denied",
@@ -87,6 +92,7 @@ impl CoreError {
         match self {
             CoreError::CorruptInput { details }
             | CoreError::UnsupportedConversion { details }
+            | CoreError::InvalidPages { details }
             | CoreError::DiskFull { details }
             | CoreError::PermissionDenied { details }
             | CoreError::EngineFailed { details } => (!details.is_empty()).then(|| details.clone()),

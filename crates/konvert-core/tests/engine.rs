@@ -1552,18 +1552,17 @@ async fn photos_become_a_pdf_and_come_back_as_pictures() {
     let data = std::fs::read(&outcome.output).unwrap();
     assert!(!pdf_info(&data).contains("Creat") && pdf_info(&data).contains("Konvert"));
 
-    // And back: one PNG picture per page, upright, with the photo's proportions.
+    // And back: a single page is a single picture (no folder), upright, with
+    // the photo's proportions.
     let mut back = req(TargetFormat::Png, QualityPreset::Balanced);
     back.pdf = Some(konvert_core::PdfOptions {
         dpi: 72,
         page_label: Some("pagina".into()),
         ..Default::default()
     });
-    let (folder, _) = convert_series(&bins, &tmp, &outcome.output, back).await;
-    assert_eq!(files_in(&folder.output), ["Ritratto-pagina-01.png"]);
-    let page = probe(&bins, &folder.output.join("Ritratto-pagina-01.png"))
-        .await
-        .unwrap();
+    let (picture, page) = convert(&bins, &tmp, &outcome.output, back).await;
+    assert!(picture.output.ends_with("Ritratto-pagina-01.png"));
+    assert_eq!(picture.files, 1);
     let (w, h) = size_of(&page);
     assert!(h > w, "{w:?}×{h:?}");
     assert!((w.unwrap() as f32 / h.unwrap() as f32 - 0.75).abs() < 0.02);
