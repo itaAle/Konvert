@@ -33,7 +33,7 @@ const MEDIA_EXTENSIONS: &[&str] = &[
     "aifc", "alac", "ape", "wv", "mka", "ac3", "eac3", "mp2", "caf", "mp4", "m4v", "mkv", "mov",
     "qt", "webm", "avi", "wmv", "flv", "mpg", "mpeg", "ts", "m2ts", "mts", "3gp", "ogv", "vob",
     "gif", "apng", "jpg", "jpeg", "jpe", "jfif", "png", "webp", "avif", "heic", "heif", "hif",
-    "bmp", "tif", "tiff", "ico",
+    "bmp", "tif", "tiff", "ico", "svg", "svgz",
 ];
 
 /// Extensions FFmpeg reads only when built with libjxl: the Windows and Linux

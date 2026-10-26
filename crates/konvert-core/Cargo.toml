@@ -16,6 +16,8 @@ tokio = { workspace = true, features = ["process", "io-util", "rt", "sync", "tim
 tokio-util = { workspace = true }
 # Generates TypeScript bindings (src/bindings) from the domain types during `cargo test`.
 ts-rs = { workspace = true }
+# SVG pictures are rendered by Konvert (FFmpeg's librsvg is not in every build).
+resvg = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [

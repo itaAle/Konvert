@@ -1218,6 +1218,8 @@ pub fn is_lossless_video_codec(codec: &str) -> bool {
 pub fn is_lossless_image(codec: &str, pix_fmt: Option<&str>) -> bool {
     match codec {
         "webp" => pix_fmt.is_some_and(|p| !p.starts_with("yuv")),
+        // Vector drawings: any size without loss.
+        "svg" => true,
         "bmp" | "tiff" | "qoi" | "pam" | "ppm" | "pgm" | "pbm" | "targa" | "sgi" | "pcx"
         | "jpegls" | "xwd" | "sunrast" | "dpx" => true,
         _ => is_lossless_video_codec(codec),

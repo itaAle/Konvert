@@ -39,4 +39,8 @@ icons: Array<IconFrame>,
 /**
  * The EXIF data of the photo is copied into the picture (Konvert writes it).
  */
-copyExif: boolean, };
+copyExif: boolean, 
+/**
+ * Vector picture (SVG) drawn by Konvert at this size before encoding.
+ */
+render: [number, number] | null, };

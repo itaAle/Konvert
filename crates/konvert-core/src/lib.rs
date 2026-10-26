@@ -27,6 +27,7 @@ pub mod plan;
 pub mod probe;
 pub mod progress;
 pub mod request;
+pub mod svg;
 pub mod workspace;
 
 mod process;

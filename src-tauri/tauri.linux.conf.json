@@ -314,6 +314,14 @@
       },
       {
         "ext": [
+          "svg",
+          "svgz"
+        ],
+        "name": "SVG drawing",
+        "mimeType": "image/svg+xml"
+      },
+      {
+        "ext": [
           "jxl"
         ],
         "name": "JPEG XL",

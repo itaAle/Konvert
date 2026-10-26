@@ -26,6 +26,7 @@ use crate::probe::MediaInfo;
 use crate::process;
 use crate::progress::{Progress, ProgressParser};
 use crate::request::{ConversionRequest, FrameMode};
+use crate::svg;
 use crate::workspace::Workspace;
 
 /// Lines of FFmpeg stderr kept for the "technical details" section.
@@ -88,7 +89,13 @@ pub async fn run_conversion(
     }
     let temp_output = workspace.job_output(job.id, ext);
     let cover_comment = prepare_cover_comment(bins, workspace, job, &plan).await;
-    let command = build_from_plan_with(&plan, &job.input, cover_comment.as_deref(), &temp_output);
+    // A vector picture is drawn first; FFmpeg then encodes the drawing.
+    let drawing = match plan.image.as_ref().and_then(|i| i.render) {
+        Some((width, height)) => Some(render_drawing(workspace, job, width, height).await?),
+        None => None,
+    };
+    let source = drawing.as_deref().unwrap_or(&job.input);
+    let command = build_from_plan_with(&plan, source, cover_comment.as_deref(), &temp_output);
 
     let result = run_ffmpeg(
         bins,
@@ -98,8 +105,8 @@ pub async fn run_conversion(
         &mut on_progress,
     )
     .await;
-    if let Some(comment) = &cover_comment {
-        let _ = std::fs::remove_file(comment);
+    for temporary in [&cover_comment, &drawing].into_iter().flatten() {
+        let _ = std::fs::remove_file(temporary);
     }
     let result = result.and_then(|()| {
         // FFmpeg can succeed without writing anything (e.g. no frame there).
@@ -204,6 +211,23 @@ async fn run_series(
         files,
         elapsed: started.elapsed(),
     })
+}
+
+/// Draws an SVG picture at its planned size into a PNG file of the private
+/// workspace.
+async fn render_drawing(
+    workspace: &Workspace,
+    job: &ConversionJob,
+    width: u32,
+    height: u32,
+) -> Result<PathBuf, CoreError> {
+    let input = job.input.clone();
+    let png = tokio::task::spawn_blocking(move || svg::render_png(&input, width, height))
+        .await
+        .map_err(|e| CoreError::Io(std::io::Error::other(e)))??;
+    let path = workspace.dir().join(format!("job-{}-drawing.png", job.id));
+    std::fs::write(&path, png)?;
+    Ok(path)
 }
 
 /// Copies the photo's EXIF data into the converted picture, still in the

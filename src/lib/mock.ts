@@ -126,6 +126,28 @@ const FRAMES: TargetOption[] = [
 
 function analysis(path: string): FileAnalysis {
   const name = path.split(/[\\/]/).pop() ?? path;
+  if (/\.svgz?$/i.test(name)) {
+    // A drawing: rendered by Konvert, any size without loss.
+    return {
+      path,
+      name,
+      media: {
+        container: "svg",
+        kind: "image",
+        durationSecs: null,
+        sizeBytes: 4_200,
+        bitRate: null,
+        video: [{ index: 0, codec: "svg", width: 512, height: 512, fps: null, bitRate: null, pixFmt: "rgba" }],
+        audio: [],
+        coverArt: null,
+        subtitleStreams: 0,
+        hasTags: false,
+        picture: { alpha: true, alphaStream: null, gridGroup: null, exif: false, exifCopyable: false },
+        hasLocation: false,
+      },
+      targets: IMAGES,
+    };
+  }
   if (/\.(jpe?g|png|webp|avif|heic|heif|bmp|tiff?)$/i.test(name)) {
     const heic = /\.hei[cf]$/i.test(name);
     return {
@@ -260,6 +282,7 @@ export const mockBackend: Backend = {
           alphaStream: null,
           icons: [],
           copyExif: false,
+          render: null,
         },
         removeLocation: false,
         frames: {
@@ -296,6 +319,7 @@ export const mockBackend: Backend = {
           alphaStream: null,
           icons: [],
           copyExif: ["jpg", "png", "webp", "avif"].includes(request.target),
+          render: null,
         },
         // EXIF data is copied into JPG, PNG, WebP and AVIF; other formats leave it out.
         warnings: [

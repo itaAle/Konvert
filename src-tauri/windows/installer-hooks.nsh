@@ -73,6 +73,8 @@
   !insertmacro ${OP} "tif"
   !insertmacro ${OP} "tiff"
   !insertmacro ${OP} "ico"
+  !insertmacro ${OP} "svg"
+  !insertmacro ${OP} "svgz"
   !insertmacro ${OP} "jxl"
 !macroend
 

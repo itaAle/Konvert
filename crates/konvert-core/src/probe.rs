@@ -145,6 +145,13 @@ pub async fn probe(bins: &Binaries, input: &Path) -> Result<MediaInfo, CoreError
     if !input.is_file() {
         return Err(CoreError::InputNotFound);
     }
+    if crate::svg::is_svg(input) {
+        // Drawn by Konvert, not by FFmpeg (see `svg.rs`).
+        let path = input.to_path_buf();
+        return tokio::task::spawn_blocking(move || crate::svg::probe(&path))
+            .await
+            .map_err(|e| CoreError::Io(std::io::Error::other(e)))?;
+    }
     let json = run_ffprobe(
         bins,
         input,

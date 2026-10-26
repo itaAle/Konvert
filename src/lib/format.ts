@@ -89,6 +89,7 @@ const PICTURE_NAMES: Record<string, string> = {
   bmp: "BMP",
   tiff: "TIFF",
   jpegxl: "JPEG XL",
+  svg: "SVG",
   jpeg2000: "JPEG 2000",
 };
 

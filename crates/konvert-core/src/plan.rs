@@ -134,6 +134,9 @@ pub struct ImagePlan {
     /// The EXIF data of the photo is copied into the picture (Konvert writes it).
     #[serde(default)]
     pub copy_exif: bool,
+    /// Vector picture (SVG) drawn by Konvert at this size before encoding.
+    #[serde(default)]
+    pub render: Option<(u32, u32)>,
 }
 
 /// One picture of a Windows icon: the source fitted into a transparent square.
@@ -491,18 +494,31 @@ fn plan_still(
 
     let wanted = adv.max_dimension.filter(|d| *d > 0);
     let source_size = src.width.zip(src.height).filter(|(w, h)| *w > 0 && *h > 0);
+    // A vector picture (SVG) is drawn at the size asked for, larger too.
+    let vector = src.codec == "svg";
     let icons = match (codec, source_size) {
-        (ImageCodec::Ico, Some((w, h))) => icon_frames(w, h, wanted),
+        (ImageCodec::Ico, Some((w, h))) => icon_frames(w, h, wanted, vector),
         _ => Vec::new(),
     };
     let size = match icons.last() {
         Some(largest) => Some((largest.size, largest.size)),
-        None => {
+        None => source_size.map(|(w, h)| {
+            let (w, h) = match wanted {
+                Some(side) if vector => fit_exactly(w, h, side),
+                _ => (w, h),
+            };
             let limit = [wanted, codec.max_dimension()].into_iter().flatten().min();
-            source_size.map(|(w, h)| fit_within(w, h, limit))
-        }
+            fit_within(w, h, limit)
+        }),
     };
-    let resize = size.is_some() && size != source_size;
+    // Konvert renders a vector picture at its final size: nothing left to scale
+    // (an icon is drawn at its largest size, the smaller ones are scaled from it).
+    let render = match (vector, icons.last(), size) {
+        (false, _, _) => None,
+        (true, Some(largest), _) => Some((largest.width, largest.height)),
+        (true, None, size) => size,
+    };
+    let resize = render.is_none() && size.is_some() && size != source_size;
 
     let image = ImagePlan {
         codec,
@@ -514,6 +530,7 @@ fn plan_still(
         flatten: picture.alpha && !codec.supports_alpha(),
         grid_group: picture.grid_group,
         alpha_stream: picture.alpha_stream,
+        render,
         icons,
         // Konvert writes EXIF data into the formats with a standard place for it.
         copy_exif: picture.exif
@@ -575,11 +592,11 @@ fn plan_still(
 
 /// Pictures of a Windows icon: the standard sizes up to the picture's own
 /// size (never upscaled) and the requested maximum, at least the smallest one.
-fn icon_frames(width: u32, height: u32, max: Option<u32>) -> Vec<IconFrame> {
+fn icon_frames(width: u32, height: u32, max: Option<u32>, vector: bool) -> Vec<IconFrame> {
     let longest = width.max(height);
     let mut sizes: Vec<u32> = ICON_SIZES
         .into_iter()
-        .filter(|s| *s <= longest && max.is_none_or(|m| *s <= m))
+        .filter(|s| (vector || *s <= longest) && max.is_none_or(|m| *s <= m))
         .collect();
     if sizes.is_empty() {
         sizes.push(ICON_SIZES[0]);
@@ -587,7 +604,11 @@ fn icon_frames(width: u32, height: u32, max: Option<u32>) -> Vec<IconFrame> {
     sizes
         .into_iter()
         .map(|size| {
-            let (w, h) = fit_within(width, height, Some(size));
+            let (w, h) = if vector {
+                fit_exactly(width, height, size)
+            } else {
+                fit_within(width, height, Some(size))
+            };
             IconFrame {
                 size,
                 width: w,
@@ -595,6 +616,16 @@ fn icon_frames(width: u32, height: u32, max: Option<u32>) -> Vec<IconFrame> {
             }
         })
         .collect()
+}
+
+/// Scales `width`×`height` so that the longest side is exactly `side` (keeps
+/// the aspect ratio; for vector pictures, which scale without loss).
+fn fit_exactly(width: u32, height: u32, side: u32) -> (u32, u32) {
+    if width >= height {
+        (side, scaled(height, side, width).max(1))
+    } else {
+        (scaled(width, side, height).max(1), side)
+    }
 }
 
 /// Scales `width`×`height` so that the longest side is at most `limit`
@@ -1697,6 +1728,58 @@ mod tests {
                 width: 8,
                 height: 4
             }]
+        );
+    }
+
+    #[test]
+    fn vector_pictures_are_drawn_at_the_size_asked_for() {
+        let svg = picture("svg", "svg_pipe", (40, 20), "rgba", false);
+        // Intrinsic size by default, drawn by Konvert: FFmpeg scales nothing.
+        let p = plan(
+            &svg,
+            &req(TargetFormat::Png, QualityPreset::Max),
+            "logo.svg",
+        );
+        let image = image_plan(&p);
+        assert_eq!(
+            (image.width, image.height, image.render, image.resize),
+            (Some(40), Some(20), Some((40, 20)), false)
+        );
+        assert!(p.warnings.is_empty(), "a drawing loses nothing in PNG");
+        // Larger on request: vectors scale without loss.
+        let mut request = req(TargetFormat::Webp, QualityPreset::Max);
+        request.advanced.max_dimension = Some(1920);
+        let image = image_plan(&plan(&svg, &request, "logo.svg")).clone();
+        assert_eq!(
+            (image.width, image.height, image.render),
+            (Some(1920), Some(960), Some((1920, 960)))
+        );
+        // An icon gets every size, drawn once at the largest.
+        let p = plan(
+            &svg,
+            &req(TargetFormat::Ico, QualityPreset::Max),
+            "logo.svg",
+        );
+        let image = image_plan(&p);
+        assert_eq!(image.icons.len(), 4);
+        assert_eq!(
+            image.icons[3],
+            IconFrame {
+                size: 256,
+                width: 256,
+                height: 128
+            }
+        );
+        assert_eq!(image.render, Some((256, 128)));
+        // Photos are never drawn.
+        assert_eq!(
+            image_plan(&plan(
+                &photo(),
+                &req(TargetFormat::Png, QualityPreset::Max),
+                "a.jpg"
+            ))
+            .render,
+            None
         );
     }
 

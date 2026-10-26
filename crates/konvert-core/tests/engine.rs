@@ -953,6 +953,72 @@ async fn jpeg_xl_where_the_engine_has_libjxl() {
 }
 
 #[tokio::test]
+async fn svg_drawings_become_pictures_of_any_size() {
+    let bins = engine();
+    let tmp = TempDir::new("svg");
+    let input = tmp.path("Logo è.svg");
+    // 40×20: transparent left half, red right half, and some text.
+    std::fs::write(
+        &input,
+        r##"<svg width="40" height="20" viewBox="0 0 40 20">
+             <rect x="20" width="20" height="20" fill="#ff0000"/>
+             <text x="2" y="15" font-size="8">Ab</text>
+           </svg>"##,
+    )
+    .unwrap();
+    let media = probe(&bins, &input).await.unwrap();
+    assert_eq!(
+        (media.kind, size_of(&media)),
+        (MediaKind::Image, (Some(40), Some(20)))
+    );
+
+    let mut request = req(TargetFormat::Png, QualityPreset::Max);
+    request.advanced.max_dimension = Some(400);
+    let (outcome, png) = convert(&bins, &tmp, &input, request).await;
+    assert_eq!(size_of(&png), (Some(400), Some(200)));
+    assert_eq!(pixel(&bins, &outcome.output, 100, 190)[3], 0);
+    assert_eq!(pixel(&bins, &outcome.output, 300, 100), [255, 0, 0, 255]);
+
+    // JPG has no transparency: white.
+    let (outcome, _) = convert(
+        &bins,
+        &tmp,
+        &input,
+        req(TargetFormat::Jpg, QualityPreset::Max),
+    )
+    .await;
+    let white = pixel(&bins, &outcome.output, 5, 18);
+    assert!(white[..3].iter().all(|c| *c > 240), "{white:?}");
+
+    // A Windows icon with every size, from a 40-pixel drawing.
+    let (outcome, _) = convert(
+        &bins,
+        &tmp,
+        &input,
+        req(TargetFormat::Ico, QualityPreset::Max),
+    )
+    .await;
+    let sizes = Command::new(&bins.ffprobe)
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=width",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(&outcome.output)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&sizes.stdout)
+            .split_whitespace()
+            .collect::<Vec<_>>(),
+        ["16", "32", "48", "256"]
+    );
+}
+
+#[tokio::test]
 async fn icons_hold_every_size_and_can_be_converted_back() {
     let bins = engine();
     let tmp = TempDir::new("icons");
