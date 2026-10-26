@@ -3,7 +3,11 @@
 //! Arguments are always passed as an argument vector (never through a shell), so
 //! file names with spaces, quotes or Unicode characters cannot inject commands.
 //! On Windows every child is created without a console window and attached to a
-//! Job Object configured to kill it when Konvert exits, even after a crash.
+//! Job Object configured to kill it when Konvert exits, even after a crash. On
+//! Linux the kernel sends the child SIGKILL when Konvert dies (`PR_SET_PDEATHSIG`).
+//! macOS has no equivalent: there the child is killed on normal exit and on
+//! cancellation (`kill_on_drop`), and a run left behind by a crash only writes into
+//! the temporary run directory, which is removed at the next start.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -22,6 +26,26 @@ pub(crate) fn engine_command(program: &Path) -> Command {
         // CREATE_NO_WINDOW: do not flash a console window for each conversion.
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let parent = std::process::id();
+        // SAFETY: the closure runs in the forked child before exec and only makes
+        // async-signal-safe calls (prctl, getppid, _exit).
+        unsafe {
+            cmd.pre_exec(move || {
+                // The signal is tied to the spawning thread; engines are spawned from
+                // the runtime's worker threads, which live as long as Konvert.
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // Konvert already died between fork and prctl: do not run orphaned.
+                if libc::getppid() as u32 != parent {
+                    libc::_exit(1);
+                }
+                Ok(())
+            });
+        }
     }
     cmd
 }

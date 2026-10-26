@@ -107,13 +107,16 @@ fn verbatim(p: &Path) -> OsString {
 }
 
 /// Moves a file, failing with `AlreadyExists` instead of replacing `dst`.
-/// Works across file systems (falls back to copy + delete).
+/// Works across file systems and on file systems without hard links (exFAT/FAT
+/// USB drives, some network shares) by falling back to copy + delete.
 #[cfg(not(windows))]
 pub fn move_no_replace(src: &Path, dst: &Path) -> io::Result<()> {
     // `link` fails if `dst` exists, which gives no-replace semantics.
     match std::fs::hard_link(src, dst) {
         Ok(()) => std::fs::remove_file(src),
-        Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(e),
+        // `create_new` keeps the no-replace semantics of the copy.
+        Err(_) => {
             let mut from = std::fs::File::open(src)?;
             let mut to = std::fs::File::options()
                 .write(true)
@@ -126,7 +129,6 @@ pub fn move_no_replace(src: &Path, dst: &Path) -> io::Result<()> {
             }
             std::fs::remove_file(src)
         }
-        Err(e) => Err(e),
     }
 }
 
