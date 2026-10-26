@@ -167,14 +167,24 @@ mod tests {
 
     #[test]
     fn redactor_removes_paths_names_and_stems() {
-        let input = Path::new(r"C:\Musica\Mia canzone segreta.wav");
+        // Native paths: a Windows path is a single file name on Linux and macOS.
+        let base = std::env::temp_dir();
+        let input = base.join("Musica").join("Mia canzone segreta.wav");
+        let output_dir = base.join("Uscita");
         let r = Redactor::default()
-            .path(input, "input")
-            .path(Path::new(r"D:\Uscita"), "output-dir");
-        let stderr = r"file:C:\Musica\Mia canzone segreta.wav: Invalid data; title=Mia canzone segreta; D:\Uscita\x";
+            .path(&input, "input")
+            .path(&output_dir, "output-dir");
+        let stderr = format!(
+            "file:{}: Invalid data; title=Mia canzone segreta; {}",
+            input.display(),
+            output_dir.join("x").display()
+        );
         assert_eq!(
-            r.apply(stderr),
-            r"file:<input>: Invalid data; title=<input>; <output-dir>\x"
+            r.apply(&stderr),
+            format!(
+                "file:<input>: Invalid data; title=<input>; <output-dir>{}x",
+                std::path::MAIN_SEPARATOR
+            )
         );
     }
 

@@ -115,8 +115,9 @@ meson_build dav1d -Denable_tools=false -Denable_tests=false
   && "$SRC/kvazaar/configure" --prefix="$PREFIX" --disable-shared --enable-static \
   && make -j "$JOBS" && make install )
 
-( cd "$SRC/lame" && ./configure --prefix="$PREFIX" --disable-shared --enable-static \
-    --disable-frontend --disable-gtktest --disable-dependency-tracking \
+# Same options as BtbN: encoder only (the decoder would need libmpg123).
+( cd "$SRC/lame" && CFLAGS="$CFLAGS -DNDEBUG" ./configure --prefix="$PREFIX" --disable-shared \
+    --enable-static --disable-cpml --disable-frontend --disable-decoder --disable-dependency-tracking \
   && make -j "$JOBS" && make install )
 
 ( mkdir -p "$BUILD/vpx" && cd "$BUILD/vpx" \
