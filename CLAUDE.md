@@ -44,14 +44,19 @@ Cargo workspace (`Cargo.toml`, resolver 3, toolchain pinned to 1.99.1 in `rust-t
     - Video streams also report their displayed size: a quarter-turn display matrix swaps width and height, so resized portrait videos keep their proportions.
   - `request.rs` → `plan.rs` (`plan_conversion`, pure) → `command.rs` (`build_from_plan`, pure FFmpeg arguments) → `convert.rs` (execution).
   - `estimate.rs`: size estimate and warnings.
+  - New modules: `exif.rs`, `svg.rs`, `metadata.rs` (see below).
   - Other modules: `naming.rs` (`name (n).ext`, never overwrite), `workspace.rs` (`%TEMP%\Konvert\run-…` with a lock and cleanup after crashes), `process.rs` (kill-on-close Job Object and `CREATE_NO_WINDOW`), `progress.rs`, `disk.rs`, `binaries.rs`, `error.rs`.
   - Stable error codes in `error.rs`: `engine_missing`, `input_not_found`, `output_unavailable`, `not_media`, `corrupt_input`, `unsupported_conversion`, `disk_full`, `permission_denied`, `cancelled`, `engine_failed`, `io`. Each has an i18n message.
   - FFmpeg always runs with `-protocol_whitelist file`, and inputs are passed as `file:` URLs.
   - Pictures: `plan.rs::plan_picture` → `plan_still` → `ImagePlan` (always re-encoded); `command.rs::picture_args` (one filter graph: grid/alphamerge, scale, white background for JPG/BMP, alpha plane for AVIF, palette for GIF; encoders mjpeg, png, libwebp, libaom-av1 still-picture, bmp, tiff, gif; muxers `image2pipe`/`webp`/`avif`/`gif`/`ico`).
     - ICO: `ImagePlan::icons` (16/32/48/256 px up to the picture's size, each fitted into a transparent square), one PNG stream per size into the `ico` muxer (`command.rs::icon_args`). `.ico` inputs are pictures (largest stream; the first-frame probe selects that stream by index).
     - Frames from videos: `plan_frames` → `ConversionPlan::frames` (`FramePlan`). One frame: `-ss` before `-i`, clamped inside the video. A series: `fps=1/N` (or every frame with `-fps_mode passthrough`) into the `image2` muxer, written in `workspace.job_dir(id)` (`%` escaped in the pattern), then `naming::move_series` creates a new folder `name[ (n)]` with `name-001.ext`…; `ConversionOutcome::files` > 1 means `output` is a folder.
-  - EXIF: FFmpeg keeps it only when converting to PNG (from JPEG/PNG/WebP, not from HEIF); otherwise the `MetadataDropped` warning is shown.
-  - Tests: unit tests in the modules and `tests/engine.rs` (22 integration tests with real FFmpeg). `tests/fixtures/mod.rs` builds JPEGs with EXIF and grid HEIC files in memory (HEVC tiles made with libkvazaar).
+  - EXIF (`exif.rs`, no dependency): `extract` reads the TIFF block from JPEG/PNG/WebP/HEIF/AVIF, `prepare` sets Orientation to 1, drops IFD1 (thumbnail), writes the new pixel size and, for "remove location", zeroes the GPS directory and unlinks it; `insert` writes JPEG APP1, PNG eXIf, WebP EXIF (VP8/VP8L converted to VP8X) or an AVIF `Exif` item (iinf + iloc + iref cdsc, data offsets after `meta` shifted, payload in a new `mdat`). `convert.rs::finish_exif` runs after FFmpeg in the workspace (`ImagePlan::copy_exif`); if the copy fails and the location must go, `strip` removes all EXIF. The probe sets `PictureInfo::exif_copyable` and `MediaInfo::has_location` (GPS, or video `location*`/Apple ISO6709 tags). `little_exif` (no lossy WebP) and `img-parts` (no HEIF) were evaluated and rejected.
+  - Location: `ConversionRequest::remove_location` → `ConversionPlan::remove_location` (only if the file has one); for audio/video, `-metadata location= -metadata location-eng= -metadata com.apple.quicktime.location.ISO6709=`.
+  - Tags and covers: `FormatSpec::tags` (false for raw AC3/E-AC3/MP2 → `TagsDropped`), `cover_art` (attached picture: MP3, M4A, ALAC, FLAC, AIFF with `-write_id3v2 1`) and `cover_art_tag` (Ogg/Opus: `metadata.rs` builds a FLAC picture block, base64, in an `ffmetadata` file passed as a second input with `-map_metadata:s:a:0 1:g`).
+  - Optional encoders: `FormatSpec::requires_encoder` (JPEG XL → libjxl); `engine_encoders` + `formats::supported_targets` filter what the app and the CLI offer (the macOS build has no libjxl). The picker/associations list `.jxl` everywhere but macOS (`LIBJXL_EXTENSIONS` in `commands.rs`).
+  - SVG (`svg.rs`, resvg): detected before ffprobe, intrinsic size from usvg; `ImagePlan::render` is the drawing size (vector: `max_dimension` may enlarge, icons get every size); `convert.rs` renders a PNG in the workspace and FFmpeg encodes it. Never reads files named by the SVG (string href resolver disabled), catches panics, caps size at 16384 px / 100 MP. Test SVGs have no `xmlns` URL (the privacy check rejects URLs in code; usvg accepts elements without namespace).
+  - Tests: unit tests in the modules and `tests/engine.rs` (26 integration tests with real FFmpeg; the JPEG XL one skips itself without libjxl). `tests/fixtures/mod.rs` builds JPEGs with EXIF and grid HEIC files in memory (HEVC tiles made with libkvazaar).
 - `crates/konvert-cli/`: development CLI (`npm run cli -- targets|plan|convert …`), not shipped.
 - `src-tauri/`: thin IPC layer.
   - `commands.rs` holds 20 commands, also listed in `build.rs::COMMANDS` and `capabilities/default.json`: **a new command must be added in all three places**.
@@ -117,7 +122,7 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
   Installer `Konvert_0.2.0_x64-setup.exe`, SHA-256 `5cce9fe6ebf043392bc54c41cb4dac2cb56352b298ae9b578b69cebe7e614b67` (`release/` is ignored by Git: rebuild it with `npm run release`). The owner creates the tag and the GitHub release.
 - Picture support:
   Input JPG/PNG/WebP/AVIF/HEIC/HEIF/BMP/TIFF, output JPG/PNG/WebP/AVIF (HEIC output is impossible: FFmpeg has no HEIF muxer).
-  Owner's decisions: EXIF handled as FFmpeg does (kept only in PNG), BMP/TIFF included, HEIC included.
+  Owner's decisions: EXIF handled as FFmpeg does (kept only in PNG; superseded in phase B, Konvert now copies it), BMP/TIFF included, HEIC included.
 - Green tests (Windows): 26 Vitest, 118 core unit tests, 16 integration tests, 17 app tests.
 - Network verified at zero: no sockets with the release build and with the installed app.
 - Verified: installer, "Open with", single instance, preferences kept on reinstall.
@@ -140,10 +145,14 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
   - Green tests (Windows): 28 Vitest, 139 core unit tests, 22 integration tests, 17 app tests.
   - Not verified by hand yet: the new formats in the installed app, "Open with" on the new extensions, drag & drop of videos into the Frames flow.
 
+- 2026-10-26: **more formats, phase B** on `main` (not pushed): cover art in AIFF/OGG/Opus and a "tags dropped" warning; EXIF kept in JPG/PNG/WebP/AVIF (also from HEIC) with "Remove the location" (photos and videos); JPEG XL where FFmpeg has libjxl; SVG input through resvg (new dependency, licenses regenerated). No RAW (owner's decision).
+  - Green tests (Windows): 29 Vitest, 159 core unit tests, 26 integration tests, 17 app tests; `cargo check -p konvert-core` passes for macOS and Linux targets.
+  - Not verified by hand yet: real iPhone HEIC photos with GPS, EXIF read by Windows Explorer/Photos in the converted files, SVG files with system fonts and complex text.
+
 ## Backlog (next work, by priority)
 1. **More formats and PDF**, in three phases agreed with the owner (in progress):
    - A: done (see Current status);
-   - B: tags and cover art in more containers, EXIF kept in JPG/WebP/AVIF (with a "remove location" option), JPEG XL where the engine has libjxl, SVG input with resvg (no RAW);
+   - B: done (see Current status);
    - C: PDF in pure Rust (hayro, lopdf, pdf-writer): pictures → PDF, PDF → pictures, merge; split/rotate/reorder only after a further OK.
 2. Finish the macOS/Linux rollout (see Current status), and macOS window vibrancy (needs `macOSPrivateApi`).
 3. Hardware encoders NVENC/QSV/AMF/h264_mf/VideoToolbox, with automatic detection.

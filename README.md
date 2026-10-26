@@ -37,15 +37,20 @@ Konvert only offers the conversions that make sense for the file you give it:
 | Audio | MP3, M4A (AAC), ALAC (M4A), WAV, FLAC, OGG (Vorbis), OPUS, WMA, AIFF; more formats: AAC, AC3, E-AC3, MP2, CAF (ALAC), MKA |
 | Video with audio | MP4, MKV, MOV, WebM, AVI, GIF, animated WebP; more formats: TS, MPG (MPEG-2), 3GP, FLV, APNG. Also **audio only** in every audio format and **frames** as JPG, PNG or WebP |
 | Video without audio | The same, without the audio formats |
-| Picture (JPG/JPEG, PNG, WebP, AVIF, HEIC/HEIF, BMP, TIFF, ICO) | JPG, PNG, WebP, AVIF; more formats: BMP, TIFF, GIF, ICO |
+| Picture (JPG/JPEG, PNG, WebP, AVIF, HEIC/HEIF, BMP, TIFF, ICO, SVG, JPEG XL¹) | JPG, PNG, WebP, AVIF; more formats: BMP, TIFF, GIF, ICO, JPEG XL¹ |
+
+¹ JPEG XL needs FFmpeg's libjxl, which the Windows and Linux builds have and the macOS
+build does not: Konvert checks the engine and offers JPEG XL only where it works.
 
 Less common formats are behind **More formats**, so the usual choices stay in front.
 
 - When the streams are already compatible with the chosen format (e.g. MP4 H.264/AAC →
   MKV, TS or FLV), they are copied **without re-encoding**: instant and lossless.
 - Clear warnings when a conversion loses quality or cannot bring it back (e.g. MP3 → WAV)
-  and when cover art, subtitles or extra audio tracks are dropped.
-- Metadata and cover art are kept where the format allows it (MP3, M4A, ALAC, FLAC).
+  and when cover art, tags, subtitles or extra audio tracks are dropped.
+- Tags (title, artist, album…) are kept wherever the format has room for them; cover art
+  in MP3, M4A, ALAC, FLAC, AIFF, OGG and Opus. Raw AC3, E-AC3 and MP2 files cannot hold
+  tags, and Konvert says so.
 - H.264 video with OpenH264, VP9 for WebM, AV1 (SVT-AV1) among the advanced options; MPG
   uses MPEG-2 video with MP2 audio, like DVDs.
 - ALAC and AAC both use the `.m4a` extension: the cards say which is which
@@ -73,9 +78,19 @@ Pictures:
   that fit the picture, never enlarged); a picture that is not square is centered on a
   transparent square.
 - GIF pictures have at most 256 colors: fine for logos, not for photos.
-- EXIF data (camera, date, location) is kept when a JPEG, PNG or WebP picture becomes a PNG;
-  the other conversions leave it out, and Konvert tells you so before converting.
+- **EXIF data** (camera, date, location) is kept in JPG, PNG, WebP and AVIF, from JPEG, PNG,
+  WebP, HEIC and AVIF photos: Konvert copies it itself (FFmpeg does not), sets the
+  orientation to normal (the pixels are already turned) and leaves out the old thumbnail.
+  Other formats leave it out, and Konvert tells you so before converting.
+- **Remove the location**: when a photo or a video records where it was made (GPS data,
+  phone video location), a switch lets you leave it out of the converted file. It is off
+  by default; when on, the coordinates are overwritten, not just unlinked.
+- **SVG** drawings are drawn by Konvert (with resvg, the same on every system) and then
+  converted like any picture. They scale without loss: **Maximum size** can also enlarge
+  them, and an icon gets every size up to 256 px.
 - Animated GIF, WebP and PNG files are treated as videos.
+- Camera RAW files (DNG, CR2, NEF…) are not supported: FFmpeg cannot develop them and no
+  small, permissively licensed alternative does it well enough.
 
 The format table is declarative: `crates/konvert-core/src/formats.rs`.
 
@@ -193,6 +208,8 @@ Konvert works entirely on your computer. No data leaves your device.
   with its background networking features disabled.
 - FFmpeg and FFprobe run with `-protocol_whitelist file`: they can open local files only,
   never network addresses. On macOS FFmpeg is also built without any network protocol.
+- SVG drawings are drawn by a library without network code, and a drawing may not even
+  read other files: pictures it names are ignored, only pictures embedded in it are drawn.
 - The only web address the app knows is the releases page, which opens in your browser
   only if you click it.
 
