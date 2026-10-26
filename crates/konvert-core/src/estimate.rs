@@ -6,8 +6,10 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::formats::{AudioCodec, VideoCodec};
-use crate::plan::{AudioPlan, AudioRate, ConversionPlan, VideoPlan, VideoRate};
+use crate::formats::{AudioCodec, ImageCodec, VideoCodec, is_lossless_image};
+use crate::plan::{
+    AudioPlan, AudioRate, ConversionPlan, ImagePlan, ImageQuality, VideoPlan, VideoRate,
+};
 use crate::probe::{MediaInfo, MediaKind};
 
 /// Estimated output size.
@@ -23,8 +25,12 @@ pub struct SizeEstimate {
 /// Container overhead (headers, indexes, padding).
 const OVERHEAD: f64 = 1.01;
 
-/// Estimates the output size; `None` when the duration is unknown.
+/// Estimates the output size; `None` when the duration (or, for a picture,
+/// the size) is unknown.
 pub fn estimate_size(media: &MediaInfo, plan: &ConversionPlan) -> Option<SizeEstimate> {
+    if let Some(image) = &plan.image {
+        return estimate_picture(media, image);
+    }
     let duration = media.duration_secs?;
     let mut approximate = false;
     let mut kbps = 0.0;
@@ -127,6 +133,85 @@ fn video_kbps(media: &MediaInfo, video: &VideoPlan, audio_kbps: f64) -> Option<(
             }
         }
     })
+}
+
+/// Pictures: pixels × typical bits per pixel of the encoder at that quality
+/// (for a photo), corrected by how compressible the source looks. Always
+/// approximate: the size depends a lot on the content.
+fn estimate_picture(media: &MediaInfo, image: &ImagePlan) -> Option<SizeEstimate> {
+    let pixels = image.width? as f64 * image.height? as f64;
+    let bits_per_pixel = match (image.codec, image.quality) {
+        (ImageCodec::Png, _) => {
+            if image.alpha {
+                16.0
+            } else {
+                12.0
+            }
+        }
+        (ImageCodec::Webp, ImageQuality::Lossless { .. }) => {
+            if image.alpha {
+                12.0
+            } else {
+                9.0
+            }
+        }
+        (ImageCodec::Webp, ImageQuality::Lossy { quality }) => jpeg_bits_per_pixel(quality) * 0.7,
+        (ImageCodec::Avif, ImageQuality::Lossy { quality }) => {
+            0.5 * 2f64.powf((quality as f64 - 60.0) / 10.0)
+        }
+        (_, ImageQuality::Lossy { quality }) => jpeg_bits_per_pixel(quality),
+        (_, ImageQuality::Lossless { .. }) => 12.0,
+    };
+    let bytes = pixels * bits_per_pixel * content_factor(media) / 8.0 + 500.0;
+    Some(SizeEstimate {
+        bytes: bytes.round() as u64,
+        approximate: true,
+    })
+}
+
+/// Average JPEG bits per pixel of a photo at a quality from 1 to 100.
+fn jpeg_bits_per_pixel(quality: u8) -> f64 {
+    const POINTS: [(f64, f64); 6] = [
+        (1.0, 0.15),
+        (50.0, 1.0),
+        (70.0, 1.5),
+        (85.0, 2.4),
+        (95.0, 4.5),
+        (100.0, 7.0),
+    ];
+    let q = (quality as f64).clamp(1.0, 100.0);
+    POINTS
+        .windows(2)
+        .find(|w| q <= w[1].0)
+        .map_or(POINTS[5].1, |w| {
+            let ((q0, b0), (q1, b1)) = (w[0], w[1]);
+            b0 + (b1 - b0) * (q - q0) / (q1 - q0)
+        })
+}
+
+/// How the source compares with a typical photo in the same format: a simple
+/// drawing compresses much better than a photo in every format (damped by a
+/// square root, since formats do not react alike).
+fn content_factor(media: &MediaInfo) -> f64 {
+    let Some(src) = media.primary_video() else {
+        return 1.0;
+    };
+    let typical = match src.codec.as_str() {
+        "mjpeg" => 2.4,
+        "webp" if is_lossless_image("webp", src.pix_fmt.as_deref()) => 9.0,
+        "webp" => 1.6,
+        "png" => 12.0,
+        "hevc" => 0.9,
+        "av1" => 0.6,
+        _ => return 1.0,
+    };
+    match (media.size_bytes, src.width, src.height) {
+        (Some(bytes), Some(w), Some(h)) if w > 0 && h > 0 => {
+            let bits_per_pixel = bytes as f64 * 8.0 / (w as f64 * h as f64);
+            (bits_per_pixel / typical).sqrt().clamp(0.25, 2.0)
+        }
+        _ => 1.0,
+    }
 }
 
 /// Average bit rate of LAME VBR presets (stereo, 44.1 kHz).
@@ -257,6 +342,57 @@ mod tests {
                 bytes: 2_686_600,
                 approximate: false
             }
+        );
+    }
+
+    fn picture(codec: &str, container: &str, bytes: u64) -> MediaInfo {
+        parse_ffprobe_json(
+            format!(
+                r#"{{ "streams": [{{ "index": 0, "codec_name": "{codec}", "codec_type": "video",
+                "width": 4000, "height": 3000, "pix_fmt": "yuvj420p" }}],
+                "format": {{ "format_name": "{container}", "size": "{bytes}" }} }}"#
+            )
+            .as_bytes(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn picture_estimates_follow_quality_and_content() {
+        // A typical 12 MP photo (2.4 bits per pixel).
+        let photo = picture("mjpeg", "image2", 3_600_000);
+        let size = |target, preset| estimate(&photo, target, preset, "a.jpg");
+        let jpg = size(TargetFormat::Jpg, QualityPreset::Balanced);
+        assert!(jpg.approximate);
+        assert!((3_000_000..4_200_000).contains(&jpg.bytes), "{}", jpg.bytes);
+        for target in [TargetFormat::Jpg, TargetFormat::Webp, TargetFormat::Avif] {
+            let sizes = [
+                QualityPreset::Max,
+                QualityPreset::Balanced,
+                QualityPreset::Small,
+            ]
+            .map(|p| size(target, p).bytes);
+            assert!(
+                sizes[0] > sizes[1] && sizes[1] > sizes[2],
+                "{target:?}: {sizes:?}"
+            );
+        }
+        assert!(size(TargetFormat::Png, QualityPreset::Balanced).bytes > jpg.bytes * 3);
+        assert!(size(TargetFormat::Avif, QualityPreset::Balanced).bytes < jpg.bytes / 2);
+
+        // A simple drawing compresses much better than a photo.
+        let drawing = picture("mjpeg", "image2", 600_000);
+        let small = estimate(
+            &drawing,
+            TargetFormat::Jpg,
+            QualityPreset::Balanced,
+            "a.jpg",
+        );
+        assert!(
+            small.bytes < jpg.bytes / 2,
+            "{} vs {}",
+            small.bytes,
+            jpg.bytes
         );
     }
 

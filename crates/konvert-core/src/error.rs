@@ -22,8 +22,8 @@ pub enum CoreError {
     #[error("destination folder not available")]
     OutputUnavailable,
 
-    /// The file was readable but contains no audio or video stream.
-    #[error("the file contains no audio or video")]
+    /// The file was readable but contains no audio, video or picture.
+    #[error("the file contains no audio, video or picture")]
     NotMedia,
 
     /// FFmpeg/FFprobe could not decode the file (truncated, damaged, ...).

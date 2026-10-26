@@ -12,6 +12,7 @@
 //!
 //! OPTIONS: --preset max|balanced|small  --height N  --fps N
 //!          --audio-bitrate KBPS  --sample-rate HZ  --mono | --stereo
+//!          --quality 1-100  --max-size PIXELS   (pictures)
 //! ```
 //!
 //! The engine directory defaults to `$KONVERT_FFMPEG_DIR`, then to
@@ -37,7 +38,8 @@ const USAGE: &str = "usage:
   konvert-cli [--ffmpeg-dir DIR] convert <FILE> --to <FORMAT> [OPTIONS] [--out-dir DIR]
 
 OPTIONS: --preset max|balanced|small  --height N  --fps N
-         --audio-bitrate KBPS  --sample-rate HZ  --mono | --stereo";
+         --audio-bitrate KBPS  --sample-rate HZ  --mono | --stereo
+         --quality 1-100  --max-size PIXELS   (pictures)";
 
 enum Action {
     Version,
@@ -93,6 +95,12 @@ fn parse_args() -> Result<Cli, String> {
             }
             Some("--sample-rate") => {
                 advanced.sample_rate = Some(number("--sample-rate", value("--sample-rate")?)?)
+            }
+            Some("--quality") => {
+                advanced.image_quality = Some(number("--quality", value("--quality")?)?)
+            }
+            Some("--max-size") => {
+                advanced.max_dimension = Some(number("--max-size", value("--max-size")?)?)
             }
             Some("--mono") => advanced.channels = Some(ChannelLayout::Mono),
             Some("--stereo") => advanced.channels = Some(ChannelLayout::Stereo),

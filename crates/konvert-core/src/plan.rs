@@ -13,8 +13,8 @@ use ts_rs::TS;
 use crate::error::CoreError;
 use crate::estimate::{SizeEstimate, estimate_size};
 use crate::formats::{
-    self, AudioCodec, FormatKind, FormatSpec, TargetFormat, VideoCodec, is_lossless_audio_codec,
-    is_lossless_video_codec,
+    self, AudioCodec, FormatKind, FormatSpec, ImageCodec, TargetFormat, VideoCodec,
+    is_lossless_audio_codec, is_lossless_image, is_lossless_video_codec,
 };
 use crate::probe::{AudioStream, MediaInfo, MediaKind, VideoStream};
 use crate::request::{ConversionRequest, QualityPreset};
@@ -96,6 +96,40 @@ pub enum VideoRate {
     Palette,
 }
 
+/// How a picture is produced. Pictures are always encoded again: copying
+/// would just duplicate the input.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ImagePlan {
+    pub codec: ImageCodec,
+    pub quality: ImageQuality,
+    /// Output size (`None` when the input size is unknown).
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// A scale filter is needed.
+    pub resize: bool,
+    /// Transparency is kept.
+    pub alpha: bool,
+    /// Transparent areas are laid on white (the format has no transparency).
+    pub flatten: bool,
+    /// Tile grid to assemble (HEIC/AVIF photos made of tiles).
+    pub grid_group: Option<u32>,
+    /// Separate transparency plane to merge back (AVIF).
+    pub alpha_stream: Option<u32>,
+}
+
+/// Quality setting of a picture encoder.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[ts(export)]
+pub enum ImageQuality {
+    /// Encoder quality from 1 (smallest file) to 100 (best).
+    Lossy { quality: u8 },
+    /// Every pixel is kept; `effort` (PNG 0–9, WebP 0–6) only trades speed for size.
+    Lossless { effort: u8 },
+}
+
 /// Things the user should know before converting. Ordered by importance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -109,6 +143,10 @@ pub enum ConversionWarning {
     LosslessToLossy,
     /// GIF: 256 colors, no audio, large files.
     GifLimitations,
+    /// The picture format has no transparency: transparent areas become white.
+    TransparencyLost,
+    /// The picture is larger than the format allows: it is scaled down.
+    PictureDownscaled,
     /// The output format has no audio: the soundtrack is not kept.
     AudioDropped,
     /// The output format cannot store the cover picture.
@@ -119,6 +157,8 @@ pub enum ConversionWarning {
     ExtraAudioTracksDropped,
     /// The output format supports at most two channels: downmixed to stereo.
     ChannelsDownmixed,
+    /// The photo's EXIF data (camera, date, location) is not kept.
+    MetadataDropped,
 }
 
 /// Every decision taken for one conversion.
@@ -127,7 +167,7 @@ pub enum ConversionWarning {
 #[ts(export)]
 pub struct ConversionPlan {
     pub target: TargetFormat,
-    /// Index of the input video stream used, if any.
+    /// Index of the input video stream (or picture) used, if any.
     pub video_stream: Option<u32>,
     pub video: Option<VideoPlan>,
     /// Index of the input audio stream used, if any.
@@ -135,6 +175,8 @@ pub struct ConversionPlan {
     pub audio: Option<AudioPlan>,
     /// Index of the input cover picture to embed, if any.
     pub cover_art_stream: Option<u32>,
+    /// Picture output (picture formats only).
+    pub image: Option<ImagePlan>,
     pub warnings: Vec<ConversionWarning>,
     pub estimate: Option<SizeEstimate>,
 }
@@ -142,7 +184,8 @@ pub struct ConversionPlan {
 impl ConversionPlan {
     /// Nothing is re-encoded (remux only).
     pub fn is_remux(&self) -> bool {
-        !matches!(self.video, Some(VideoPlan::Encode(_)))
+        self.image.is_none()
+            && !matches!(self.video, Some(VideoPlan::Encode(_)))
             && !matches!(self.audio, Some(AudioPlan::Encode(_)))
     }
 }
@@ -173,6 +216,9 @@ pub fn plan_conversion(
             spec.label
         )));
     }
+    if spec.kind == FormatKind::Image {
+        return plan_picture(media, request, spec);
+    }
 
     // Re-encode when the user asked for a smaller file or for the same format
     // (copying would just duplicate the input).
@@ -185,7 +231,7 @@ pub fn plan_conversion(
                 .primary_video()
                 .ok_or_else(|| unsupported("the input has no video".into()))?,
         ),
-        FormatKind::Audio => None,
+        FormatKind::Audio | FormatKind::Image => None,
     };
     let video = video_stream.map(|v| plan_video(spec, v, request, force_encode));
 
@@ -212,6 +258,7 @@ pub fn plan_conversion(
         audio_stream: audio_stream.map(|a| a.index),
         audio,
         cover_art_stream,
+        image: None,
         warnings: Vec::new(),
         estimate: None,
     };
@@ -222,6 +269,119 @@ pub fn plan_conversion(
 
 fn unsupported(details: String) -> CoreError {
     CoreError::UnsupportedConversion { details }
+}
+
+// --- Pictures ------------------------------------------------------------------
+
+fn plan_picture(
+    media: &MediaInfo,
+    request: &ConversionRequest,
+    spec: &FormatSpec,
+) -> Result<ConversionPlan, CoreError> {
+    use ConversionWarning as W;
+    let codec = spec
+        .image_codec
+        .expect("picture formats have a picture codec");
+    let src = media
+        .primary_video()
+        .ok_or_else(|| unsupported("the input has no picture".into()))?;
+    let picture = media.picture.clone().unwrap_or_default();
+    let adv = &request.advanced;
+    let preset = request.preset;
+    let source_lossless = is_lossless_image(&src.codec, src.pix_fmt.as_deref());
+
+    let quality = match (codec, adv.image_quality) {
+        (_, Some(q)) if !(1..=100).contains(&q) => {
+            return Err(unsupported(format!("picture quality {q} is out of range")));
+        }
+        (ImageCodec::Png, _) => ImageQuality::Lossless {
+            effort: pick(preset, 6, 6, 9),
+        },
+        // From a lossless source, the best WebP keeps every pixel.
+        (ImageCodec::Webp, None) if preset == QualityPreset::Max && source_lossless => {
+            ImageQuality::Lossless { effort: 4 }
+        }
+        (_, Some(quality)) => ImageQuality::Lossy { quality },
+        (ImageCodec::Jpeg, None) => ImageQuality::Lossy {
+            quality: pick(preset, 95, 85, 70),
+        },
+        (ImageCodec::Webp, None) => ImageQuality::Lossy {
+            quality: pick(preset, 95, 82, 65),
+        },
+        // Same scale as libavif's quality (60 is its default).
+        (ImageCodec::Avif, None) => ImageQuality::Lossy {
+            quality: pick(preset, 75, 60, 45),
+        },
+    };
+
+    let wanted = adv.max_dimension.filter(|d| *d > 0);
+    let limit = [wanted, codec.max_dimension()].into_iter().flatten().min();
+    let source_size = src.width.zip(src.height).filter(|(w, h)| *w > 0 && *h > 0);
+    let size = source_size.map(|(w, h)| fit_within(w, h, limit));
+    let resize = size.is_some() && size != source_size;
+
+    let image = ImagePlan {
+        codec,
+        quality,
+        width: size.map(|s| s.0),
+        height: size.map(|s| s.1),
+        resize,
+        alpha: picture.alpha && codec.supports_alpha(),
+        flatten: picture.alpha && !codec.supports_alpha(),
+        grid_group: picture.grid_group,
+        alpha_stream: picture.alpha_stream,
+    };
+
+    let mut warnings = Vec::new();
+    let lossless = matches!(quality, ImageQuality::Lossless { .. });
+    match (source_lossless, lossless) {
+        (false, true) => warnings.push(W::LossyToLossless),
+        (false, false) => warnings.push(W::LossyReencode),
+        (true, false) => warnings.push(W::LosslessToLossy),
+        (true, true) => {}
+    }
+    if image.flatten {
+        warnings.push(W::TransparencyLost);
+    }
+    let longest = source_size.map_or(0, |(w, h)| w.max(h));
+    let format_limit = codec.max_dimension().filter(|max| longest > *max);
+    if format_limit.is_some_and(|max| wanted.is_none_or(|w| w > max)) {
+        warnings.push(W::PictureDownscaled);
+    }
+    // FFmpeg carries EXIF data over only from JPEG/PNG/WebP files into PNG.
+    if picture.exif && (codec != ImageCodec::Png || media.is_heif()) {
+        warnings.push(W::MetadataDropped);
+    }
+    warnings.sort_by_key(|w| *w as u8);
+
+    let mut plan = ConversionPlan {
+        target: request.target,
+        video_stream: Some(src.index),
+        video: None,
+        audio_stream: None,
+        audio: None,
+        cover_art_stream: None,
+        image: Some(image),
+        warnings,
+        estimate: None,
+    };
+    plan.estimate = estimate_size(media, &plan);
+    Ok(plan)
+}
+
+/// Scales `width`×`height` so that the longest side is at most `limit`
+/// (never upscales, keeps the aspect ratio).
+fn fit_within(width: u32, height: u32, limit: Option<u32>) -> (u32, u32) {
+    match limit {
+        Some(max) if width.max(height) > max => {
+            if width >= height {
+                (max, scaled(height, max, width).max(1))
+            } else {
+                (scaled(width, max, height).max(1), max)
+            }
+        }
+        _ => (width, height),
+    }
 }
 
 // --- Audio ---------------------------------------------------------------------
@@ -861,6 +1021,229 @@ mod tests {
             Path::new("a.wav"),
         );
         assert_eq!(err.unwrap_err().code(), "unsupported_conversion");
+    }
+
+    /// A still picture as `probe` returns it (first frame applied).
+    fn picture(
+        codec: &str,
+        container: &str,
+        size: (u32, u32),
+        pix_fmt: &str,
+        exif: bool,
+    ) -> MediaInfo {
+        let mut info = media(&format!(
+            r#"{{ "streams": [{{ "index": 0, "codec_name": "{codec}", "codec_type": "video",
+            "width": {}, "height": {}, "pix_fmt": "{pix_fmt}" }}],
+            "format": {{ "format_name": "{container}", "size": "3000000" }} }}"#,
+            size.0, size.1
+        ));
+        let side_data = if exif {
+            r#"[{ "side_data_type": "EXIF metadata" }]"#
+        } else {
+            "[]"
+        };
+        let frame = format!(
+            r#"{{ "frames": [{{ "width": {}, "height": {}, "pix_fmt": "{pix_fmt}",
+            "side_data_list": {side_data} }}] }}"#,
+            size.0, size.1
+        );
+        crate::probe::apply_first_frame_json(&mut info, frame.as_bytes()).unwrap();
+        info
+    }
+
+    fn photo() -> MediaInfo {
+        picture("mjpeg", "image2", (4032, 3024), "yuvj420p", true)
+    }
+
+    fn transparent_png() -> MediaInfo {
+        picture("png", "png_pipe", (800, 600), "rgba", false)
+    }
+
+    fn image_plan(p: &ConversionPlan) -> &ImagePlan {
+        p.image.as_ref().expect("picture plan")
+    }
+
+    #[test]
+    fn photo_to_webp_is_reencoded_at_the_preset_quality() {
+        let p = plan(
+            &photo(),
+            &req(TargetFormat::Webp, QualityPreset::Balanced),
+            "IMG_0001.JPG",
+        );
+        let image = image_plan(&p);
+        assert_eq!(image.codec, ImageCodec::Webp);
+        assert_eq!(image.quality, ImageQuality::Lossy { quality: 82 });
+        assert_eq!(
+            (image.width, image.height, image.resize),
+            (Some(4032), Some(3024), false)
+        );
+        assert!(!image.alpha && !image.flatten);
+        assert_eq!(
+            (p.video_stream, &p.video, &p.audio),
+            (Some(0), &None, &None)
+        );
+        assert!(!p.is_remux());
+        assert_eq!(p.warnings, [W::LossyReencode, W::MetadataDropped]);
+        assert!(p.estimate.unwrap().approximate);
+
+        let quality =
+            |target, preset| match image_plan(&plan(&photo(), &req(target, preset), "a.jpg"))
+                .quality
+            {
+                ImageQuality::Lossy { quality } => quality,
+                other => panic!("{other:?}"),
+            };
+        assert_eq!(quality(TargetFormat::Jpg, QualityPreset::Max), 95);
+        assert_eq!(quality(TargetFormat::Jpg, QualityPreset::Small), 70);
+        assert_eq!(quality(TargetFormat::Avif, QualityPreset::Balanced), 60);
+    }
+
+    #[test]
+    fn exif_data_is_kept_only_in_png_from_classic_formats() {
+        let png = plan(
+            &photo(),
+            &req(TargetFormat::Png, QualityPreset::Max),
+            "a.jpg",
+        );
+        assert_eq!(png.warnings, [W::LossyToLossless]);
+        assert_eq!(
+            image_plan(&png).quality,
+            ImageQuality::Lossless { effort: 6 }
+        );
+
+        // HEIC: FFmpeg reads the EXIF data but cannot carry it over.
+        let heic = media(
+            r#"{ "streams": [{ "index": 0, "codec_name": "hevc", "codec_type": "video",
+            "width": 512, "height": 384, "pix_fmt": "yuv420p",
+            "side_data_list": [{ "side_data_type": "EXIF metadata" }] }],
+            "format": { "format_name": "mov,mp4,m4a,3gp,3g2,mj2", "tags": { "major_brand": "heic" } } }"#,
+        );
+        let p = plan(
+            &heic,
+            &req(TargetFormat::Png, QualityPreset::Small),
+            "a.heic",
+        );
+        assert!(p.warnings.contains(&W::MetadataDropped));
+        assert_eq!(image_plan(&p).quality, ImageQuality::Lossless { effort: 9 });
+    }
+
+    #[test]
+    fn transparency_is_kept_or_laid_on_white() {
+        let jpg = plan(
+            &transparent_png(),
+            &req(TargetFormat::Jpg, QualityPreset::Balanced),
+            "logo.png",
+        );
+        let image = image_plan(&jpg);
+        assert!(image.flatten && !image.alpha);
+        assert_eq!(jpg.warnings, [W::LosslessToLossy, W::TransparencyLost]);
+
+        for target in [TargetFormat::Webp, TargetFormat::Avif] {
+            let p = plan(
+                &transparent_png(),
+                &req(target, QualityPreset::Balanced),
+                "logo.png",
+            );
+            assert!(
+                image_plan(&p).alpha && !image_plan(&p).flatten,
+                "{target:?}"
+            );
+            assert_eq!(p.warnings, [W::LosslessToLossy], "{target:?}");
+        }
+    }
+
+    #[test]
+    fn best_webp_of_a_lossless_picture_is_lossless() {
+        let max = plan(
+            &transparent_png(),
+            &req(TargetFormat::Webp, QualityPreset::Max),
+            "a.png",
+        );
+        assert_eq!(
+            image_plan(&max).quality,
+            ImageQuality::Lossless { effort: 4 }
+        );
+        assert!(max.warnings.is_empty());
+        // From a JPEG, lossless would only make the file bigger.
+        let from_jpeg = plan(
+            &photo(),
+            &req(TargetFormat::Webp, QualityPreset::Max),
+            "a.jpg",
+        );
+        assert_eq!(
+            image_plan(&from_jpeg).quality,
+            ImageQuality::Lossy { quality: 95 }
+        );
+    }
+
+    #[test]
+    fn longest_side_is_limited_without_upscaling() {
+        let mut request = req(TargetFormat::Jpg, QualityPreset::Balanced);
+        request.advanced.max_dimension = Some(1920);
+        let image = image_plan(&plan(&photo(), &request, "a.jpg")).clone();
+        assert_eq!(
+            (image.width, image.height, image.resize),
+            (Some(1920), Some(1440), true)
+        );
+
+        let portrait = picture("mjpeg", "image2", (3024, 4032), "yuvj420p", false);
+        let image = image_plan(&plan(&portrait, &request, "a.jpg")).clone();
+        assert_eq!((image.width, image.height), (Some(1440), Some(1920)));
+
+        request.advanced.max_dimension = Some(8000);
+        let image = image_plan(&plan(&photo(), &request, "a.jpg")).clone();
+        assert_eq!(
+            (image.width, image.height, image.resize),
+            (Some(4032), Some(3024), false)
+        );
+    }
+
+    #[test]
+    fn pictures_beyond_the_format_limit_are_scaled_down() {
+        let panorama = picture("mjpeg", "image2", (20000, 5000), "yuvj420p", false);
+        let p = plan(
+            &panorama,
+            &req(TargetFormat::Webp, QualityPreset::Balanced),
+            "pano.jpg",
+        );
+        let image = image_plan(&p);
+        assert_eq!(
+            (image.width, image.height, image.resize),
+            (Some(16383), Some(4096), true)
+        );
+        assert!(p.warnings.contains(&W::PictureDownscaled));
+
+        // The user already asked for a smaller picture: nothing to tell.
+        let mut request = req(TargetFormat::Webp, QualityPreset::Balanced);
+        request.advanced.max_dimension = Some(4000);
+        let p = plan(&panorama, &request, "pano.jpg");
+        assert!(!p.warnings.contains(&W::PictureDownscaled));
+        // JPEG has room for it.
+        let p = plan(
+            &panorama,
+            &req(TargetFormat::Jpg, QualityPreset::Balanced),
+            "pano.jpg",
+        );
+        assert!(!image_plan(&p).resize);
+    }
+
+    #[test]
+    fn picture_quality_override_is_validated() {
+        let mut request = req(TargetFormat::Avif, QualityPreset::Small);
+        request.advanced.image_quality = Some(80);
+        assert_eq!(
+            image_plan(&plan(&photo(), &request, "a.jpg")).quality,
+            ImageQuality::Lossy { quality: 80 }
+        );
+        for wrong in [0, 101] {
+            request.advanced.image_quality = Some(wrong);
+            let err = plan_conversion(&photo(), &request, Path::new("a.jpg")).unwrap_err();
+            assert_eq!(err.code(), "unsupported_conversion");
+        }
+        // Video options make no sense for a picture.
+        let mut request = req(TargetFormat::Png, QualityPreset::Balanced);
+        request.advanced.video_codec = Some(VideoCodec::H264);
+        assert!(plan_conversion(&photo(), &request, Path::new("a.jpg")).is_err());
     }
 
     #[test]

@@ -5,6 +5,9 @@
 //!   codecs, which source codecs can be copied without re-encoding, ...);
 //! * [`RULES`]: for each kind of input, which output formats make sense.
 //!
+//! Pictures (JPG, PNG, WebP, AVIF) are formats of [`FormatKind::Image`] with a
+//! single [`ImageCodec`]; they are only proposed for still pictures.
+//!
 //! Adding a format means adding a [`TargetFormat`] variant, one row to
 //! [`FORMATS`] and listing it in [`RULES`]; the unit tests check consistency.
 
@@ -34,6 +37,10 @@ pub enum TargetFormat {
     Webm,
     Avi,
     Gif,
+    Jpg,
+    Png,
+    Webp,
+    Avif,
 }
 
 impl TargetFormat {
@@ -47,13 +54,14 @@ impl TargetFormat {
     }
 }
 
-/// Whether a format stores audio only or video (possibly with audio).
+/// Whether a format stores audio only, video (possibly with audio) or a picture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum FormatKind {
     Audio,
     Video,
+    Image,
 }
 
 /// Audio encoders Konvert uses.
@@ -91,6 +99,43 @@ pub enum VideoCodec {
     Mpeg4,
     /// GIF with an optimized palette
     Gif,
+}
+
+/// Picture encoders Konvert uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ImageCodec {
+    /// JPEG (FFmpeg native encoder)
+    Jpeg,
+    /// PNG (FFmpeg native encoder, lossless)
+    Png,
+    /// WebP (libwebp, lossy or lossless)
+    Webp,
+    /// AVIF: an AV1 still picture (libaom)
+    Avif,
+}
+
+impl ImageCodec {
+    /// `true` for codecs that always keep every pixel.
+    pub fn is_lossless(self) -> bool {
+        self == ImageCodec::Png
+    }
+
+    /// The format can store transparency.
+    pub fn supports_alpha(self) -> bool {
+        self != ImageCodec::Jpeg
+    }
+
+    /// Largest width or height the format can store (`None`: no practical limit).
+    pub fn max_dimension(self) -> Option<u32> {
+        match self {
+            ImageCodec::Jpeg => Some(65_535),
+            ImageCodec::Webp => Some(16_383),
+            ImageCodec::Avif => Some(65_536),
+            ImageCodec::Png => None,
+        }
+    }
 }
 
 impl AudioCodec {
@@ -145,6 +190,8 @@ pub struct FormatSpec {
     pub cover_art: bool,
     /// Extra muxer options.
     pub muxer_args: &'static [&'static str],
+    /// Picture encoder (picture formats only).
+    pub image_codec: Option<ImageCodec>,
 }
 
 impl FormatSpec {
@@ -158,10 +205,13 @@ impl FormatSpec {
 
     /// Lossless output (with the default codec).
     pub fn is_lossless(&self) -> bool {
-        self.kind == FormatKind::Audio
-            && self
+        match self.kind {
+            FormatKind::Audio => self
                 .default_audio_codec()
-                .is_some_and(AudioCodec::is_lossless)
+                .is_some_and(AudioCodec::is_lossless),
+            FormatKind::Image => self.image_codec.is_some_and(ImageCodec::is_lossless),
+            FormatKind::Video => false,
+        }
     }
 }
 
@@ -184,6 +234,7 @@ pub static FORMATS: &[FormatSpec] = &[
         copy_audio: &["mp3"],
         cover_art: true,
         muxer_args: &["-id3v2_version", "3"],
+        image_codec: None,
     },
     FormatSpec {
         format: TargetFormat::M4a,
@@ -198,6 +249,7 @@ pub static FORMATS: &[FormatSpec] = &[
         copy_audio: &["aac", "alac"],
         cover_art: true,
         muxer_args: &["-movflags", "+faststart"],
+        image_codec: None,
     },
     FormatSpec {
         format: TargetFormat::Wav,
@@ -213,6 +265,7 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: false,
         // RF64 header only when the file exceeds 4 GB.
         muxer_args: &["-rf64", "auto"],
+        image_codec: None,
     },
     FormatSpec {
         format: TargetFormat::Flac,
@@ -227,6 +280,7 @@ pub static FORMATS: &[FormatSpec] = &[
         copy_audio: &[],
         cover_art: true,
         muxer_args: &[],
+        image_codec: None,
     },
     FormatSpec {
         format: TargetFormat::Ogg,
@@ -241,6 +295,7 @@ pub static FORMATS: &[FormatSpec] = &[
         copy_audio: &["vorbis"],
         cover_art: false,
         muxer_args: &[],
+        image_codec: None,
     },
     FormatSpec {
         format: TargetFormat::Opus,
@@ -255,6 +310,7 @@ pub static FORMATS: &[FormatSpec] = &[
         copy_audio: &["opus"],
         cover_art: false,
         muxer_args: &[],
+        image_codec: None,
     },
     FormatSpec {
         format: TargetFormat::Wma,
@@ -269,6 +325,7 @@ pub static FORMATS: &[FormatSpec] = &[
         copy_audio: &["wmav2"],
         cover_art: false,
         muxer_args: &[],
+        image_codec: None,
     },
     FormatSpec {
         format: TargetFormat::Aiff,
@@ -283,6 +340,7 @@ pub static FORMATS: &[FormatSpec] = &[
         copy_audio: &[],
         cover_art: false,
         muxer_args: &[],
+        image_codec: None,
     },
     // --- Video ---------------------------------------------------------------
     FormatSpec {
@@ -298,6 +356,7 @@ pub static FORMATS: &[FormatSpec] = &[
         copy_audio: MP4_FAMILY_AUDIO_COPY,
         cover_art: false,
         muxer_args: &["-movflags", "+faststart"],
+        image_codec: None,
     },
     FormatSpec {
         format: TargetFormat::Mkv,
@@ -329,6 +388,7 @@ pub static FORMATS: &[FormatSpec] = &[
         ],
         cover_art: false,
         muxer_args: &[],
+        image_codec: None,
     },
     FormatSpec {
         format: TargetFormat::Mov,
@@ -343,6 +403,7 @@ pub static FORMATS: &[FormatSpec] = &[
         copy_audio: &["aac", "alac", "mp3", "ac3", "pcm_s16le", "pcm_s24le"],
         cover_art: false,
         muxer_args: &["-movflags", "+faststart"],
+        image_codec: None,
     },
     FormatSpec {
         format: TargetFormat::Webm,
@@ -357,6 +418,7 @@ pub static FORMATS: &[FormatSpec] = &[
         copy_audio: &["opus", "vorbis"],
         cover_art: false,
         muxer_args: &[],
+        image_codec: None,
     },
     FormatSpec {
         format: TargetFormat::Avi,
@@ -371,6 +433,7 @@ pub static FORMATS: &[FormatSpec] = &[
         copy_audio: &["mp3", "ac3", "pcm_s16le"],
         cover_art: false,
         muxer_args: &[],
+        image_codec: None,
     },
     FormatSpec {
         format: TargetFormat::Gif,
@@ -385,6 +448,69 @@ pub static FORMATS: &[FormatSpec] = &[
         copy_audio: &[],
         cover_art: false,
         muxer_args: &["-loop", "0"],
+        image_codec: None,
+    },
+    // --- Pictures ------------------------------------------------------------
+    FormatSpec {
+        format: TargetFormat::Jpg,
+        label: "JPG",
+        extension: "jpg",
+        input_extensions: &["jpg", "jpeg", "jpe", "jfif"],
+        // One encoded picture written as is (no file name patterns).
+        muxer: "image2pipe",
+        kind: FormatKind::Image,
+        video_codecs: &[],
+        audio_codecs: &[],
+        copy_video: &[],
+        copy_audio: &[],
+        cover_art: false,
+        muxer_args: &[],
+        image_codec: Some(ImageCodec::Jpeg),
+    },
+    FormatSpec {
+        format: TargetFormat::Png,
+        label: "PNG",
+        extension: "png",
+        input_extensions: &["png"],
+        muxer: "image2pipe",
+        kind: FormatKind::Image,
+        video_codecs: &[],
+        audio_codecs: &[],
+        copy_video: &[],
+        copy_audio: &[],
+        cover_art: false,
+        muxer_args: &[],
+        image_codec: Some(ImageCodec::Png),
+    },
+    FormatSpec {
+        format: TargetFormat::Webp,
+        label: "WebP",
+        extension: "webp",
+        input_extensions: &["webp"],
+        muxer: "webp",
+        kind: FormatKind::Image,
+        video_codecs: &[],
+        audio_codecs: &[],
+        copy_video: &[],
+        copy_audio: &[],
+        cover_art: false,
+        muxer_args: &[],
+        image_codec: Some(ImageCodec::Webp),
+    },
+    FormatSpec {
+        format: TargetFormat::Avif,
+        label: "AVIF",
+        extension: "avif",
+        input_extensions: &["avif"],
+        muxer: "avif",
+        kind: FormatKind::Image,
+        video_codecs: &[],
+        audio_codecs: &[],
+        copy_video: &[],
+        copy_audio: &[],
+        cover_art: false,
+        muxer_args: &[],
+        image_codec: Some(ImageCodec::Avif),
     },
 ];
 
@@ -416,6 +542,13 @@ const VIDEO_TARGETS: &[TargetFormat] = &[
     TargetFormat::Gif,
 ];
 
+const IMAGE_TARGETS: &[TargetFormat] = &[
+    TargetFormat::Jpg,
+    TargetFormat::Png,
+    TargetFormat::Webp,
+    TargetFormat::Avif,
+];
+
 /// What Konvert proposes for one kind of input.
 #[derive(Debug)]
 pub struct Rule {
@@ -424,24 +557,36 @@ pub struct Rule {
     pub video: &'static [TargetFormat],
     /// Audio outputs (for video inputs: "audio only" extraction).
     pub audio: &'static [TargetFormat],
+    /// Picture outputs.
+    pub image: &'static [TargetFormat],
 }
 
-/// Proposal rules. Audio inputs never get video outputs.
+/// Proposal rules. Audio inputs never get video outputs; pictures only get
+/// picture outputs.
 pub static RULES: &[Rule] = &[
     Rule {
         input: MediaKind::Audio,
         video: &[],
         audio: AUDIO_TARGETS,
+        image: &[],
     },
     Rule {
         input: MediaKind::Video,
         video: VIDEO_TARGETS,
         audio: &[],
+        image: &[],
     },
     Rule {
         input: MediaKind::VideoWithAudio,
         video: VIDEO_TARGETS,
         audio: AUDIO_TARGETS,
+        image: &[],
+    },
+    Rule {
+        input: MediaKind::Image,
+        video: &[],
+        audio: &[],
+        image: IMAGE_TARGETS,
     },
 ];
 
@@ -456,6 +601,8 @@ pub enum TargetGroup {
     Video,
     /// Video → audio only (extracts the soundtrack).
     AudioOnly,
+    /// Picture → picture.
+    Image,
 }
 
 /// A conversion proposed to the user.
@@ -528,7 +675,11 @@ pub fn available_targets(media: &MediaInfo, input: &Path) -> Vec<TargetOption> {
     } else {
         TargetGroup::AudioOnly
     };
-    let groups = [(rule.video, TargetGroup::Video), (rule.audio, audio_group)];
+    let groups = [
+        (rule.video, TargetGroup::Video),
+        (rule.audio, audio_group),
+        (rule.image, TargetGroup::Image),
+    ];
 
     groups
         .into_iter()
@@ -592,6 +743,17 @@ pub fn is_lossless_video_codec(codec: &str) -> bool {
     )
 }
 
+/// `true` for pictures stored without loss (FFmpeg codec and pixel format names).
+/// Lossless WebP decodes to RGB, lossy WebP to YUV.
+pub fn is_lossless_image(codec: &str, pix_fmt: Option<&str>) -> bool {
+    match codec {
+        "webp" => pix_fmt.is_some_and(|p| !p.starts_with("yuv")),
+        "bmp" | "tiff" | "qoi" | "pam" | "ppm" | "pgm" | "pbm" | "targa" | "sgi" | "pcx"
+        | "jpegls" | "xwd" | "sunrast" | "dpx" => true,
+        _ => is_lossless_video_codec(codec),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,6 +775,10 @@ mod tests {
         TargetFormat::Webm,
         TargetFormat::Avi,
         TargetFormat::Gif,
+        TargetFormat::Jpg,
+        TargetFormat::Png,
+        TargetFormat::Webp,
+        TargetFormat::Avif,
     ];
 
     fn media(json: &str) -> MediaInfo {
@@ -642,6 +808,13 @@ mod tests {
         )
     }
 
+    fn picture(codec: &str, container: &str) -> MediaInfo {
+        media(&format!(
+            r#"{{ "streams": [{{ "index": 0, "codec_name": "{codec}", "codec_type": "video",
+            "width": 4032, "height": 3024 }}], "format": {{ "format_name": "{container}" }} }}"#
+        ))
+    }
+
     fn formats(options: &[TargetOption]) -> Vec<TargetFormat> {
         options.iter().map(|o| o.format).collect()
     }
@@ -666,15 +839,79 @@ mod tests {
                     );
                 }
                 FormatKind::Video => assert!(!s.video_codecs.is_empty(), "{f:?}"),
+                FormatKind::Image => assert!(
+                    s.video_codecs.is_empty() && s.audio_codecs.is_empty(),
+                    "{f:?}"
+                ),
             }
+            assert_eq!(
+                s.image_codec.is_some(),
+                s.kind == FormatKind::Image,
+                "{f:?}"
+            );
         }
+    }
+
+    #[test]
+    fn pictures_get_only_picture_formats() {
+        let options = available_targets(&picture("mjpeg", "image2"), Path::new("IMG_1.JPEG"));
+        assert!(options.iter().all(|o| o.group == TargetGroup::Image));
+        assert!(options.iter().all(|o| o.kind == FormatKind::Image));
+        assert!(
+            options
+                .iter()
+                .all(|o| o.video_codecs.is_empty() && o.audio_codecs.is_empty())
+        );
+        assert_eq!(
+            formats(&options),
+            [
+                TargetFormat::Jpg,
+                TargetFormat::Png,
+                TargetFormat::Webp,
+                TargetFormat::Avif
+            ]
+        );
+        // JPG → JPG is offered (to make the file lighter), flagged as the same format.
+        assert!(options[0].same_as_input && !options[0].lossless);
+        assert!(options[1].lossless);
+
+        // PNG → PNG gains nothing; BMP/HEIC have no output format of their own.
+        let png = available_targets(&picture("png", "png_pipe"), Path::new("a.png"));
+        assert!(!formats(&png).contains(&TargetFormat::Png));
+        let bmp = available_targets(&picture("bmp", "bmp_pipe"), Path::new("a.bmp"));
+        assert_eq!(bmp.len(), IMAGE_TARGETS.len());
+
+        // Pictures never reach audio or video formats, and vice versa.
+        assert!(!is_offered(
+            &picture("png", "png_pipe"),
+            Path::new("a.png"),
+            TargetFormat::Mp4
+        ));
+        assert!(!is_offered(
+            &video_with_audio(),
+            Path::new("clip.mp4"),
+            TargetFormat::Jpg
+        ));
+    }
+
+    #[test]
+    fn lossless_picture_detection() {
+        assert!(is_lossless_image("png", Some("rgba")));
+        assert!(is_lossless_image("bmp", Some("bgr24")));
+        assert!(is_lossless_image("webp", Some("argb")));
+        assert!(!is_lossless_image("webp", Some("yuv420p")));
+        assert!(!is_lossless_image("mjpeg", Some("yuvj420p")));
+        assert!(!is_lossless_image("hevc", Some("yuv420p")));
+        assert!(!is_lossless_image("av1", None));
+        assert_eq!(TargetFormat::from_id("JPEG"), Some(TargetFormat::Jpg));
+        assert_eq!(TargetFormat::from_id("webp"), Some(TargetFormat::Webp));
     }
 
     #[test]
     fn every_format_is_reachable_from_some_input() {
         let offered: HashSet<TargetFormat> = RULES
             .iter()
-            .flat_map(|r| r.video.iter().chain(r.audio))
+            .flat_map(|r| r.video.iter().chain(r.audio).chain(r.image))
             .copied()
             .collect();
         assert_eq!(offered.len(), ALL.len());

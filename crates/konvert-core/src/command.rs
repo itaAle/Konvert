@@ -10,10 +10,10 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use crate::error::CoreError;
-use crate::formats::{self, AudioCodec, FormatSpec, VideoCodec};
+use crate::formats::{self, AudioCodec, FormatSpec, ImageCodec, VideoCodec};
 use crate::plan::{
-    AudioEncode, AudioPlan, AudioRate, ConversionPlan, VideoEncode, VideoPlan, VideoRate,
-    plan_conversion,
+    AudioEncode, AudioPlan, AudioRate, ConversionPlan, ImagePlan, ImageQuality, VideoEncode,
+    VideoPlan, VideoRate, plan_conversion,
 };
 use crate::probe::MediaInfo;
 use crate::request::ConversionRequest;
@@ -75,6 +75,19 @@ pub fn build_from_plan(plan: &ConversionPlan, input: &Path, output: &Path) -> Ff
     a.push(&["-protocol_whitelist", "file", "-i"]);
     a.push_os(file_url(input));
 
+    match &plan.image {
+        Some(image) => picture_args(&mut a, image, plan.video_stream.unwrap_or(0)),
+        None => media_args(&mut a, plan, spec),
+    }
+
+    a.push(spec.muxer_args);
+    a.push(&["-f", spec.muxer, "-y"]);
+    a.push_os(file_url(output));
+    FfmpegCommand { args: a.0 }
+}
+
+/// Stream selection and codecs of an audio or video conversion.
+fn media_args(a: &mut Args, plan: &ConversionPlan, spec: &FormatSpec) {
     // Stream selection: explicit maps, so subtitles/data/extra tracks are left out.
     match (&plan.video, plan.video_stream) {
         (Some(VideoPlan::Encode(enc)), Some(index)) if enc.codec == VideoCodec::Gif => {
@@ -104,13 +117,13 @@ pub fn build_from_plan(plan: &ConversionPlan, input: &Path, output: &Path) -> Ff
                 a.push(&["-tag:v", "hvc1"]);
             }
         }
-        Some(VideoPlan::Encode(enc)) if enc.codec != VideoCodec::Gif => video_args(&mut a, enc),
+        Some(VideoPlan::Encode(enc)) if enc.codec != VideoCodec::Gif => video_args(a, enc),
         _ => {}
     }
 
     match &plan.audio {
         Some(AudioPlan::Copy { .. }) => a.push(&["-c:a", "copy"]),
-        Some(AudioPlan::Encode(enc)) => audio_args(&mut a, enc, spec),
+        Some(AudioPlan::Encode(enc)) => audio_args(a, enc, spec),
         None => {}
     }
 
@@ -118,11 +131,123 @@ pub fn build_from_plan(plan: &ConversionPlan, input: &Path, output: &Path) -> Ff
     if plan.cover_art_stream.is_some() {
         a.push(&["-c:v", "copy", "-disposition:v:0", "attached_pic"]);
     }
+}
 
-    a.push(spec.muxer_args);
-    a.push(&["-f", spec.muxer, "-y"]);
-    a.push_os(file_url(output));
-    FfmpegCommand { args: a.0 }
+/// One picture. The filter graph assembles the tiles of a grid (or merges a
+/// separate transparency plane), scales, lays transparent areas on white when
+/// the format has no transparency and prepares the encoder's pixel format.
+/// FFmpeg applies the EXIF/HEIF rotation before the graph.
+fn picture_args(a: &mut Args, image: &ImagePlan, index: u32) {
+    let (inputs, mut steps) = match (image.grid_group, image.alpha_stream) {
+        (Some(group), _) => (format!("[0:g:{group}]"), Vec::new()),
+        (None, Some(alpha)) => (
+            format!("[0:{index}][0:{alpha}]"),
+            vec!["alphamerge".to_owned()],
+        ),
+        (None, None) => (format!("[0:{index}]"), Vec::new()),
+    };
+    if let (true, Some(w), Some(h)) = (image.resize, image.width, image.height) {
+        steps.push(format!("scale={w}:{h}:flags=lanczos"));
+    }
+    if image.flatten {
+        steps.push(
+            "format=rgba,split[fg][back];\
+             [back]drawbox=c=white@1:t=fill:replace=1,format=rgb24[bg];\
+             [bg][fg]overlay=format=auto"
+                .to_owned(),
+        );
+    }
+    // AVIF stores transparency as a second, grayscale picture.
+    let alpha_plane = image.codec == ImageCodec::Avif && image.alpha;
+    if alpha_plane {
+        steps.push(
+            "format=yuva420p,split[color][a];[a]alphaextract[alpha];[color]format=yuv420p"
+                .to_owned(),
+        );
+    } else if image.codec == ImageCodec::Avif {
+        steps.push("format=yuv420p".to_owned());
+    }
+    if steps.is_empty() {
+        steps.push("null".to_owned());
+    }
+    a.push(&[
+        "-filter_complex",
+        &format!("{inputs}{}[img]", steps.join(",")),
+        "-map",
+        "[img]",
+    ]);
+    if alpha_plane {
+        a.push(&["-map", "[alpha]"]);
+    }
+    a.push(&["-frames:v", "1"]);
+
+    match (image.codec, image.quality) {
+        (ImageCodec::Jpeg, ImageQuality::Lossy { quality }) => {
+            // Full chroma resolution at high quality; full-range YUV as JPEG expects.
+            let pix_fmt = if quality >= 90 { "yuv444p" } else { "yuv420p" };
+            a.push(&[
+                "-c:v",
+                "mjpeg",
+                "-q:v",
+                &jpeg_qscale(quality).to_string(),
+                "-pix_fmt",
+                pix_fmt,
+                "-color_range",
+                "pc",
+            ]);
+        }
+        (ImageCodec::Png, ImageQuality::Lossless { effort }) => {
+            a.push(&["-c:v", "png", "-compression_level", &effort.to_string()]);
+        }
+        (ImageCodec::Webp, ImageQuality::Lossless { effort }) => {
+            a.push(&[
+                "-c:v",
+                "libwebp",
+                "-lossless",
+                "1",
+                "-compression_level",
+                &effort.to_string(),
+            ]);
+        }
+        (ImageCodec::Webp, ImageQuality::Lossy { quality }) => {
+            let pix_fmt = if image.alpha { "yuva420p" } else { "yuv420p" };
+            a.push(&[
+                "-c:v",
+                "libwebp",
+                "-quality",
+                &quality.to_string(),
+                "-pix_fmt",
+                pix_fmt,
+            ]);
+        }
+        (ImageCodec::Avif, ImageQuality::Lossy { quality }) => {
+            a.push(&[
+                "-c:v",
+                "libaom-av1",
+                "-still-picture",
+                "1",
+                "-cpu-used",
+                "6",
+                "-crf",
+                &avif_crf(quality).to_string(),
+                "-b:v",
+                "0",
+            ]);
+        }
+        (codec, quality) => unreachable!("invalid plan: {codec:?} with {quality:?}"),
+    }
+}
+
+/// FFmpeg's JPEG quantizer scale (2 = best … 31) for a quality from 1 to 100.
+fn jpeg_qscale(quality: u8) -> u8 {
+    let steps = (100 - quality.min(100)) as f64 / 5.0;
+    (steps.round() as u8 + 1).clamp(2, 31)
+}
+
+/// AV1 constant quality (0 = best … 63) for a quality from 1 to 100, with the
+/// same scale as libavif.
+fn avif_crf(quality: u8) -> u8 {
+    ((100 - quality.min(100) as u32) * 63 + 50).div_euclid(100) as u8
 }
 
 fn video_args(a: &mut Args, enc: &VideoEncode) {
@@ -506,6 +631,125 @@ mod tests {
              "-vf", "scale=1280:720:flags=bicubic,fps=29.97", "-pix_fmt", "yuv420p",
              "-c:a", "libopus", "-b:a", "96k", "-vbr", "on", "-ac", "1"]
         );
+    }
+
+    /// Arguments between the input URL and `-f`, plus the muxer.
+    fn picture_body(
+        media: &MediaInfo,
+        request: &ConversionRequest,
+        input: &str,
+    ) -> (Vec<String>, String) {
+        let cmd = build_command(media, request, Path::new(input), Path::new("out.tmp")).unwrap();
+        let args = cmd.args_lossy();
+        assert_eq!(&args[..HEAD.len()], HEAD);
+        let f = args.iter().rposition(|a| a == "-f").unwrap();
+        assert_eq!(&args[f + 2..], ["-y", "file:out.tmp"]);
+        (args[HEAD.len() + 1..f].to_vec(), args[f + 1].clone())
+    }
+
+    fn jpeg() -> MediaInfo {
+        media(
+            r#"{ "streams": [{ "index": 0, "codec_name": "mjpeg", "codec_type": "video",
+            "width": 4000, "height": 3000, "pix_fmt": "yuvj420p" }],
+            "format": { "format_name": "image2" } }"#,
+        )
+    }
+
+    fn transparent_png() -> MediaInfo {
+        media(
+            r#"{ "streams": [{ "index": 0, "codec_name": "png", "codec_type": "video",
+            "width": 64, "height": 48, "pix_fmt": "rgba" }], "format": { "format_name": "png_pipe" } }"#,
+        )
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn jpeg_to_every_picture_format() {
+        assert_eq!(
+            picture_body(&jpeg(), &req(TargetFormat::Webp, QualityPreset::Balanced), "a.jpg"),
+            (strings(&["-filter_complex", "[0:0]null[img]", "-map", "[img]", "-frames:v", "1",
+                "-c:v", "libwebp", "-quality", "82", "-pix_fmt", "yuv420p"]), "webp".into())
+        );
+        assert_eq!(
+            picture_body(&jpeg(), &req(TargetFormat::Png, QualityPreset::Small), "a.jpg"),
+            (strings(&["-filter_complex", "[0:0]null[img]", "-map", "[img]", "-frames:v", "1",
+                "-c:v", "png", "-compression_level", "9"]), "image2pipe".into())
+        );
+        assert_eq!(
+            picture_body(&jpeg(), &req(TargetFormat::Jpg, QualityPreset::Max), "a.jpg"),
+            (strings(&["-filter_complex", "[0:0]null[img]", "-map", "[img]", "-frames:v", "1",
+                "-c:v", "mjpeg", "-q:v", "2", "-pix_fmt", "yuv444p", "-color_range", "pc"]), "image2pipe".into())
+        );
+        let mut request = req(TargetFormat::Avif, QualityPreset::Balanced);
+        request.advanced.max_dimension = Some(1000);
+        assert_eq!(
+            picture_body(&jpeg(), &request, "a.jpg"),
+            (strings(&["-filter_complex", "[0:0]scale=1000:750:flags=lanczos,format=yuv420p[img]",
+                "-map", "[img]", "-frames:v", "1",
+                "-c:v", "libaom-av1", "-still-picture", "1", "-cpu-used", "6", "-crf", "25", "-b:v", "0"]),
+             "avif".into())
+        );
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn transparency_is_flattened_for_jpeg_and_split_for_avif() {
+        let (args, _) = picture_body(&transparent_png(), &req(TargetFormat::Jpg, QualityPreset::Balanced), "a.png");
+        assert_eq!(&args[..2], ["-filter_complex",
+            "[0:0]format=rgba,split[fg][back];[back]drawbox=c=white@1:t=fill:replace=1,format=rgb24[bg];\
+             [bg][fg]overlay=format=auto[img]"]);
+        assert!(args.ends_with(&strings(&["-c:v", "mjpeg", "-q:v", "4", "-pix_fmt", "yuv420p", "-color_range", "pc"])));
+
+        let (args, _) = picture_body(&transparent_png(), &req(TargetFormat::Avif, QualityPreset::Small), "a.png");
+        assert_eq!(&args[..7], ["-filter_complex",
+            "[0:0]format=yuva420p,split[color][a];[a]alphaextract[alpha];[color]format=yuv420p[img]",
+            "-map", "[img]", "-map", "[alpha]", "-frames:v"]);
+        assert!(args.windows(2).any(|w| w == ["-crf", "35"]));
+
+        let (args, _) = picture_body(&transparent_png(), &req(TargetFormat::Webp, QualityPreset::Max), "a.png");
+        assert!(args.ends_with(&strings(&["-c:v", "libwebp", "-lossless", "1", "-compression_level", "4"])));
+        let (args, _) = picture_body(&transparent_png(), &req(TargetFormat::Webp, QualityPreset::Small), "a.png");
+        assert!(args.ends_with(&strings(&["-quality", "65", "-pix_fmt", "yuva420p"])));
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn heic_grids_and_avif_alpha_planes_are_assembled() {
+        let heic = media(
+            r#"{ "stream_groups": [{ "index": 0, "type": "Tile Grid", "disposition": { "default": 1 },
+                "components": [{ "width": 512, "height": 384,
+                  "subcomponents": [{ "stream_index": 0 }, { "stream_index": 1 }] }] }],
+              "streams": [
+                { "index": 0, "codec_name": "hevc", "codec_type": "video", "width": 256, "height": 384 },
+                { "index": 1, "codec_name": "hevc", "codec_type": "video", "width": 256, "height": 384 }],
+              "format": { "format_name": "mov,mp4,m4a,3gp,3g2,mj2", "tags": { "major_brand": "heic" } } }"#,
+        );
+        let (args, _) = picture_body(&heic, &req(TargetFormat::Jpg, QualityPreset::Balanced), "IMG_1.HEIC");
+        assert_eq!(&args[..2], ["-filter_complex", "[0:g:0]null[img]"]);
+
+        let avif = media(
+            r#"{ "streams": [
+                { "index": 0, "codec_name": "av1", "codec_type": "video", "width": 64, "height": 48,
+                  "pix_fmt": "yuv420p", "disposition": { "default": 1 } },
+                { "index": 1, "codec_name": "av1", "codec_type": "video", "width": 64, "height": 48,
+                  "pix_fmt": "gray" }],
+              "format": { "format_name": "mov,mp4,m4a,3gp,3g2,mj2", "tags": { "major_brand": "avif" } } }"#,
+        );
+        let (args, _) = picture_body(&avif, &req(TargetFormat::Png, QualityPreset::Balanced), "a.avif");
+        assert_eq!(&args[..4], ["-filter_complex", "[0:0][0:1]alphamerge[img]", "-map", "[img]"]);
+    }
+
+    #[test]
+    fn picture_quality_scales() {
+        assert_eq!(
+            [100, 95, 90, 85, 70, 50, 1].map(jpeg_qscale),
+            [2, 2, 3, 4, 7, 11, 21]
+        );
+        assert_eq!([100, 75, 60, 45, 1].map(avif_crf), [0, 16, 25, 35, 62]);
+    }
+
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
     }
 
     #[test]

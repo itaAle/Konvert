@@ -60,6 +60,11 @@ pub struct AdvancedOptions {
     pub video_codec: Option<VideoCodec>,
     /// Video bit rate in kbit/s (replaces the preset's quality setting).
     pub video_bitrate_kbps: Option<u32>,
+    /// Picture quality from 1 (smallest file) to 100 (best), lossy picture
+    /// formats only.
+    pub image_quality: Option<u8>,
+    /// Longest side of a picture in pixels (never upscales; keeps the aspect ratio).
+    pub max_dimension: Option<u32>,
 }
 
 impl AdvancedOptions {
@@ -123,6 +128,17 @@ mod tests {
         assert_eq!(req.advanced.max_height, Some(720));
         assert_eq!(req.advanced.video_codec, Some(VideoCodec::Av1));
         assert!(req.advanced.touches_video() && !req.advanced.touches_audio());
+
+        let req: ConversionRequest = serde_json::from_str(
+            r#"{ "target": "webp", "advanced": { "imageQuality": 70, "maxDimension": 1920 } }"#,
+        )
+        .unwrap();
+        assert_eq!(req.target, TargetFormat::Webp);
+        assert_eq!(
+            (req.advanced.image_quality, req.advanced.max_dimension),
+            (Some(70), Some(1920))
+        );
+        assert!(!req.advanced.touches_video() && !req.advanced.touches_audio());
     }
 
     #[test]

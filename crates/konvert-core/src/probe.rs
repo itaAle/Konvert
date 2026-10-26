@@ -2,6 +2,8 @@
 //!
 //! [`parse_ffprobe_json`] is a pure function (unit-tested with captured output);
 //! [`probe`] runs FFprobe on a local file and feeds its JSON to the parser.
+//! Still pictures need a second look at their first frame
+//! ([`apply_first_frame_json`]): rotation and EXIF data live there.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -24,6 +26,8 @@ pub enum MediaKind {
     Video,
     /// Video with at least one audio track.
     VideoWithAudio,
+    /// A single picture (photo): JPEG, PNG, WebP, AVIF, HEIC, BMP, TIFF, ...
+    Image,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -69,6 +73,21 @@ impl CoverArt {
     }
 }
 
+/// Details of a still picture ([`MediaKind::Image`]).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PictureInfo {
+    /// The picture has, or may have, transparent areas.
+    pub alpha: bool,
+    /// Stream holding a separate transparency plane (AVIF).
+    pub alpha_stream: Option<u32>,
+    /// Stream group of a picture stored as a grid of tiles (HEIC/AVIF photos).
+    pub grid_group: Option<u32>,
+    /// Embedded EXIF data (camera, date, location, ...).
+    pub exif: bool,
+}
+
 /// Result of analysing an input file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -82,11 +101,15 @@ pub struct MediaInfo {
     /// Overall bit rate in bits per second.
     pub bit_rate: Option<u64>,
     pub audio: Vec<AudioStream>,
-    /// Real video streams (attached cover pictures excluded).
+    /// Real video streams (attached cover pictures excluded). For a picture:
+    /// only the picture itself, with its displayed (rotated) size.
     pub video: Vec<VideoStream>,
     /// Embedded cover picture (e.g. album art in MP3/M4A/FLAC).
     pub cover_art: Option<CoverArt>,
     pub subtitle_streams: u32,
+    /// Picture details, for [`MediaKind::Image`] only.
+    #[serde(default)]
+    pub picture: Option<PictureInfo>,
 }
 
 impl MediaInfo {
@@ -97,6 +120,11 @@ impl MediaInfo {
     pub fn primary_video(&self) -> Option<&VideoStream> {
         self.video.first()
     }
+
+    /// The input is a HEIF/AVIF container (brand-based picture in an ISO file).
+    pub fn is_heif(&self) -> bool {
+        self.kind == MediaKind::Image && self.container.starts_with("mov,")
+    }
 }
 
 /// Runs FFprobe on a local file. Network protocols are not allowed.
@@ -104,10 +132,40 @@ pub async fn probe(bins: &Binaries, input: &Path) -> Result<MediaInfo, CoreError
     if !input.is_file() {
         return Err(CoreError::InputNotFound);
     }
+    let json = run_ffprobe(
+        bins,
+        input,
+        &["-show_format", "-show_streams", "-show_stream_groups"],
+    )
+    .await?;
+    let mut info = parse_ffprobe_json(&json)?;
+    if info.kind == MediaKind::Image && !info.is_heif() {
+        // EXIF orientation and data are only visible on the decoded picture
+        // (HEIF/AVIF files declare them in the container instead).
+        let json = run_ffprobe(
+            bins,
+            input,
+            &[
+                "-select_streams",
+                "v:0",
+                "-read_intervals",
+                "%+#1",
+                "-show_entries",
+                "frame=width,height,pix_fmt:frame_side_data=side_data_type,rotation",
+            ],
+        )
+        .await?;
+        apply_first_frame_json(&mut info, &json)?;
+    }
+    Ok(info)
+}
+
+async fn run_ffprobe(bins: &Binaries, input: &Path, args: &[&str]) -> Result<Vec<u8>, CoreError> {
     let mut cmd = process::engine_command(&bins.ffprobe);
     cmd.args(["-hide_banner", "-v", "error"])
         .args(["-protocol_whitelist", "file"])
-        .args(["-print_format", "json", "-show_format", "-show_streams"])
+        .args(["-print_format", "json"])
+        .args(args)
         .arg(crate::command::file_url(input));
     let output = process::spawn(&mut cmd)?.wait_with_output().await?;
     if !output.status.success() {
@@ -117,23 +175,29 @@ pub async fn probe(bins: &Binaries, input: &Path) -> Result<MediaInfo, CoreError
             other => other,
         });
     }
-    parse_ffprobe_json(&output.stdout)
+    Ok(output.stdout)
 }
 
-/// Converts FFprobe's `-print_format json -show_format -show_streams` output.
-pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
-    let raw: RawProbe = serde_json::from_slice(json).map_err(|e| CoreError::CorruptInput {
+fn unexpected_output(e: serde_json::Error) -> CoreError {
+    CoreError::CorruptInput {
         details: format!("unexpected ffprobe output: {e}"),
-    })?;
-    let format = raw.format.unwrap_or_default();
-    let container = format.format_name.unwrap_or_default();
+    }
+}
+
+/// Converts FFprobe's `-print_format json -show_format -show_streams
+/// -show_stream_groups` output.
+pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
+    let raw: RawProbe = serde_json::from_slice(json).map_err(unexpected_output)?;
+    let format = raw.format.clone().unwrap_or_default();
+    let container = format.format_name.clone().unwrap_or_default();
+    let brand = format.tags.get("major_brand").map_or("", String::as_str);
 
     let mut audio = Vec::new();
     let mut video = Vec::new();
     let mut cover_art = None;
     let mut subtitle_streams = 0;
 
-    for s in raw.streams {
+    for s in raw.streams.iter().cloned() {
         let codec = s.codec_name.clone().unwrap_or_default();
         match s.codec_type.as_deref() {
             Some("audio") => audio.push(AudioStream {
@@ -170,8 +234,8 @@ pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
         }
     }
 
-    if is_still_image(&container, &video, audio.is_empty()) {
-        return Err(CoreError::NotMedia);
+    if audio.is_empty() && is_still_picture(&container, brand, &video) {
+        return parse_picture(&raw, container, parse_num(&format.size));
     }
 
     let kind = match (video.is_empty(), audio.is_empty()) {
@@ -191,16 +255,156 @@ pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
         video,
         cover_art,
         subtitle_streams,
+        picture: None,
     })
 }
 
-/// Single pictures (PNG, JPEG, ...) are not media Konvert converts.
-fn is_still_image(container: &str, video: &[VideoStream], no_audio: bool) -> bool {
+/// Brands of HEIF/AVIF files holding a still picture (not a picture sequence).
+const PICTURE_BRANDS: &[&str] = &["avif", "heic", "heix", "heim", "heis", "mif1", "mif2"];
+
+/// A single picture: image demuxers (JPEG, PNG, WebP, BMP, TIFF, ...) and
+/// HEIF/AVIF files. Animated GIF, APNG and WebP stay videos.
+fn is_still_picture(container: &str, brand: &str, video: &[VideoStream]) -> bool {
     let image_demuxer = container == "image2" || container.ends_with("_pipe");
+    let heif = container.starts_with("mov,") && PICTURE_BRANDS.contains(&brand);
     let animated = video
         .iter()
-        .any(|v| matches!(v.codec.as_str(), "gif" | "apng" | "webp"));
-    no_audio && image_demuxer && !animated
+        .any(|v| matches!(v.codec.as_str(), "gif" | "apng" | "webp_anim"));
+    !video.is_empty() && (image_demuxer || heif) && !animated
+}
+
+/// Picture described by its main stream, or by the tile grid it is made of.
+fn parse_picture(
+    raw: &RawProbe,
+    container: String,
+    size_bytes: Option<u64>,
+) -> Result<MediaInfo, CoreError> {
+    let streams: Vec<&RawStream> = raw
+        .streams
+        .iter()
+        .filter(|s| s.codec_type.as_deref() == Some("video") && !s.is_attached_picture())
+        .collect();
+    let stream_by_index = |index: u32| streams.iter().copied().find(|s| s.index == index);
+
+    let grids: Vec<RawStreamGroup> = raw
+        .stream_groups
+        .iter()
+        .filter(|g| g.get("type").and_then(|t| t.as_str()) == Some("Tile Grid"))
+        .filter_map(|g| serde_json::from_value(g.clone()).ok())
+        .collect();
+    let grid = grids
+        .iter()
+        .find(|g| g.is_default())
+        .or(grids.first())
+        .and_then(|g| Some((g, g.components.first()?)));
+
+    let mut picture = PictureInfo::default();
+    let (main, width, height, side_data) = match grid {
+        Some((group, component)) => {
+            let first_tile = component
+                .subcomponents
+                .iter()
+                .find_map(|t| t.stream_index.and_then(stream_by_index))
+                .ok_or(CoreError::NotMedia)?;
+            picture.grid_group = Some(group.index);
+            let side_data: Vec<&RawSideData> = component
+                .side_data_list
+                .iter()
+                .chain(&group.side_data_list)
+                .collect();
+            (first_tile, component.width, component.height, side_data)
+        }
+        None => {
+            let main = streams
+                .iter()
+                .copied()
+                .find(|s| s.is_default() && !s.is_dependent())
+                .or(streams.first().copied())
+                .ok_or(CoreError::NotMedia)?;
+            // A grayscale twin of the picture is its transparency plane (AVIF).
+            picture.alpha_stream = streams
+                .iter()
+                .find(|s| {
+                    s.index != main.index
+                        && s.codec_name == main.codec_name
+                        && s.pix_fmt.as_deref().is_some_and(|p| p.starts_with("gray"))
+                        && (s.width, s.height) == (main.width, main.height)
+                })
+                .map(|s| s.index);
+            (
+                main,
+                main.width,
+                main.height,
+                main.side_data_list.iter().collect(),
+            )
+        }
+    };
+
+    picture.exif = side_data.iter().any(|d| d.is_exif());
+    picture.alpha =
+        picture.alpha_stream.is_some() || main.pix_fmt.as_deref().is_some_and(pix_fmt_has_alpha);
+    let mut stream = VideoStream {
+        index: main.index,
+        codec: main.codec_name.clone().unwrap_or_default(),
+        width,
+        height,
+        fps: None,
+        bit_rate: None,
+        pix_fmt: main.pix_fmt.clone(),
+    };
+    if side_data.iter().any(|d| d.is_quarter_turn()) {
+        std::mem::swap(&mut stream.width, &mut stream.height);
+    }
+
+    Ok(MediaInfo {
+        container,
+        kind: MediaKind::Image,
+        duration_secs: None,
+        size_bytes,
+        bit_rate: None,
+        audio: Vec::new(),
+        video: vec![stream],
+        cover_art: None,
+        subtitle_streams: 0,
+        picture: Some(picture),
+    })
+}
+
+/// Completes a picture with its first decoded frame (`-show_entries
+/// frame=width,height,pix_fmt:frame_side_data=side_data_type,rotation`):
+/// EXIF data and the EXIF orientation, which FFmpeg applies when converting.
+pub fn apply_first_frame_json(info: &mut MediaInfo, json: &[u8]) -> Result<(), CoreError> {
+    let raw: RawFrames = serde_json::from_slice(json).map_err(unexpected_output)?;
+    let frame = raw.frames.first().ok_or_else(|| CoreError::CorruptInput {
+        details: "the picture could not be decoded".into(),
+    })?;
+    let picture = info.picture.get_or_insert_default();
+    picture.exif |= frame.side_data_list.iter().any(RawSideData::is_exif);
+    if let Some(stream) = info.video.first_mut() {
+        if frame.width.is_some() && frame.height.is_some() {
+            (stream.width, stream.height) = (frame.width, frame.height);
+        }
+        if frame
+            .side_data_list
+            .iter()
+            .any(RawSideData::is_quarter_turn)
+        {
+            std::mem::swap(&mut stream.width, &mut stream.height);
+        }
+        if let Some(pix_fmt) = &frame.pix_fmt {
+            picture.alpha |= pix_fmt_has_alpha(pix_fmt);
+            stream.pix_fmt = Some(pix_fmt.clone());
+        }
+    }
+    Ok(())
+}
+
+/// Pixel formats with an alpha channel (`pal8`: the palette may have one).
+fn pix_fmt_has_alpha(pix_fmt: &str) -> bool {
+    pix_fmt == "pal8"
+        || ["yuva", "gbrap", "ya", "rgba", "bgra", "argb", "abgr"]
+            .iter()
+            .any(|prefix| pix_fmt.starts_with(prefix))
 }
 
 fn parse_num<T: std::str::FromStr>(v: &Option<String>) -> Option<T> {
@@ -221,17 +425,89 @@ struct RawProbe {
     #[serde(default)]
     streams: Vec<RawStream>,
     format: Option<RawFormat>,
+    /// Kept loose: only tile grids are parsed, other group types are ignored.
+    #[serde(default)]
+    stream_groups: Vec<serde_json::Value>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 struct RawFormat {
     format_name: Option<String>,
     duration: Option<String>,
     size: Option<String>,
     bit_rate: Option<String>,
+    #[serde(default)]
+    tags: HashMap<String, String>,
+}
+
+/// A `Tile Grid` stream group (HEIF/AVIF picture split into tiles).
+#[derive(Debug, Deserialize)]
+struct RawStreamGroup {
+    index: u32,
+    #[serde(default)]
+    components: Vec<RawGridComponent>,
+    #[serde(default)]
+    side_data_list: Vec<RawSideData>,
+    #[serde(default)]
+    disposition: HashMap<String, i64>,
+}
+
+impl RawStreamGroup {
+    fn is_default(&self) -> bool {
+        self.disposition.get("default").copied() == Some(1)
+    }
 }
 
 #[derive(Debug, Deserialize)]
+struct RawGridComponent {
+    width: Option<u32>,
+    height: Option<u32>,
+    #[serde(default)]
+    subcomponents: Vec<RawTile>,
+    #[serde(default)]
+    side_data_list: Vec<RawSideData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTile {
+    stream_index: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawSideData {
+    side_data_type: Option<String>,
+    /// Display rotation in degrees (counter-clockwise).
+    rotation: Option<f64>,
+}
+
+impl RawSideData {
+    fn is_exif(&self) -> bool {
+        self.side_data_type.as_deref() == Some("EXIF metadata")
+    }
+
+    /// Rotated by 90° or 270°: width and height are swapped on display.
+    fn is_quarter_turn(&self) -> bool {
+        self.rotation
+            .is_some_and(|r| (r.round() as i64).rem_euclid(180) == 90)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RawFrames {
+    #[serde(default)]
+    frames: Vec<RawFrame>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawFrame {
+    width: Option<u32>,
+    height: Option<u32>,
+    pix_fmt: Option<String>,
+    #[serde(default)]
+    side_data_list: Vec<RawSideData>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct RawStream {
     index: u32,
     codec_name: Option<String>,
@@ -248,11 +524,26 @@ struct RawStream {
     pix_fmt: Option<String>,
     #[serde(default)]
     disposition: HashMap<String, i64>,
+    #[serde(default)]
+    side_data_list: Vec<RawSideData>,
 }
 
 impl RawStream {
+    fn flag(&self, name: &str) -> bool {
+        self.disposition.get(name).copied() == Some(1)
+    }
+
     fn is_attached_picture(&self) -> bool {
-        self.disposition.get("attached_pic").copied() == Some(1)
+        self.flag("attached_pic")
+    }
+
+    fn is_default(&self) -> bool {
+        self.flag("default")
+    }
+
+    /// Part of something else (e.g. one tile of a HEIC grid).
+    fn is_dependent(&self) -> bool {
+        self.flag("dependent")
     }
 }
 
@@ -325,18 +616,125 @@ mod tests {
     }
 
     #[test]
-    fn still_images_and_empty_files_are_not_media() {
-        let png = r#"{ "streams": [{ "index": 0, "codec_name": "png", "codec_type": "video",
-            "width": 10, "height": 10 }], "format": { "format_name": "png_pipe" } }"#;
-        assert!(matches!(
-            parse_ffprobe_json(png.as_bytes()),
-            Err(CoreError::NotMedia)
-        ));
+    fn empty_files_are_not_media() {
         let empty = r#"{ "streams": [], "format": { "format_name": "mp3" } }"#;
         assert!(matches!(
             parse_ffprobe_json(empty.as_bytes()),
             Err(CoreError::NotMedia)
         ));
+    }
+
+    #[test]
+    fn png_is_a_picture_with_transparency() {
+        let png = r#"{ "streams": [{ "index": 0, "codec_name": "png", "codec_type": "video",
+            "width": 10, "height": 20, "pix_fmt": "rgba", "avg_frame_rate": "25/1" }],
+            "format": { "format_name": "png_pipe", "size": "1234" } }"#;
+        let info = parse_ffprobe_json(png.as_bytes()).unwrap();
+        assert_eq!(info.kind, MediaKind::Image);
+        assert_eq!(info.duration_secs, None);
+        assert_eq!(info.size_bytes, Some(1234));
+        let v = info.primary_video().unwrap();
+        assert_eq!((v.width, v.height, v.fps), (Some(10), Some(20), None));
+        let picture = info.picture.unwrap();
+        assert!(picture.alpha && !picture.exif);
+        assert_eq!((picture.grid_group, picture.alpha_stream), (None, None));
+    }
+
+    #[test]
+    fn exif_orientation_of_the_first_frame_rotates_the_picture() {
+        let jpeg = r#"{ "streams": [{ "index": 0, "codec_name": "mjpeg", "codec_type": "video",
+            "width": 640, "height": 480, "pix_fmt": "yuvj420p" }],
+            "format": { "format_name": "image2", "duration": "0.04" } }"#;
+        let mut info = parse_ffprobe_json(jpeg.as_bytes()).unwrap();
+        assert_eq!(info.kind, MediaKind::Image);
+        assert!(!info.is_heif());
+        let frame = r#"{ "frames": [{ "width": 640, "height": 480, "pix_fmt": "yuvj420p",
+            "side_data_list": [
+                { "side_data_type": "3x3 displaymatrix", "rotation": -90 },
+                { "side_data_type": "EXIF metadata" } ] }] }"#;
+        apply_first_frame_json(&mut info, frame.as_bytes()).unwrap();
+        let v = info.primary_video().unwrap();
+        assert_eq!((v.width, v.height), (Some(480), Some(640)));
+        let picture = info.picture.unwrap();
+        assert!(picture.exif && !picture.alpha);
+
+        let mut info = parse_ffprobe_json(jpeg.as_bytes()).unwrap();
+        let err = apply_first_frame_json(&mut info, br#"{ "frames": [] }"#).unwrap_err();
+        assert_eq!(err.code(), "corrupt_input");
+    }
+
+    #[test]
+    fn heic_tile_grid_is_one_rotated_picture() {
+        let tile = |i: u32| {
+            format!(
+                r#"{{ "index": {i}, "codec_name": "hevc", "codec_type": "video", "width": 256,
+                "height": 192, "pix_fmt": "yuv420p", "disposition": {{ "default": 0, "dependent": 1 }} }}"#
+            )
+        };
+        let heic = format!(
+            r#"{{ "stream_groups": [{{ "index": 0, "type": "Tile Grid",
+                "disposition": {{ "default": 1 }},
+                "components": [{{ "width": 512, "height": 384,
+                  "subcomponents": [{{ "stream_index": 0 }}, {{ "stream_index": 1 }},
+                                    {{ "stream_index": 2 }}, {{ "stream_index": 3 }}],
+                  "side_data_list": [{{ "side_data_type": "EXIF metadata", "size": 34 }},
+                                     {{ "side_data_type": "Display Matrix", "rotation": 90 }}] }}] }},
+                {{ "index": 1, "type": "IAMF Audio Element", "components": [{{ "subcomponents": [{{}}] }}] }}],
+              "streams": [{}, {}, {}, {},
+                {{ "index": 4, "codec_name": "hevc", "codec_type": "video", "width": 320, "height": 240,
+                  "pix_fmt": "yuv420p", "disposition": {{ "default": 0 }} }}],
+              "format": {{ "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+                "tags": {{ "major_brand": "heic", "compatible_brands": "mif1heic" }} }} }}"#,
+            tile(0),
+            tile(1),
+            tile(2),
+            tile(3)
+        );
+        let info = parse_ffprobe_json(heic.as_bytes()).unwrap();
+        assert_eq!(info.kind, MediaKind::Image);
+        assert!(info.is_heif());
+        let v = info.primary_video().unwrap();
+        assert_eq!(info.video.len(), 1);
+        assert_eq!((v.index, v.codec.as_str()), (0, "hevc"));
+        assert_eq!((v.width, v.height), (Some(384), Some(512)));
+        let picture = info.picture.unwrap();
+        assert_eq!(picture.grid_group, Some(0));
+        assert!(picture.exif && !picture.alpha);
+    }
+
+    #[test]
+    fn avif_alpha_plane_is_detected() {
+        let avif = r#"{ "streams": [
+            { "index": 0, "codec_name": "av1", "codec_type": "video", "width": 64, "height": 48,
+              "pix_fmt": "yuv420p", "disposition": { "default": 1 } },
+            { "index": 1, "codec_name": "av1", "codec_type": "video", "width": 64, "height": 48,
+              "pix_fmt": "gray", "disposition": { "default": 0 } }],
+            "format": { "format_name": "mov,mp4,m4a,3gp,3g2,mj2", "tags": { "major_brand": "avif" } } }"#;
+        let info = parse_ffprobe_json(avif.as_bytes()).unwrap();
+        assert_eq!(info.kind, MediaKind::Image);
+        let picture = info.picture.unwrap();
+        assert_eq!(picture.alpha_stream, Some(1));
+        assert!(picture.alpha);
+    }
+
+    #[test]
+    fn animations_and_picture_sequences_stay_videos() {
+        for (container, codec, brand) in [
+            ("webp_anim", "webp_anim", ""),
+            ("apng", "apng", ""),
+            ("gif", "gif", ""),
+            ("mov,mp4,m4a,3gp,3g2,mj2", "av1", "avis"),
+            ("mov,mp4,m4a,3gp,3g2,mj2", "hevc", "msf1"),
+        ] {
+            let json = format!(
+                r#"{{ "streams": [{{ "index": 0, "codec_name": "{codec}", "codec_type": "video",
+                "width": 32, "height": 32 }}],
+                "format": {{ "format_name": "{container}", "tags": {{ "major_brand": "{brand}" }} }} }}"#
+            );
+            let info = parse_ffprobe_json(json.as_bytes()).unwrap();
+            assert_eq!(info.kind, MediaKind::Video, "{container} {brand}");
+            assert_eq!(info.picture, None);
+        }
     }
 
     #[test]
