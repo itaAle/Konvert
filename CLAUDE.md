@@ -5,7 +5,8 @@
 > machine paths or other private data in it.
 
 ## What it is
-Konvert is an Apple-style audio/video/image converter for 64-bit Windows 10/11.
+Konvert is an Apple-style audio/video/image converter for 64-bit Windows 10/11, macOS 11+ on
+Apple Silicon and Linux (x86_64 and arm64).
 It uses Tauri 2.11, React 19 with TypeScript, and bundles FFmpeg/FFprobe.
 It works **entirely offline, on the user's computer**.
 **Public** repository: https://github.com/itaAle/Konvert (branch `main`).
@@ -48,8 +49,10 @@ Cargo workspace (`Cargo.toml`, resolver 3, toolchain pinned to 1.99.1 in `rust-t
 - `crates/konvert-cli/`: development CLI (`npm run cli -- targets|plan|convert …`), not shipped.
 - `src-tauri/`: thin IPC layer.
   - `commands.rs` holds 20 commands, also listed in `build.rs::COMMANDS` and `capabilities/default.json`: **a new command must be added in all three places**.
-  - Other files: `jobs.rs` (sequential queue, `job-update` event), `prefs.rs`, `debug_log.rs` (redacted log, off by default), `launch.rs` (files passed via argv and "Open with"), `lib.rs` (single instance, Mica, close confirmation).
-  - `tauri.conf.json`: strict CSP, `freezePrototype`, WebView2 flags without networking, per-user NSIS with `windows/installer-hooks.nsh` ("Open with" via `OpenWithProgids`; do NOT use Tauri's `fileAssociations`, which take over the default program). A test keeps the installer's extensions identical to the file picker's `MEDIA_EXTENSIONS`.
+  - Other files: `jobs.rs` (sequential queue, `job-update` event), `prefs.rs`, `debug_log.rs` (redacted log, off by default), `launch.rs` (`LaunchFiles` queue for files from argv, the second instance and macOS `RunEvent::Opened`), `lib.rs` (single instance, Mica, close confirmation for × and ⌘Q via `ExitRequested`).
+  - `tauri.conf.json`: strict CSP, `freezePrototype`, WebView2 flags without networking, per-user NSIS with `windows/installer-hooks.nsh` ("Open with" via `OpenWithProgids`; on Windows do NOT use Tauri's `fileAssociations`, which take over the default program).
+  - `tauri.macos.conf.json` (.app/.dmg, hardened runtime, `fileAssociations` with rank `Alternate`) and `tauri.linux.conf.json` (.deb/.rpm/AppImage, MIME types) are merged over it; both use an opaque window. They may not touch security settings (`check:privacy`).
+  - Tests keep the Windows installer's and the macOS/Linux associations' extensions identical to the file picker's `MEDIA_EXTENSIONS`.
 - `src/`: React, Tailwind v4 (tokens via `data-scheme`/`data-vibrancy`), Motion, bundled Inter font, lucide icons.
   - `lib/api.ts` (IPC) and `lib/mock.ts` (fake backend, only for `npm run dev` in the browser).
   - `state/queue.ts`: pure queue reducer, with tests.
@@ -57,12 +60,16 @@ Cargo workspace (`Cargo.toml`, resolver 3, toolchain pinned to 1.99.1 in `rust-t
   - `components/`: DropScreen, FormatGrid, QualityPicker, AdvancedPanel, PlanSummary, ConvertingScreen, DoneScreen, SettingsSheet, …
 - `src/bindings/`: TypeScript types **generated** by ts-rs during `cargo test`. If you change an exported Rust type, regenerate and commit them.
 - `scripts/`:
-  - `ffmpeg-manifest.json`: BtbN `win64-lgpl-shared` n9.0.2-36 build, pinned SHA-256, upstream URL plus the mirror.
-  - `setup-ffmpeg.ps1` / `.sh`.
+  - `ffmpeg-manifest.json`: FFmpeg n9.0.2-36 per platform with pinned SHA-256 (BtbN `win64-lgpl-shared`, `linux64-lgpl`, `linuxarm64-lgpl`; `macos-aarch64` is our own build), upstream URL plus the mirror.
+  - `setup-ffmpeg.ps1` / `.sh` (the `.sh` must stay compatible with macOS bash 3.2: no `mapfile`, no empty arrays under `set -u`).
+  - `build-ffmpeg-macos.sh`: static LGPL build for Apple Silicon, same library commits as BtbN, `--disable-network`; run by `.github/workflows/ffmpeg-macos.yml`.
+  - `run-platform-script.mjs`: `npm run setup:ffmpeg` / `npm run release` run the `.ps1` on Windows, the `.sh` elsewhere.
   - `check-privacy.mjs`.
-  - `generate-licenses.mjs` (regenerates `THIRD_PARTY_LICENSES`; rerun it when dependencies or the version change).
-  - `monitor-network.ps1`.
-  - `build-release.ps1` (7 steps: version, npm ci, FFmpeg, checks and tests, build with `--remap-path-prefix`, check that the exe contains no local paths, copy to `release/` with SHA-256).
+  - `generate-licenses.mjs` (regenerates `THIRD_PARTY_LICENSES` from the crates of every shipped platform; rerun it when dependencies or the version change).
+  - `monitor-network.ps1` (Windows) and `monitor-network.sh` (strace on Linux, lsof on macOS).
+  - `build-release.ps1` (Windows installer) and `build-release.sh` (macOS/Linux packages; signs FFmpeg for the hardened runtime, checks FFmpeg is executable in each package). 7 steps: version, npm ci, FFmpeg, checks and tests, build with `--remap-path-prefix`, check that the executable contains no local paths, copy to `release/` with SHA-256.
+- `.github/`: `ci.yml` (npm test on Windows, macOS arm64, Linux x64/arm64 + network monitor of the app), `release.yml` (manual; signed and notarized .dmg, Linux packages, as artifacts; needs the `APPLE_*` secrets listed in its header), `ffmpeg-macos.yml`, shared `actions/setup`. Actions are pinned by commit SHA.
+- Process lifetime: Windows Job Object; Linux `PR_SET_PDEATHSIG`; macOS has no equivalent (an orphan after a crash only writes into the temp run dir, cleaned at next start).
 
 ## FFmpeg and licenses
 - LGPL-3.0-or-later build, no GPL or nonfree parts: **no libx264/libx265/fdk-aac**.
@@ -77,9 +84,10 @@ npm install && npm run setup:ffmpeg   # first time
 npm run tauri dev                      # app in development mode
 npm run dev                            # UI only, in the browser, with the mock backend
 npm test                               # privacy + licenses + Vitest + cargo test (everything must pass)
-npm run release                        # installer + .sha256 in release/
+npm run release                        # packages of this platform + .sha256 in release/
 ```
 Note for agent shells: `cargo` may not be on the PATH, so prepend `$env:USERPROFILE\.cargo\bin`.
+The owner only has Windows: macOS and Linux are built and tested on GitHub Actions. From Windows, `cargo check/clippy -p konvert-core --target aarch64-apple-darwin` (or `x86_64-unknown-linux-gnu`) works; the app crate cannot be cross-checked.
 
 ## Resuming from another computer
 1. Prerequisites (Windows): Node.js 20+, rustup (the toolchain installs itself from `rust-toolchain.toml`), Visual Studio Build Tools with "Desktop development with C++", WebView2.
@@ -101,7 +109,7 @@ Note for agent shells: `cargo` may not be on the PATH, so prepend `$env:USERPROF
 - Picture support:
   Input JPG/PNG/WebP/AVIF/HEIC/HEIF/BMP/TIFF, output JPG/PNG/WebP/AVIF (HEIC output is impossible: FFmpeg has no HEIF muxer).
   Owner's decisions: EXIF handled as FFmpeg does (kept only in PNG), BMP/TIFF included, HEIC included.
-- Green tests: 26 Vitest, 118 core unit tests, 16 integration tests, 16 app tests.
+- Green tests (Windows): 26 Vitest, 118 core unit tests, 16 integration tests, 17 app tests.
 - Network verified at zero: no sockets with the release build and with the installed app.
 - Verified: installer, "Open with", single instance, preferences kept on reinstall.
 - Not yet verified by hand:
@@ -111,14 +119,22 @@ Note for agent shells: `cargo` may not be on the PATH, so prepend `$env:USERPROF
   - the low disk space warning;
   - 0.2.0 installer: upgrade over 0.1.0, "Open with" on pictures, real iPhone HEIC photos (tests use synthetic HEIC files).
 
+- 2026-10-26: **macOS (Apple Silicon) and Linux support** on `main`, not pushed, not yet run on real CI. Owner's decisions: Developer ID signing + notarization; .deb + .rpm + AppImage; Linux x86_64 + arm64.
+  To do by the owner, in order:
+  1. push, then run the **FFmpeg for macOS** workflow;
+  2. upload its two archives, plus the BtbN `linux64-lgpl` and `linuxarm64-lgpl` archives, to the `ffmpeg-n9.0.2-36` mirror release;
+  3. pin the macOS archive's SHA-256 in `ffmpeg-manifest.json` (`platforms.macos-aarch64.sha256`) and regenerate the licenses;
+  4. add the `APPLE_*` secrets, then run **Release packages**.
+  Not verified on real hardware yet: drag & drop and "Open With" on macOS/Linux, Gatekeeper, the Linux desktop integration.
+
 ## Backlog (next work, by priority)
 1. **Bug fix: stretched portrait videos** (listed in the README as an upcoming fix, at the owner's request).
    - A phone video with a 90° rotation (display matrix) that gets resized (GIF or "Maximum resolution") comes out stretched: `plan.rs::output_size` uses the coded dimensions, while FFmpeg rotates before `scale`.
    - Reproduced: 320×240 with rotation 90 and `--height 120` → 160×120 instead of 90×120.
    - Fix: read the rotation from the stream's `side_data_list` in `probe.rs` (as already done for pictures) and swap width and height.
-2. Linux and macOS versions (the manifest already has an untested linux entry).
-3. Hardware encoders NVENC/QSV/AMF/h264_mf, with automatic detection.
-4. FFmpeg built without any network support.
+2. Finish the macOS/Linux rollout (see Current status), and macOS window vibrancy (needs `macOSPrivateApi`).
+3. Hardware encoders NVENC/QSV/AMF/h264_mf/VideoToolbox, with automatic detection.
+4. FFmpeg built without any network support on Windows and Linux (macOS already is).
 5. Code signing of the installer.
 6. Maybe: keep EXIF in JPG/WebP/AVIF too (FFmpeg does not write it: it would have to be copied by hand, with the orientation reset).
 

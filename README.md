@@ -4,12 +4,13 @@ Audio, video and image file converter with a modern interface.
 Konvert converts audio, video and image files from one format to another **entirely on
 your computer**: no network connections, no telemetry, no account.
 
-Platform: Windows 10/11 (64-bit). Linux and macOS are planned for a later phase.
+Platforms: Windows 10/11 (64-bit), macOS 11 or later on Apple Silicon (M1 and later),
+Linux (x86_64 and arm64).
 
 ## How to use it
 
 1. Drag one or more audio, video or image files into the window (or use **Choose files…**,
-   Ctrl+O, or right-click the file → **Open with** → **Konvert**).
+   Ctrl+O / ⌘O, or right-click the file → **Open with** → **Konvert**).
 2. Konvert analyzes them and offers only the formats that make sense (for several files:
    the ones they all have in common).
 3. Pick the format and the quality (**Best quality**, **Balanced**, **Small file**): the
@@ -21,7 +22,8 @@ Platform: Windows 10/11 (64-bit). Linux and macOS are planned for a later phase.
 
 Converted files are saved next to the original (or in a folder of your choice) and never
 overwrite other files (`song.mp3` already exists? → `song (1).mp3`).
-If you close the window during a conversion, Konvert asks for confirmation.
+If you close the window (or quit with ⌘Q) during a conversion, Konvert asks for
+confirmation.
 
 macOS-style interface in English or Italian, with light/dark theme (automatic or manual)
 and the Mica effect on Windows 11.
@@ -58,22 +60,39 @@ The format table is declarative: `crates/konvert-core/src/formats.rs`.
 
 ## Installation
 
-1. From the [Releases](https://github.com/itaAle/Konvert/releases) page, download the
-   installer `Konvert_<version>_x64-setup.exe` and the file
-   `Konvert_<version>_x64-setup.exe.sha256`.
-2. **Verify the checksum** (see below) before opening the installer.
-3. Run the installer: it installs Konvert for your user only (no administrator rights),
-   creates the Start menu entry and adds Konvert to the **Open with** menu of the
-   supported formats, without changing your default programs.
+From the [Releases](https://github.com/itaAle/Konvert/releases) page, download the
+package for your system **and its `.sha256` file**, then **verify the checksum** (see
+below) before opening the package.
 
-Konvert uses Microsoft Edge WebView2, which is already part of Windows 11 and of an
-up-to-date Windows 10. If it is missing, the installer tells you: install the
-"WebView2 Runtime" from the Microsoft website. The installer never downloads anything.
+| System                 | Package                                        |
+| ---------------------- | ---------------------------------------------- |
+| Windows 10/11 (64-bit) | `Konvert_<version>_x64-setup.exe`              |
+| macOS, Apple Silicon   | `Konvert_<version>_aarch64.dmg`                |
+| Debian, Ubuntu, Mint…  | `Konvert_<version>_amd64.deb` / `_arm64.deb`   |
+| Fedora, openSUSE…      | `Konvert-<version>-1.x86_64.rpm` / `.aarch64.rpm` |
+| Any Linux distribution | `Konvert_<version>_amd64.AppImage` / `_aarch64.AppImage` |
+
+**Windows.** Run the installer: it installs Konvert for your user only (no administrator
+rights), creates the Start menu entry and adds Konvert to the **Open with** menu of the
+supported formats, without changing your default programs. Konvert uses Microsoft Edge
+WebView2, which is already part of Windows 11 and of an up-to-date Windows 10. If it is
+missing, the installer tells you: install the "WebView2 Runtime" from the Microsoft
+website. The installer never downloads anything.
+
+**macOS.** Open the `.dmg` and drag Konvert into **Applications**. The app is signed with
+a Developer ID and notarized by Apple, so it opens without warnings. Konvert appears in
+Finder's **Open With** menu for the supported formats, without becoming the default app.
+
+**Linux.** Install the `.deb` (`sudo apt install ./Konvert_<version>_amd64.deb`) or the
+`.rpm` (`sudo dnf install ./Konvert-<version>-1.x86_64.rpm`): the package manager adds the
+system libraries Konvert needs (WebKitGTK) and Konvert appears in the applications menu and
+in the **Open with** menu of the supported formats. The AppImage needs no installation:
+make it executable (`chmod +x Konvert_*.AppImage`) and run it.
 
 ### Verifying the SHA-256 checksum
 
-The `.sha256` file contains the fingerprint of the installer. In PowerShell, in your
-downloads folder:
+The `.sha256` file contains the fingerprint of the package. On Windows, in PowerShell, in
+your downloads folder:
 
 ```powershell
 (Get-FileHash .\Konvert_0.2.0_x64-setup.exe -Algorithm SHA256).Hash
@@ -81,8 +100,9 @@ Get-Content .\Konvert_0.2.0_x64-setup.exe.sha256
 ```
 
 The two fingerprints must match (upper/lower case does not matter). Alternatively:
-`certutil -hashfile Konvert_0.2.0_x64-setup.exe SHA256`. On Linux/macOS:
-`sha256sum -c Konvert_0.2.0_x64-setup.exe.sha256`. If they do not match, do not run the file.
+`certutil -hashfile Konvert_0.2.0_x64-setup.exe SHA256`. On Linux, in the folder with
+both files: `sha256sum -c <package>.sha256`; on macOS: `shasum -a 256 -c <package>.sha256`.
+If they do not match, do not open the file.
 
 ### Windows SmartScreen warning
 
@@ -103,17 +123,23 @@ request). To update:
 
 1. **Settings → About** shows the installed version and the **Releases page** link, which
    opens in your browser only when you click it;
-2. download the new installer, verify the checksum and install it over the previous
-   version.
+2. download the new package, verify the checksum and install it over the previous
+   version (macOS: replace the app in Applications; AppImage: replace the file).
 
-Your preferences are kept. If the installer offers to uninstall the previous version
-first, leave the "Delete the application data" checkbox **unchecked**.
+Your preferences are kept. On Windows, if the installer offers to uninstall the previous
+version first, leave the "Delete the application data" checkbox **unchecked**.
 
 ## Uninstalling
 
-From **Windows Settings → Apps → Installed apps → Konvert → Uninstall**.
-The **Delete the application data** checkbox (unchecked by default) also removes your
-preferences and the debug log, if any. The "Open with" entries are removed.
+- **Windows**: **Settings → Apps → Installed apps → Konvert → Uninstall**. The **Delete the
+  application data** checkbox (unchecked by default) also removes your preferences and the
+  debug log, if any. The "Open with" entries are removed.
+- **macOS**: move Konvert from Applications to the Bin. Preferences and log, if you want
+  to remove them too: `~/Library/Application Support/app.konvert.desktop` and
+  `~/Library/Logs/app.konvert.desktop`.
+- **Linux**: `sudo apt remove konvert` or `sudo dnf remove konvert` (AppImage: delete the
+  file). Preferences and log: `~/.config/app.konvert.desktop` and
+  `~/.local/share/app.konvert.desktop`.
 
 ## Privacy
 
@@ -124,33 +150,39 @@ Konvert works entirely on your computer. No data leaves your device.
   reporting, update checks, licensing or accounts.
 - Fonts, icons and libraries are bundled with the app: no CDN or external service.
 - Strict Content Security Policy (`default-src 'self'`, connections only to the internal
-  IPC), no networking Tauri plugin (updater, http, …), WebView2 interface started with
-  its background networking features disabled.
+  IPC), no networking Tauri plugin (updater, http, …), WebView2 interface (Windows) started
+  with its background networking features disabled.
 - FFmpeg and FFprobe run with `-protocol_whitelist file`: they can open local files only,
-  never network addresses.
+  never network addresses. On macOS FFmpeg is also built without any network protocol.
 - The only web address the app knows is the releases page, which opens in your browser
   only if you click it.
 
 **Data on disk**
 - No history of converted files, names, paths or thumbnails.
 - The only saved settings are your preferences (language, appearance, default quality,
-  destination folder, debug mode) in a readable JSON file:
-  `%APPDATA%\app.konvert.desktop\preferences.json`. No installation or device identifier.
-- Files being processed live in a dedicated temporary folder (`%TEMP%\Konvert`) and are
-  deleted when the job ends, when it is cancelled or, after a crash, at the next launch.
+  destination folder, debug mode) in a readable JSON file, `preferences.json`, in
+  `%APPDATA%\app.konvert.desktop` (Windows), `~/Library/Application Support/app.konvert.desktop`
+  (macOS) or `~/.config/app.konvert.desktop` (Linux). No installation or device identifier.
+- Files being processed live in a dedicated temporary folder (`Konvert` in the system
+  temporary folder) and are deleted when the job ends, when it is cancelled or, after a
+  crash, at the next launch.
 - The debug log is **off by default**. If you turn it on in Settings, it stays in
-  `%LOCALAPPDATA%\app.konvert.desktop\logs\konvert.log`, without file names or paths
-  (replaced by placeholders), and it is never sent anywhere.
+  `konvert.log` (`%LOCALAPPDATA%\app.konvert.desktop\logs` on Windows,
+  `~/Library/Logs/app.konvert.desktop` on macOS, `~/.local/share/app.konvert.desktop/logs`
+  on Linux), without file names or paths (replaced by placeholders), and it is never sent
+  anywhere.
 
 **How to verify it**
-- **Resource Monitor** (`resmon`) → **Network** tab: while you use the app, the
-  `konvert.exe`, `msedgewebview2.exe` and `ffmpeg.exe` processes do not appear among the
-  processes with network activity.
+- **Resource Monitor** (`resmon`) → **Network** tab on Windows, **Activity Monitor** →
+  **Network** on macOS: while you use the app, Konvert, its web view and FFmpeg do not
+  appear among the processes with network activity.
 - **Wireshark**: with Konvert in use, no traffic generated by the app shows up.
-- The script `scripts/monitor-network.ps1` watches the sockets of Konvert and of all its
-  child processes (WebView2, FFmpeg):
+- The script `scripts/monitor-network.ps1` (Windows) watches the sockets of Konvert and of
+  all its child processes (WebView2, FFmpeg):
   `powershell -ExecutionPolicy Bypass -File scripts/monitor-network.ps1 -Seconds 60`
-  while you use the app (exit code 0 = no connection).
+  while you use the app (exit code 0 = no connection). On Linux and macOS,
+  `bash scripts/monitor-network.sh --seconds 60 <path of the konvert executable>` does the
+  same with strace (Linux) or lsof (macOS); the CI runs it on every build.
 - `npm run check:privacy` fails if HTTP/TLS/WebSocket or telemetry libraries appear in the
   dependency graph, if the CSP is loosened, if the installer would download anything or
   if unauthorized external addresses appear in the code.
@@ -165,10 +197,10 @@ Ideas collected for upcoming updates:
 - **Bug fix: portrait videos.** Videos recorded with the phone upright come out stretched
   when Konvert resizes them (GIF, or **Maximum resolution** under **Advanced**): the new
   size is computed without the rotation stored in the video.
-- **Linux** and **macOS** versions.
-- **Hardware-accelerated** video (NVIDIA NVENC, Intel Quick Sync, AMD AMF), with
-  automatic detection.
-- FFmpeg built **without any network support** (today the network is blocked at runtime).
+- **Hardware-accelerated** video (NVIDIA NVENC, Intel Quick Sync, AMD AMF, Apple
+  VideoToolbox), with automatic detection.
+- FFmpeg built **without any network support** on Windows and Linux too (today the network
+  is blocked at runtime there; the macOS build already has no network protocol).
 - **Signed** installer with a code-signing certificate (no SmartScreen warning).
 
 ## Development
@@ -188,18 +220,36 @@ winget install Rustlang.Rustup
 winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 ```
 
+### Prerequisites (macOS, Apple Silicon)
+
+- Xcode command line tools (`xcode-select --install`), Node.js 20 or later, rustup.
+
+### Prerequisites (Linux)
+
+- Node.js 20 or later, rustup, and the libraries Tauri needs. On Debian/Ubuntu:
+
+```bash
+sudo apt install build-essential libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev patchelf file
+```
+
 ### Setup
 
-```powershell
+```bash
 npm install
 npm run setup:ffmpeg      # downloads FFmpeg/FFprobe (LGPL) and verifies the SHA-256
 ```
 
-The script `scripts/setup-ffmpeg.ps1` (or `scripts/setup-ffmpeg.sh` on Linux/macOS)
-downloads the FFmpeg build pinned in `scripts/ffmpeg-manifest.json`, verifies its SHA-256
-hash and copies only the needed files into `src-tauri/binaries/ffmpeg/`. The binaries are
-not in the repository. The download happens **at development time only**: the app never
-downloads anything.
+`npm run setup:ffmpeg` runs `scripts/setup-ffmpeg.ps1` on Windows and
+`scripts/setup-ffmpeg.sh` on Linux and macOS. It downloads the FFmpeg build pinned in
+`scripts/ffmpeg-manifest.json`, verifies its SHA-256 hash and copies only the needed files
+into `src-tauri/binaries/ffmpeg/`. The binaries are not in the repository. The download
+happens **at development time only**: the app never downloads anything.
+
+Windows and Linux use the LGPL builds of [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds).
+No LGPL build exists for macOS on Apple Silicon, so `scripts/build-ffmpeg-macos.sh` makes
+one from source, with the same library versions and `--disable-network`. The
+**FFmpeg for macOS** workflow runs it; its archive and the archive of its sources are
+published in the FFmpeg mirror release, and the manifest pins the archive's SHA-256.
 
 ### Commands
 
@@ -226,39 +276,52 @@ crates/konvert-core/   domain logic in Rust (no Tauri dependency): probing, form
                        unique names, temporary files
 crates/konvert-cli/    development CLI on top of konvert-core
 src-tauri/             Tauri app: IPC commands, queue, preferences, log, permissions,
-                       configuration and installer hooks (windows/installer-hooks.nsh)
+                       configuration (tauri.conf.json, plus tauri.macos/linux.conf.json
+                       for those bundles) and installer hooks (windows/installer-hooks.nsh)
 src/                   React + TypeScript interface (Tailwind, Motion)
 src/bindings/          TypeScript types generated from the Rust types (ts-rs, during `cargo test`)
-scripts/               FFmpeg setup, privacy check, network monitor, licenses, release
+scripts/               FFmpeg setup and macOS build, privacy check, network monitors,
+                       licenses, release
+.github/workflows/     CI on Windows, macOS and Linux; release packages; macOS FFmpeg build
 ```
 
 ## Building a release
 
-```powershell
+```bash
 npm run release
 ```
 
-The script `scripts/build-release.ps1`:
+On Windows it runs `scripts/build-release.ps1`, on Linux and macOS
+`scripts/build-release.sh`. Both:
 
-1. checks that the version matches in `package.json`, `Cargo.toml` and
+1. check that the version matches in `package.json`, `Cargo.toml` and
    `src-tauri/tauri.conf.json`;
-2. installs the exact npm dependencies (`npm ci`) and the verified FFmpeg build;
-3. runs the privacy check, the license check and every test;
-4. builds the NSIS installer with local paths remapped and verifies that the executable
-   contains neither the user name nor folders of the build machine;
-5. copies the installer and its `.sha256` file into `release/`.
+2. install the exact npm dependencies (`npm ci`) and the verified FFmpeg build;
+3. run the privacy check, the license check and every test;
+4. build the packages (NSIS installer; `.dmg`; `.deb`, `.rpm` and AppImage) with local
+   paths remapped and verify that the executable contains neither the user name nor
+   folders of the build machine (and, on Linux and macOS, that FFmpeg is executable inside
+   every package);
+5. copy the packages and their `.sha256` files into `release/`.
 
 Every input is pinned (Rust toolchain, `Cargo.lock`, `package-lock.json`, FFmpeg archive
-with its hash). The first build downloads the NSIS tools used by Tauri once.
-Publish both the installer and the `.sha256` file on the Releases page.
+with its hash). The first build downloads the NSIS or AppImage tools used by Tauri once.
+
+The macOS and Linux packages are built by the **Release packages** GitHub Actions workflow
+(started by hand), which also runs the network monitor on the finished app. On macOS it
+signs FFmpeg and the app with the Developer ID and notarizes the app and the `.dmg`: the
+certificate and the Apple account are read from repository secrets, listed at the top of
+`.github/workflows/release.yml`. Publish every package with its `.sha256` file on the
+Releases page.
 
 ## Licenses
 
 Konvert is released under the [MIT](LICENSE) license.
 
-It bundles FFmpeg (BtbN build `win64-lgpl-shared`), distributed under the **LGPL version 3
-or later**. FFmpeg runs as a separate program and its files are installed unmodified in
-the `ffmpeg` folder of the installation, where they can be replaced. The build contains no
+It bundles FFmpeg (BtbN builds `win64-lgpl-shared`, `linux64-lgpl` and `linuxarm64-lgpl`;
+on macOS the build made by `scripts/build-ffmpeg-macos.sh`), distributed under the **LGPL
+version 3 or later**. FFmpeg runs as a separate program and its files are installed
+unmodified in the `ffmpeg` folder of the application, where they can be replaced. The build contains no
 GPL components (no libx264/libx265) and no non-free ones. The exact FFmpeg source commit
 and the build recipe are listed in [`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES) and in
 `scripts/ffmpeg-manifest.json`.

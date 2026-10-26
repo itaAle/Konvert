@@ -137,7 +137,8 @@ do not edit by hand.
 No component makes network connections in Konvert. Konvert performs no network
 activity at all: scripts/check-privacy.mjs fails the build if an HTTP, TLS,
 WebSocket or telemetry library enters the dependency graph, and
-scripts/monitor-network.ps1 shows that the running app opens no socket. See the
+scripts/monitor-network.ps1 (Windows) and scripts/monitor-network.sh (Linux,
+macOS) show that the running app opens no socket. See the
 "Privacy" section of README.md.
 
 
