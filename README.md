@@ -76,13 +76,13 @@ The `.sha256` file contains the fingerprint of the installer. In PowerShell, in 
 downloads folder:
 
 ```powershell
-(Get-FileHash .\Konvert_0.1.0_x64-setup.exe -Algorithm SHA256).Hash
-Get-Content .\Konvert_0.1.0_x64-setup.exe.sha256
+(Get-FileHash .\Konvert_0.2.0_x64-setup.exe -Algorithm SHA256).Hash
+Get-Content .\Konvert_0.2.0_x64-setup.exe.sha256
 ```
 
 The two fingerprints must match (upper/lower case does not matter). Alternatively:
-`certutil -hashfile Konvert_0.1.0_x64-setup.exe SHA256`. On Linux/macOS:
-`sha256sum -c Konvert_0.1.0_x64-setup.exe.sha256`. If they do not match, do not run the file.
+`certutil -hashfile Konvert_0.2.0_x64-setup.exe SHA256`. On Linux/macOS:
+`sha256sum -c Konvert_0.2.0_x64-setup.exe.sha256`. If they do not match, do not run the file.
 
 ### Windows SmartScreen warning
 

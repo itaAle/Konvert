@@ -144,7 +144,7 @@ export const mockBackend: Backend = {
   },
   async appReady() {},
   async engineInfo() {
-    return { appVersion: "0.1.0-dev", ffmpegVersion: "ffmpeg version n9.0 (simulated)" };
+    return { appVersion: "0.2.0-dev", ffmpegVersion: "ffmpeg version n9.0 (simulated)" };
   },
   async getPreferences() {
     return preferences;
