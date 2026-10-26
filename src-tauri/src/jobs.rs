@@ -14,8 +14,9 @@ use std::sync::{Arc, Mutex};
 use konvert_core::formats;
 use konvert_core::plan::{AudioPlan, VideoPlan};
 use konvert_core::{
-    Binaries, ConversionJob, ConversionOutcome, ConversionRequest, CoreError, ErrorPayload,
-    MediaInfo, Progress, Workspace, plan_conversion, probe, run_conversion,
+    Binaries, CombinedJob, ConversionJob, ConversionOutcome, ConversionRequest, CoreError,
+    ErrorPayload, MediaInfo, Progress, Workspace, plan_conversion, probe, run_combined,
+    run_conversion,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -115,6 +116,92 @@ impl JobQueue {
             emit(&app, id, update);
         });
         id
+    }
+
+    /// Queues several files (pictures and PDFs, in order) that become one PDF,
+    /// and returns the id of that single job.
+    pub fn enqueue_combined(
+        self: &Arc<Self>,
+        app: AppHandle,
+        bins: Binaries,
+        workspace: Arc<Workspace>,
+        inputs: Vec<PathBuf>,
+        request: ConversionRequest,
+        output_dir: PathBuf,
+    ) -> u64 {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+        let token = CancellationToken::new();
+        lock(&self.cancels).insert(id, token.clone());
+        emit(&app, id, JobUpdate::Queued);
+        self.log.write(&format!(
+            "job {id}: queued, {} files into one PDF, preset {:?}, pdf {:?}",
+            inputs.len(),
+            request.preset,
+            request.pdf
+        ));
+
+        let queue = Arc::clone(self);
+        tauri::async_runtime::spawn(async move {
+            let redactor = inputs
+                .iter()
+                .enumerate()
+                .fold(Redactor::new(), |r, (i, path)| {
+                    r.path(path, &format!("input-{}", i + 1))
+                })
+                .path(&output_dir, "output-dir")
+                .path(workspace.dir(), "temp-dir");
+            let update = queue
+                .run_combined_job(
+                    &app, &bins, &workspace, id, inputs, request, output_dir, &token,
+                )
+                .await;
+            lock(&queue.cancels).remove(&id);
+            queue.log_outcome(id, &update, &redactor);
+            emit(&app, id, update);
+        });
+        id
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn run_combined_job(
+        &self,
+        app: &AppHandle,
+        bins: &Binaries,
+        workspace: &Workspace,
+        id: u64,
+        inputs: Vec<PathBuf>,
+        request: ConversionRequest,
+        output_dir: PathBuf,
+        token: &CancellationToken,
+    ) -> JobUpdate {
+        let _turn = tokio::select! {
+            turn = self.turn.lock() => turn,
+            _ = token.cancelled() => return JobUpdate::Cancelled,
+        };
+        emit(app, id, JobUpdate::Running);
+        // Analyse again from disk: the UI only sends paths and a request.
+        let mut probed = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            match probe(bins, &input).await {
+                Ok(media) => probed.push((input, media)),
+                Err(e) => return failed(e),
+            }
+        }
+        let job = CombinedJob {
+            id,
+            inputs: probed,
+            request,
+            output_dir,
+        };
+        let on_progress = |progress| emit(app, id, JobUpdate::Progress { progress });
+        match run_combined(bins, workspace, &job, token, on_progress).await {
+            Ok(outcome) => {
+                lock(&self.outputs).insert(id, outcome.output.clone());
+                JobUpdate::Done { outcome }
+            }
+            Err(CoreError::Cancelled) => JobUpdate::Cancelled,
+            Err(e) => failed(e),
+        }
     }
 
     async fn run(

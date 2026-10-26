@@ -358,6 +358,14 @@
         "name": "SVG drawing",
         "role": "Viewer",
         "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "pdf"
+        ],
+        "name": "PDF document",
+        "role": "Viewer",
+        "rank": "Alternate"
       }
     ],
     "macOS": {

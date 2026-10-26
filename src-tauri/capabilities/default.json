@@ -21,6 +21,7 @@
     "allow-analyze-file",
     "allow-plan-conversion",
     "allow-start-conversion",
+    "allow-start-combined",
     "allow-cancel-conversion",
     "allow-open-output",
     "allow-reveal-output",

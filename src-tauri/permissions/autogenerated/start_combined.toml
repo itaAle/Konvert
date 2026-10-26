@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-start-combined"
+description = "Enables the start_combined command without any pre-configured scope."
+commands.allow = ["start_combined"]
+
+[[permission]]
+identifier = "deny-start-combined"
+description = "Denies the start_combined command without any pre-configured scope."
+commands.deny = ["start_combined"]

@@ -5,12 +5,12 @@
 //! (`{ code, details }`): the UI maps the code to a translated message and shows
 //! `details` only on request.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 use konvert_core::{
-    ConversionPlan, ConversionRequest, CoreError, ErrorPayload, MediaInfo, TargetOption,
-    available_targets, formats::supported_targets, plan_conversion as plan,
+    ConversionPlan, ConversionRequest, CoreError, ErrorPayload, MediaInfo, TargetFormat,
+    TargetOption, available_targets, formats::supported_targets, plan_conversion as plan,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State, WebviewWindow};
@@ -33,7 +33,7 @@ const MEDIA_EXTENSIONS: &[&str] = &[
     "aifc", "alac", "ape", "wv", "mka", "ac3", "eac3", "mp2", "caf", "mp4", "m4v", "mkv", "mov",
     "qt", "webm", "avi", "wmv", "flv", "mpg", "mpeg", "ts", "m2ts", "mts", "3gp", "ogv", "vob",
     "gif", "apng", "jpg", "jpeg", "jpe", "jfif", "png", "webp", "avif", "heic", "heif", "hif",
-    "bmp", "tif", "tiff", "ico", "svg", "svgz",
+    "bmp", "tif", "tiff", "ico", "svg", "svgz", "pdf",
 ];
 
 /// Extensions FFmpeg reads only when built with libjxl: the Windows and Linux
@@ -246,15 +246,7 @@ pub fn start_conversion(
     if !path.is_file() {
         return Err(payload(CoreError::InputNotFound));
     }
-    let output_dir = state
-        .prefs
-        .get()
-        .output_dir
-        .or_else(|| path.parent().map(PathBuf::from))
-        .ok_or_else(|| payload(CoreError::OutputUnavailable))?;
-    if !output_dir.is_dir() {
-        return Err(payload(CoreError::OutputUnavailable));
-    }
+    let output_dir = output_dir(&state, &path)?;
     Ok(state.jobs.enqueue(
         app,
         bins,
@@ -263,6 +255,52 @@ pub fn start_conversion(
         request,
         output_dir,
     ))
+}
+
+/// Queues several files that become one PDF, in the order given: pictures
+/// become pages, PDFs add all their pages. The PDF is named after the first file.
+#[tauri::command]
+pub fn start_combined(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paths: Vec<PathBuf>,
+    request: ConversionRequest,
+) -> Result<u64, ErrorPayload> {
+    let bins = state.binaries().map_err(payload)?.clone();
+    let Some(first) = paths.first() else {
+        return Err(payload(CoreError::InputNotFound));
+    };
+    if paths.iter().any(|p| !p.is_file()) {
+        return Err(payload(CoreError::InputNotFound));
+    }
+    if request.target != TargetFormat::Pdf {
+        return Err(payload(CoreError::UnsupportedConversion {
+            details: "only a PDF can combine files".into(),
+        }));
+    }
+    let output_dir = output_dir(&state, first)?;
+    Ok(state.jobs.enqueue_combined(
+        app,
+        bins,
+        state.workspace.clone(),
+        paths,
+        request,
+        output_dir,
+    ))
+}
+
+/// Destination from the preferences, otherwise the folder of `input`.
+fn output_dir(state: &AppState, input: &Path) -> Result<PathBuf, ErrorPayload> {
+    let output_dir = state
+        .prefs
+        .get()
+        .output_dir
+        .or_else(|| input.parent().map(PathBuf::from))
+        .ok_or_else(|| payload(CoreError::OutputUnavailable))?;
+    if !output_dir.is_dir() {
+        return Err(payload(CoreError::OutputUnavailable));
+    }
+    Ok(output_dir)
 }
 
 #[tauri::command]

@@ -80,6 +80,7 @@ pub fn run() {
             commands::analyze_file,
             commands::plan_conversion,
             commands::start_conversion,
+            commands::start_combined,
             commands::cancel_conversion,
             commands::open_output,
             commands::reveal_output,

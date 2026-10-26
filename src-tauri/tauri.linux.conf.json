@@ -322,6 +322,13 @@
       },
       {
         "ext": [
+          "pdf"
+        ],
+        "name": "PDF document",
+        "mimeType": "application/pdf"
+      },
+      {
+        "ext": [
           "jxl"
         ],
         "name": "JPEG XL",
