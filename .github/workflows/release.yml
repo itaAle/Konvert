@@ -2,6 +2,7 @@
 # Run it by hand. It only produces workflow artifacts (packages + .sha256): the
 # owner downloads them, checks them and attaches them to the GitHub release.
 # The Windows installer is built locally with `npm run release`.
+# The "platform" input packages a single platform, e.g. to redo one that failed.
 #
 # macOS: without secrets the app is signed ad hoc and not notarized (no Apple
 # Developer account needed; users allow it once in Gatekeeper, see README.md).
@@ -16,20 +17,42 @@ name: Release packages
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to package (all, or a single one to redo it)
+        type: choice
+        default: all
+        options: [all, macos-arm64, linux-x64, linux-arm64]
 
 permissions:
   contents: read
 
 jobs:
+  select:
+    name: Select platforms
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - id: select
+        env:
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          all='[
+            {"key":"macos-arm64","name":"macOS arm64","os":"macos-15"},
+            {"key":"linux-x64","name":"Linux x64","os":"ubuntu-22.04"},
+            {"key":"linux-arm64","name":"Linux arm64","os":"ubuntu-22.04-arm"}
+          ]'
+          matrix="$(jq -c --arg p "$PLATFORM" 'map(select($p == "all" or .key == $p))' <<<"$all")"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   package:
     name: Package (${{ matrix.name }})
+    needs: select
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { name: macOS arm64, os: macos-15 }
-          - { name: Linux x64, os: ubuntu-22.04 }
-          - { name: Linux arm64, os: ubuntu-22.04-arm }
+        include: ${{ fromJSON(needs.select.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     steps:
