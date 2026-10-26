@@ -1,8 +1,9 @@
-import { Clapperboard, Music2, X } from "lucide-react";
+import { X } from "lucide-react";
 
 import type { FileAnalysis } from "../bindings/FileAnalysis";
 import { t } from "../i18n";
 import { describeMedia, formatBytes, formatDuration } from "../lib/format";
+import { kindStyle } from "../lib/kind";
 
 interface FileCardProps {
   file: FileAnalysis;
@@ -12,8 +13,7 @@ interface FileCardProps {
 /** Icon, name, duration, size and a one-line technical summary of the file. */
 export function FileCard({ file, onRemove }: FileCardProps) {
   const { media } = file;
-  const isVideo = media.kind !== "audio";
-  const Icon = isVideo ? Clapperboard : Music2;
+  const { Icon, gradient } = kindStyle(media.kind);
   const facts = [
     media.durationSecs != null ? formatDuration(media.durationSecs) : null,
     media.sizeBytes != null ? formatBytes(media.sizeBytes) : null,
@@ -25,11 +25,7 @@ export function FileCard({ file, onRemove }: FileCardProps) {
       className="flex items-center gap-4 rounded-[22px] bg-surface p-4 pr-3 shadow-card"
     >
       <div
-        className={`flex size-14 shrink-0 items-center justify-center rounded-[16px] text-white ${
-          isVideo
-            ? "bg-gradient-to-b from-[#bf5af2] to-[#8e44d6]"
-            : "bg-gradient-to-b from-[#ff6482] to-[#e8364f]"
-        }`}
+        className={`flex size-14 shrink-0 items-center justify-center rounded-[16px] bg-gradient-to-b text-white ${gradient}`}
       >
         <Icon size={26} strokeWidth={1.9} aria-hidden />
       </div>

@@ -34,4 +34,13 @@ videoCodec?: VideoCodec | null,
 /**
  * Video bit rate in kbit/s (replaces the preset's quality setting).
  */
-videoBitrateKbps?: number | null, };
+videoBitrateKbps?: number | null, 
+/**
+ * Picture quality from 1 (smallest file) to 100 (best), lossy picture
+ * formats only.
+ */
+imageQuality?: number | null, 
+/**
+ * Longest side of a picture in pixels (never upscales; keeps the aspect ratio).
+ */
+maxDimension?: number | null, };

@@ -14,6 +14,8 @@ const STRONG: ConversionWarning[] = [
   "audioDropped",
   "coverArtDropped",
   "channelsDownmixed",
+  "transparencyLost",
+  "pictureDownscaled",
 ];
 
 export function hasStrongWarning(warnings: ConversionWarning[]): boolean {

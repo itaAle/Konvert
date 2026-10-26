@@ -1,8 +1,9 @@
 import { AnimatePresence, motion } from "motion/react";
-import { Clapperboard, Music2, Plus, TriangleAlert, X } from "lucide-react";
+import { Plus, TriangleAlert, X } from "lucide-react";
 
 import { errorMessage, t } from "../i18n";
 import { formatBytes, formatDuration } from "../lib/format";
+import { kindStyle } from "../lib/kind";
 import { NO_TARGETS, type QueueItem } from "../state/queue";
 import { formatEstimate } from "./PlanSummary";
 import { Button } from "./ui/Button";
@@ -35,13 +36,10 @@ function ItemIcon({ item }: { item: QueueItem }) {
       </span>
     );
   }
-  const video = item.file?.media.kind !== "audio";
-  const Icon = video ? Clapperboard : Music2;
+  const { Icon, gradient } = kindStyle(item.file?.media.kind);
   return (
     <span
-      className={`flex size-9 shrink-0 items-center justify-center rounded-[10px] text-white ${
-        video ? "bg-gradient-to-b from-[#bf5af2] to-[#8e44d6]" : "bg-gradient-to-b from-[#ff6482] to-[#e8364f]"
-      }`}
+      className={`flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-b text-white ${gradient}`}
     >
       <Icon size={17} strokeWidth={2} aria-hidden />
     </span>

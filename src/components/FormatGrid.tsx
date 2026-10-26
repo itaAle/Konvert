@@ -17,15 +17,16 @@ const GROUP_TITLES: Record<TargetGroup, MessageKey> = {
   video: "formats.groupVideo",
   audio: "formats.groupAudio",
   audioOnly: "formats.groupAudioOnly",
+  image: "formats.groupImage",
 };
 
 /**
- * Target formats as selectable cards, grouped (video / audio only). Behaves as
- * one ARIA radio group: Tab enters it, arrow keys move the selection.
+ * Target formats as selectable cards, grouped (video / audio only / image).
+ * Behaves as one ARIA radio group: Tab enters it, arrow keys move the selection.
  */
 export function FormatGrid({ options, selected, onSelect }: FormatGridProps) {
   const buttons = useRef(new Map<TargetFormat, HTMLButtonElement>());
-  const groups = (["video", "audio", "audioOnly"] as TargetGroup[])
+  const groups = (["video", "audio", "audioOnly", "image"] as TargetGroup[])
     .map((group) => ({ group, items: options.filter((o) => o.group === group) }))
     .filter((g) => g.items.length > 0);
   const order = groups.flatMap((g) => g.items.map((o) => o.format));

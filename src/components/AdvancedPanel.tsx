@@ -19,6 +19,8 @@ const HEIGHTS = [2160, 1440, 1080, 720, 480, 360];
 const GIF_HEIGHTS = [720, 480, 360, 240];
 const FPS = [60, 50, 30, 25, 24];
 const GIF_FPS = [30, 24, 15, 10];
+const IMAGE_QUALITIES = [100, 95, 90, 85, 80, 75, 70, 60, 50, 40];
+const MAX_DIMENSIONS = [3840, 2560, 1920, 1280, 1024, 800];
 
 const HEIGHT_LABELS: Record<number, string> = { 2160: "2160p (4K)", 1080: "1080p (Full HD)", 720: "720p (HD)" };
 
@@ -54,6 +56,20 @@ export function AdvancedPanel({ option, value, onChange }: AdvancedPanelProps) {
 
   const fields: ReactElement[] = [];
 
+  if (option.kind === "image") {
+    if (!option.lossless) {
+      fields.push(
+        <Select key="iquality" label={t("advanced.imageQuality")} value={str(value.imageQuality)}
+          options={[{ value: AUTO, label: autoLabel }, ...IMAGE_QUALITIES.map((q) => ({ value: String(q), label: String(q) }))]}
+          onChange={(v) => set({ imageQuality: num(v) })} />,
+      );
+    }
+    fields.push(
+      <Select key="maxdim" label={t("advanced.maxDimension")} value={str(value.maxDimension)}
+        options={[{ value: AUTO, label: originalLabel }, ...MAX_DIMENSIONS.map((d) => ({ value: String(d), label: t("advanced.pixels", { n: d }) }))]}
+        onChange={(v) => set({ maxDimension: num(v) })} />,
+    );
+  }
   if (isVideo && !isGif && option.videoCodecs.length > 1) {
     const opts: SelectOption<string>[] = [
       { value: AUTO, label: `${autoLabel} (${VIDEO_CODEC_NAMES[option.videoCodecs[0]]})` },

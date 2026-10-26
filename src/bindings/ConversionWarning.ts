@@ -3,4 +3,4 @@
 /**
  * Things the user should know before converting. Ordered by importance.
  */
-export type ConversionWarning = "lossyToLossless" | "lossyReencode" | "losslessToLossy" | "gifLimitations" | "audioDropped" | "coverArtDropped" | "subtitlesDropped" | "extraAudioTracksDropped" | "channelsDownmixed";
+export type ConversionWarning = "lossyToLossless" | "lossyReencode" | "losslessToLossy" | "gifLimitations" | "transparencyLost" | "pictureDownscaled" | "audioDropped" | "coverArtDropped" | "subtitlesDropped" | "extraAudioTracksDropped" | "channelsDownmixed" | "metadataDropped";

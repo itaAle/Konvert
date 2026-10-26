@@ -2,6 +2,7 @@
 import type { AudioStream } from "./AudioStream";
 import type { CoverArt } from "./CoverArt";
 import type { MediaKind } from "./MediaKind";
+import type { PictureInfo } from "./PictureInfo";
 import type { VideoStream } from "./VideoStream";
 
 /**
@@ -17,10 +18,15 @@ container: string, kind: MediaKind, durationSecs: number | null, sizeBytes: numb
  */
 bitRate: number | null, audio: Array<AudioStream>, 
 /**
- * Real video streams (attached cover pictures excluded).
+ * Real video streams (attached cover pictures excluded). For a picture:
+ * only the picture itself, with its displayed (rotated) size.
  */
 video: Array<VideoStream>, 
 /**
  * Embedded cover picture (e.g. album art in MP3/M4A/FLAC).
  */
-coverArt: CoverArt | null, subtitleStreams: number, };
+coverArt: CoverArt | null, subtitleStreams: number, 
+/**
+ * Picture details, for [`MediaKind::Image`] only.
+ */
+picture: PictureInfo | null, };

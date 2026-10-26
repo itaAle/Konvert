@@ -24,16 +24,18 @@ const option = (format: TargetFormat, group: TargetOption["group"]): TargetOptio
   group,
   lossless: false,
   sameAsInput: false,
-  kind: group === "video" ? "video" : "audio",
+  kind: group === "video" ? "video" : group === "image" ? "image" : "audio",
   videoCodecs: [],
   audioCodecs: [],
 });
 
-function file(name: string, kind: "audio" | "videoWithAudio", duration: number): FileAnalysis {
+function file(name: string, kind: "audio" | "videoWithAudio" | "image", duration: number | null): FileAnalysis {
   const targets =
     kind === "audio"
       ? [option("mp3", "audio"), option("flac", "audio")]
-      : [option("mp4", "video"), option("mkv", "video"), option("mp3", "audioOnly"), option("flac", "audioOnly")];
+      : kind === "image"
+        ? [option("jpg", "image"), option("png", "image"), option("webp", "image")]
+        : [option("mp4", "video"), option("mkv", "video"), option("mp3", "audioOnly"), option("flac", "audioOnly")];
   return {
     path: `C:\\m\\${name}`,
     name,
@@ -47,6 +49,7 @@ function file(name: string, kind: "audio" | "videoWithAudio", duration: number):
       video: [],
       coverArt: null,
       subtitleStreams: 0,
+      picture: kind === "image" ? { alpha: false, alphaStream: null, gridGroup: null, exif: false } : null,
     },
     targets,
   };
@@ -59,6 +62,7 @@ const plan = (target: TargetFormat, bytes: number, approximate = false, warnings
   audioStream: 0,
   audio: null,
   coverArtStream: null,
+  image: null,
   warnings,
   estimate: { bytes, approximate },
 });
@@ -100,6 +104,41 @@ describe("queue state machine", () => {
     const targets = commonTargets(s.items);
     expect(targets.map((t) => t.format)).toEqual(["mp3", "flac"]);
     expect(targets.every((t) => t.group === "audio")).toBe(true);
+  });
+
+  it("converts photos together, never together with audio or video", () => {
+    let s = run(initialQueue(), { type: "add", paths: ["a.jpg", "b.heic"] });
+    s = run(
+      s,
+      { type: "analyzed", key: 1, file: file("a.jpg", "image", null) },
+      { type: "analyzed", key: 2, file: file("b.heic", "image", null) },
+    );
+    const targets = commonTargets(s.items);
+    expect(targets.map((t) => t.format)).toEqual(["jpg", "png", "webp"]);
+    expect(targets.every((t) => t.group === "image")).toBe(true);
+
+    s = run(s, { type: "add", paths: ["c.wav"] }, { type: "analyzed", key: 3, file: file("c.wav", "audio", 10) });
+    expect(commonTargets(s.items)).toEqual([]);
+  });
+
+  it("weights photos without a duration equally in the overall progress", () => {
+    let s = run(initialQueue(), { type: "add", paths: ["a.jpg", "b.jpg"] });
+    s = run(
+      s,
+      { type: "analyzed", key: 1, file: file("a.jpg", "image", null) },
+      { type: "analyzed", key: 2, file: file("b.jpg", "image", null) },
+      { type: "selectTarget", target: "webp" },
+    );
+    s = run(
+      s,
+      { type: "planned", key: 1, version: s.planVersion, plan: plan("webp", 10, true) },
+      { type: "planned", key: 2, version: s.planVersion, plan: plan("webp", 10, true) },
+      { type: "start" },
+      { type: "started", key: 1, jobId: 1 },
+      { type: "started", key: 2, jobId: 2 },
+      { type: "job", event: { jobId: 1, update: { state: "done", outcome: { output: "a.webp", sizeBytes: 1, elapsed: 1 } } } },
+    );
+    expect(overallProgress(s)).toBeCloseTo(0.5);
   });
 
   it("clears a target that is no longer common when a file is added", () => {

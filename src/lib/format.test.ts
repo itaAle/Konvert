@@ -19,6 +19,7 @@ const media = (overrides: Partial<MediaInfo>): MediaInfo => ({
   video: [],
   coverArt: null,
   subtitleStreams: 0,
+  picture: null,
   ...overrides,
 });
 
@@ -75,5 +76,19 @@ describe("media details", () => {
     expect(describeMedia(media({ kind: "video", video: [video] }))).toBe(
       "1920×1080 · 29,97 fps · H.264 · senza audio",
     );
+  });
+
+  it("describes pictures by their format, without duration or audio", () => {
+    const picture = (codec: string) =>
+      media({
+        kind: "image",
+        container: "image2",
+        durationSecs: null,
+        video: [{ index: 0, codec, width: 3024, height: 4032, fps: null, bitRate: null, pixFmt: null }],
+      });
+    expect(describeMedia(picture("hevc"))).toBe("3024×4032 · HEIC");
+    expect(describeMedia(picture("mjpeg"))).toBe("3024×4032 · JPEG");
+    expect(describeMedia(picture("av1"))).toBe("3024×4032 · AVIF");
+    expect(describeMedia(picture("qoi"))).toBe("3024×4032 · QOI");
   });
 });

@@ -3,4 +3,4 @@
 /**
  * What kind of content a file holds, which drives the proposed targets.
  */
-export type MediaKind = "audio" | "video" | "videoWithAudio";
+export type MediaKind = "audio" | "video" | "videoWithAudio" | "image";

@@ -39,11 +39,11 @@ const option = (format: TargetFormat, label: string, group: TargetOption["group"
   group,
   lossless,
   sameAsInput: false,
-  kind: group === "video" ? "video" : "audio",
+  kind: group === "video" ? "video" : group === "image" ? "image" : "audio",
   videoCodecs:
     group !== "video" ? [] : format === "webm" ? ["vp9", "av1"] : format === "gif" ? ["gif"] : ["h264", "av1"],
   audioCodecs:
-    format === "gif"
+    format === "gif" || group === "image"
       ? []
       : [audioCodec(lossless ? "flac" : format === "webm" || format === "opus" ? "opus" : "aac")],
 });
@@ -58,8 +58,37 @@ const AUDIO: TargetOption[] = [
   option("aiff", "AIFF", "audio", true),
 ];
 
+const IMAGES: TargetOption[] = [
+  option("jpg", "JPG", "image"),
+  option("png", "PNG", "image", true),
+  option("webp", "WebP", "image"),
+  option("avif", "AVIF", "image"),
+];
+
 function analysis(path: string): FileAnalysis {
   const name = path.split(/[\\/]/).pop() ?? path;
+  if (/\.(jpe?g|png|webp|avif|heic|heif|bmp|tiff?)$/i.test(name)) {
+    const heic = /\.hei[cf]$/i.test(name);
+    return {
+      path,
+      name,
+      media: {
+        container: heic ? "mov,mp4,m4a,3gp,3g2,mj2" : "image2",
+        kind: "image",
+        durationSecs: null,
+        sizeBytes: 2_850_000,
+        bitRate: null,
+        video: [
+          { index: 0, codec: heic ? "hevc" : "mjpeg", width: 3024, height: 4032, fps: null, bitRate: null, pixFmt: "yuvj420p" },
+        ],
+        audio: [],
+        coverArt: null,
+        subtitleStreams: 0,
+        picture: { alpha: false, alphaStream: null, gridGroup: heic ? 0 : null, exif: true },
+      },
+      targets: IMAGES.map((o) => ({ ...o, sameAsInput: !heic && o.format === "jpg" })),
+    };
+  }
   const isVideo = /\.(mp4|mov|mkv|webm|avi)$/i.test(name);
   if (isVideo) {
     return {
@@ -75,6 +104,7 @@ function analysis(path: string): FileAnalysis {
         audio: [{ index: 1, codec: "aac", sampleRate: 48000, channels: 2, bitRate: 192_000, bitDepth: null }],
         coverArt: null,
         subtitleStreams: 0,
+        picture: null,
       },
       targets: [
         ...(["mp4", "mkv", "mov", "webm", "avi", "gif"] as TargetFormat[]).map((f) => ({
@@ -99,6 +129,7 @@ function analysis(path: string): FileAnalysis {
       audio: [{ index: 0, codec: "pcm_s16le", sampleRate: 44100, channels: 2, bitRate: 1_411_200, bitDepth: 16 }],
       coverArt: null,
       subtitleStreams: 0,
+      picture: null,
     },
     targets: AUDIO,
   };
@@ -139,6 +170,33 @@ export const mockBackend: Backend = {
     return analysis(path);
   },
   async planConversion(_path, media, request) {
+    if (media.kind === "image") {
+      const png = request.target === "png";
+      const quality = { max: 95, balanced: 82, small: 65 }[request.preset];
+      const source = media.video[0];
+      const plan: ConversionPlan = {
+        target: request.target,
+        videoStream: 0,
+        video: null,
+        audioStream: null,
+        audio: null,
+        coverArtStream: null,
+        image: {
+          codec: request.target === "jpg" ? "jpeg" : (request.target as "png" | "webp" | "avif"),
+          quality: png ? { kind: "lossless", effort: 6 } : { kind: "lossy", quality: request.advanced.imageQuality ?? quality },
+          width: source?.width ?? null,
+          height: source?.height ?? null,
+          resize: false,
+          alpha: false,
+          flatten: false,
+          gridGroup: media.picture?.gridGroup ?? null,
+          alphaStream: null,
+        },
+        warnings: [png ? "lossyToLossless" : "lossyReencode", ...(png ? [] : (["metadataDropped"] as const))],
+        estimate: { bytes: Math.round((media.sizeBytes ?? 0) * (png ? 6 : quality / 100)), approximate: true },
+      };
+      return plan;
+    }
     const video = request.target === "mp4" || request.target === "mkv" || request.target === "mov";
     const lossless = request.target === "flac" || request.target === "aiff" || request.target === "wav";
     const warnings: ConversionWarning[] = [];
@@ -154,6 +212,7 @@ export const mockBackend: Backend = {
       audioStream: media.audio[0]?.index ?? null,
       audio: remux ? { mode: "copy", codec: "aac" } : null,
       coverArtStream: null,
+      image: null,
       warnings,
       estimate: {
         bytes: Math.round(

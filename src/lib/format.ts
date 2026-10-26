@@ -79,11 +79,29 @@ export function codecName(codec: string): string {
   return CODEC_NAMES[codec] ?? codec.toUpperCase();
 }
 
+/** Picture formats by codec (HEIC and AVIF files hold HEVC and AV1 pictures). */
+const PICTURE_NAMES: Record<string, string> = {
+  mjpeg: "JPEG",
+  png: "PNG",
+  webp: "WebP",
+  av1: "AVIF",
+  hevc: "HEIC",
+  bmp: "BMP",
+  tiff: "TIFF",
+  jpegxl: "JPEG XL",
+  jpeg2000: "JPEG 2000",
+};
+
 /** One-line technical summary, e.g. "1920×1080 · 30 fps · H.264 · AAC stereo". */
 export function describeMedia(media: MediaInfo): string {
   const parts: string[] = [];
   const video = media.video[0];
   const audio = media.audio[0];
+  if (media.kind === "image") {
+    if (video?.width && video.height) parts.push(`${video.width}×${video.height}`);
+    if (video) parts.push(PICTURE_NAMES[video.codec] ?? codecName(video.codec));
+    return parts.join(" · ");
+  }
   if (video) {
     if (video.width && video.height) parts.push(`${video.width}×${video.height}`);
     if (video.fps) parts.push(`${number(video.fps, 2)} fps`);
