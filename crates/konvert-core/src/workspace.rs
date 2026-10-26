@@ -60,6 +60,11 @@ impl Workspace {
         self.dir.join(format!("job-{job_id}.{ext}"))
     }
 
+    /// Temporary folder for a job that writes several files.
+    pub fn job_dir(&self, job_id: u64) -> PathBuf {
+        self.dir.join(format!("job-{job_id}"))
+    }
+
     /// Releases the lock and deletes the directory (also done on drop).
     /// Useful when the owner is never dropped, e.g. on application exit.
     pub fn close(&self) {

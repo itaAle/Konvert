@@ -13,6 +13,7 @@
 //! OPTIONS: --preset max|balanced|small  --height N  --fps N
 //!          --audio-bitrate KBPS  --sample-rate HZ  --mono | --stereo
 //!          --quality 1-100  --max-size PIXELS   (pictures)
+//!          --frame-at SECONDS | --every SECONDS | --every-frame   (pictures from a video)
 //! ```
 //!
 //! The engine directory defaults to `$KONVERT_FFMPEG_DIR`, then to
@@ -25,8 +26,8 @@ use std::process::ExitCode;
 
 use konvert_core::{
     AdvancedOptions, Binaries, ChannelLayout, ConversionJob, ConversionRequest, CoreError,
-    QualityPreset, TargetFormat, Workspace, available_targets, engine_version, plan_conversion,
-    probe, run_conversion, workspace,
+    FrameMode, FrameOptions, QualityPreset, TargetFormat, Workspace, available_targets,
+    engine_version, plan_conversion, probe, run_conversion, workspace,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -39,7 +40,8 @@ const USAGE: &str = "usage:
 
 OPTIONS: --preset max|balanced|small  --height N  --fps N
          --audio-bitrate KBPS  --sample-rate HZ  --mono | --stereo
-         --quality 1-100  --max-size PIXELS   (pictures)";
+         --quality 1-100  --max-size PIXELS   (pictures)
+         --frame-at SECONDS | --every SECONDS | --every-frame   (pictures from a video)";
 
 enum Action {
     Version,
@@ -62,6 +64,7 @@ fn parse_args() -> Result<Cli, String> {
     let mut preset = QualityPreset::Balanced;
     let mut advanced = AdvancedOptions::default();
     let mut out_dir = None;
+    let mut frames: Option<FrameOptions> = None;
 
     fn number<T: std::str::FromStr>(name: &str, v: OsString) -> Result<T, String> {
         v.to_str()
@@ -102,6 +105,25 @@ fn parse_args() -> Result<Cli, String> {
             Some("--max-size") => {
                 advanced.max_dimension = Some(number("--max-size", value("--max-size")?)?)
             }
+            Some("--frame-at") => {
+                frames = Some(FrameOptions {
+                    at_secs: Some(number("--frame-at", value("--frame-at")?)?),
+                    ..FrameOptions::default()
+                })
+            }
+            Some("--every") => {
+                frames = Some(FrameOptions {
+                    mode: FrameMode::Sequence,
+                    every_secs: Some(number("--every", value("--every")?)?),
+                    ..FrameOptions::default()
+                })
+            }
+            Some("--every-frame") => {
+                frames = Some(FrameOptions {
+                    mode: FrameMode::Sequence,
+                    ..FrameOptions::default()
+                })
+            }
             Some("--mono") => advanced.channels = Some(ChannelLayout::Mono),
             Some("--stereo") => advanced.channels = Some(ChannelLayout::Stereo),
             Some("-h" | "--help") => return Err(String::new()),
@@ -128,6 +150,7 @@ fn parse_args() -> Result<Cli, String> {
             target: target.ok_or("missing --to <FORMAT>")?,
             preset,
             advanced: advanced.clone(),
+            frames,
         })
     };
     let action = match command.as_ref().and_then(|c| c.to_str()) {
@@ -238,8 +261,9 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
                 );
             }
             println!(
-                "{} ({} bytes, {:.1}s)",
+                "{} ({} file(s), {} bytes, {:.1}s)",
                 outcome.output.display(),
+                outcome.files,
                 outcome.size_bytes,
                 outcome.elapsed.as_secs_f64()
             );

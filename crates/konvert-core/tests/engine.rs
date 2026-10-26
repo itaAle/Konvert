@@ -13,8 +13,8 @@ use std::process::Command;
 use konvert_core::formats;
 use konvert_core::{
     AdvancedOptions, Binaries, ChannelLayout, ConversionJob, ConversionOutcome, ConversionRequest,
-    CoreError, MediaInfo, MediaKind, QualityPreset, TargetFormat, Workspace, plan_conversion,
-    probe, run_conversion,
+    CoreError, FrameMode, FrameOptions, MediaInfo, MediaKind, QualityPreset, TargetFormat,
+    Workspace, plan_conversion, probe, run_conversion,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -516,6 +516,7 @@ async fn advanced_options_are_applied() {
             sample_rate: Some(32000),
             ..Default::default()
         },
+        frames: None,
     };
     let (_, out) = convert(&bins, &tmp, &input, request).await;
     let video = out.primary_video().unwrap();
@@ -1076,6 +1077,150 @@ async fn heic_photos_are_assembled_from_their_tiles() {
 }
 
 // --- Robustness --------------------------------------------------------------------
+
+#[tokio::test]
+async fn frames_are_taken_from_videos() {
+    let bins = engine();
+    let tmp = TempDir::new("frames");
+    let input = sample_mp4(&bins, &tmp);
+
+    // One frame, in the middle by default.
+    let (outcome, jpg) = convert(
+        &bins,
+        &tmp,
+        &input,
+        req(TargetFormat::Jpg, QualityPreset::Balanced),
+    )
+    .await;
+    assert_eq!(outcome.files, 1);
+    assert!(outcome.output.ends_with("Clip di prova.jpg"));
+    assert_eq!(
+        (jpg.kind, size_of(&jpg)),
+        (MediaKind::Image, (Some(320), Some(240)))
+    );
+
+    // A frame after the end: the last one.
+    let mut request = req(TargetFormat::Png, QualityPreset::Max);
+    request.frames = Some(FrameOptions {
+        at_secs: Some(99.0),
+        ..FrameOptions::default()
+    });
+    let (_, png) = convert(&bins, &tmp, &input, request).await;
+    assert_eq!(png.primary_video().unwrap().codec, "png");
+
+    // A series, one picture per second, in a new folder named after the video.
+    let mut request = req(TargetFormat::Webp, QualityPreset::Small);
+    request.frames = Some(FrameOptions {
+        mode: FrameMode::Sequence,
+        every_secs: Some(1.0),
+        ..FrameOptions::default()
+    });
+    let (folder, _) = convert_series(&bins, &tmp, &input, request.clone()).await;
+    assert_eq!(folder.output, tmp.path("out").join("Clip di prova"));
+    assert_eq!(
+        files_in(&folder.output),
+        [
+            "Clip di prova-001.webp",
+            "Clip di prova-002.webp",
+            "Clip di prova-003.webp"
+        ]
+    );
+    assert_eq!(folder.files, 3);
+    let first = probe(&bins, &folder.output.join("Clip di prova-001.webp"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (first.kind, size_of(&first)),
+        (MediaKind::Image, (Some(320), Some(240)))
+    );
+    // Again: a second folder, nothing overwritten.
+    let (again, _) = convert_series(&bins, &tmp, &input, request).await;
+    assert_eq!(again.output, tmp.path("out").join("Clip di prova (1)"));
+
+    // Every frame: 3 s at 25 fps.
+    let mut request = req(TargetFormat::Jpg, QualityPreset::Small);
+    request.frames = Some(FrameOptions {
+        mode: FrameMode::Sequence,
+        ..FrameOptions::default()
+    });
+    let (all, _) = convert_series(&bins, &tmp, &input, request).await;
+    assert_eq!(all.files, 75);
+    assert_eq!(files_in(&all.output).len(), 75);
+}
+
+/// Like [`convert`], for a series of pictures (the output is a folder).
+async fn convert_series(
+    bins: &Binaries,
+    tmp: &TempDir,
+    input: &Path,
+    request: ConversionRequest,
+) -> (ConversionOutcome, MediaInfo) {
+    let media = probe(bins, input).await.unwrap();
+    let out_dir = tmp.path("out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ws = Workspace::create(&tmp.path("ws")).unwrap();
+    let job = ConversionJob {
+        id: 7,
+        input: input.to_path_buf(),
+        media: media.clone(),
+        request,
+        output_dir: out_dir,
+    };
+    let outcome = run_conversion(bins, &ws, &job, &CancellationToken::new(), |_| {})
+        .await
+        .unwrap();
+    assert!(outcome.output.is_dir());
+    assert_eq!(files_in(ws.dir()), [".lock"], "temporary files left behind");
+    (outcome, media)
+}
+
+#[tokio::test]
+async fn cancelling_a_series_leaves_nothing_behind() {
+    let bins = engine();
+    let tmp = TempDir::new("frames-cancel");
+    let input = tmp.path("lungo.mp4");
+    generate(
+        &bins,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x240:rate=25:duration=120",
+            "-c:v",
+            "libopenh264",
+            "-b:v",
+            "200k",
+        ],
+        &input,
+    );
+    let media = probe(&bins, &input).await.unwrap();
+    let out_dir = tmp.path("uscita");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ws = Workspace::create(&tmp.path("ws")).unwrap();
+    let mut request = req(TargetFormat::Png, QualityPreset::Max);
+    request.frames = Some(FrameOptions {
+        mode: FrameMode::Sequence,
+        ..FrameOptions::default()
+    });
+    let job = ConversionJob {
+        id: 1,
+        input,
+        media,
+        request,
+        output_dir: out_dir.clone(),
+    };
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    let result = run_conversion(&bins, &ws, &job, &cancel, move |p| {
+        if p.fraction.is_some_and(|f| f > 0.0 && f < 1.0) {
+            trigger.cancel();
+        }
+    })
+    .await;
+    assert!(matches!(result, Err(CoreError::Cancelled)), "{result:?}");
+    assert!(files_in(&out_dir).is_empty(), "no folder must be created");
+    assert_eq!(files_in(ws.dir()), [".lock"]);
+}
 
 #[tokio::test]
 async fn cancellation_removes_the_partial_output() {

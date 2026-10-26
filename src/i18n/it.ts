@@ -44,6 +44,7 @@ export const it = {
     groupVideo: "Formato video",
     groupAudioOnly: "Solo audio",
     groupImage: "Formato immagine",
+    groupFrames: "Fotogrammi",
     lossless: "Senza perdita",
     sameFormat: "Stesso formato",
     common: "Formati disponibili per tutti i file selezionati.",
@@ -111,6 +112,7 @@ export const it = {
     pictureDownscaled: "L'immagine supera le dimensioni massime di questo formato: verrà ridotta.",
     fewColors: "Le GIF hanno al massimo 256 colori: foto e sfumature perdono qualità.",
     paddedToSquare: "Le icone sono quadrate: l'immagine verrà centrata su uno sfondo trasparente.",
+    manyFiles: "Verranno create molte immagini: scegli un intervallo più lungo per averne meno.",
     metadataDropped: "I dati EXIF della foto (fotocamera, data, posizione) non verranno conservati.",
   },
   actions: {

@@ -12,11 +12,11 @@ use std::path::Path;
 use crate::error::CoreError;
 use crate::formats::{self, AudioCodec, FormatSpec, ImageCodec, VideoCodec};
 use crate::plan::{
-    AudioEncode, AudioPlan, AudioRate, ConversionPlan, ImagePlan, ImageQuality, VideoEncode,
-    VideoPlan, VideoRate, plan_conversion,
+    AudioEncode, AudioPlan, AudioRate, ConversionPlan, FramePlan, ImagePlan, ImageQuality,
+    VideoEncode, VideoPlan, VideoRate, plan_conversion,
 };
 use crate::probe::MediaInfo;
-use crate::request::ConversionRequest;
+use crate::request::{ConversionRequest, FrameMode};
 
 /// A fully built FFmpeg invocation (program arguments only).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,16 +72,29 @@ pub fn build_from_plan(plan: &ConversionPlan, input: &Path, output: &Path) -> Ff
     a.push(&["-progress", "pipe:1"]);
 
     // Input: local files only.
-    a.push(&["-protocol_whitelist", "file", "-i"]);
+    a.push(&["-protocol_whitelist", "file"]);
+    if let Some(at) = plan.frames.and_then(|f| f.at_secs) {
+        // Seeking before `-i` decodes from the previous key frame: fast and exact.
+        a.push(&["-ss", &format_number(at)]);
+    }
+    a.push(&["-i"]);
     a.push_os(file_url(input));
 
     match &plan.image {
-        Some(image) => picture_args(&mut a, image, plan.video_stream.unwrap_or(0)),
+        Some(image) => picture_args(
+            &mut a,
+            image,
+            plan.video_stream.unwrap_or(0),
+            plan.frames.as_ref(),
+        ),
         None => media_args(&mut a, plan, spec),
     }
 
+    // A series of pictures: one file per picture, named from a pattern.
+    let sequence = plan.frames.is_some_and(|f| f.mode == FrameMode::Sequence);
+    let muxer = if sequence { "image2" } else { spec.muxer };
     a.push(spec.muxer_args);
-    a.push(&["-f", spec.muxer, "-y"]);
+    a.push(&["-f", muxer, "-y"]);
     a.push_os(file_url(output));
     FfmpegCommand { args: a.0 }
 }
@@ -137,7 +150,8 @@ fn media_args(a: &mut Args, plan: &ConversionPlan, spec: &FormatSpec) {
 /// separate transparency plane), scales, lays transparent areas on white when
 /// the format has no transparency and prepares the encoder's pixel format.
 /// FFmpeg applies the EXIF/HEIF rotation before the graph.
-fn picture_args(a: &mut Args, image: &ImagePlan, index: u32) {
+fn picture_args(a: &mut Args, image: &ImagePlan, index: u32, frames: Option<&FramePlan>) {
+    let sequence = frames.is_some_and(|f| f.mode == FrameMode::Sequence);
     let (inputs, mut steps) = match (image.grid_group, image.alpha_stream) {
         (Some(group), _) => (format!("[0:g:{group}]"), Vec::new()),
         (None, Some(alpha)) => (
@@ -148,6 +162,9 @@ fn picture_args(a: &mut Args, image: &ImagePlan, index: u32) {
     };
     if !image.icons.is_empty() {
         return icon_args(a, image, &inputs, steps);
+    }
+    if let Some(every) = frames.and_then(|f| f.every_secs) {
+        steps.push(format!("fps=1/{}", format_number(every)));
     }
     if let (true, Some(w), Some(h)) = (image.resize, image.width, image.height) {
         steps.push(format!("scale={w}:{h}:flags=lanczos"));
@@ -194,7 +211,12 @@ fn picture_args(a: &mut Args, image: &ImagePlan, index: u32) {
     if alpha_plane {
         a.push(&["-map", "[alpha]"]);
     }
-    a.push(&["-frames:v", "1"]);
+    if sequence {
+        // One file per decoded (or sampled) frame, no duplicates.
+        a.push(&["-fps_mode", "passthrough"]);
+    } else {
+        a.push(&["-frames:v", "1"]);
+    }
 
     match (image.codec, image.quality) {
         (ImageCodec::Jpeg, ImageQuality::Lossy { quality }) => {
@@ -898,6 +920,36 @@ mod tests {
         assert!(args.ends_with(&strings(&["-c:v", "bmp", "-pix_fmt", "bgr24"])));
         let (args, _) = picture_body(&transparent_png(), &req(TargetFormat::Tiff, QualityPreset::Max), "a.png");
         assert!(args.ends_with(&strings(&["-c:v", "tiff", "-compression_algo", "deflate", "-pix_fmt", "rgba"])));
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn frames_seek_or_sample_the_video() {
+        use crate::request::FrameOptions;
+        let mut request = req(TargetFormat::Jpg, QualityPreset::Balanced);
+        request.frames = Some(FrameOptions { at_secs: Some(12.5), ..FrameOptions::default() });
+        let cmd = build_command(&mp4(), &request, Path::new("clip.mp4"), Path::new("f.jpg"))
+            .unwrap()
+            .args_lossy();
+        let i = cmd.iter().position(|a| a == "-i").unwrap();
+        assert_eq!(cmd[i - 2..i], ["-ss", "12.5"]);
+        assert!(cmd.windows(2).any(|w| w == ["-frames:v", "1"]));
+        assert!(cmd.windows(2).any(|w| w == ["-f", "image2pipe"]));
+
+        request.target = TargetFormat::Png;
+        request.frames = Some(FrameOptions {
+            mode: FrameMode::Sequence,
+            every_secs: Some(2.0),
+            ..FrameOptions::default()
+        });
+        let (args, muxer) = picture_body(&mp4(), &request, "clip.mp4");
+        assert_eq!(muxer, "image2");
+        assert_eq!(args, strings(&["-filter_complex", "[0:0]fps=1/2[img]", "-map", "[img]",
+            "-fps_mode", "passthrough", "-c:v", "png", "-compression_level", "6"]));
+        let cmd = build_command(&mp4(), &request, Path::new("clip.mp4"), Path::new("f.png"))
+            .unwrap()
+            .args_lossy();
+        assert!(!cmd.contains(&"-ss".to_owned()));
     }
 
     #[test]

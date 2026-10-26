@@ -16,8 +16,10 @@ use crate::formats::{
     self, AudioCodec, FormatKind, FormatSpec, ImageCodec, TargetFormat, VideoCodec,
     is_lossless_audio_codec, is_lossless_image, is_lossless_video_codec,
 };
-use crate::probe::{AudioStream, MediaInfo, MediaKind, VideoStream, pix_fmt_has_alpha};
-use crate::request::{ConversionRequest, QualityPreset};
+use crate::probe::{
+    AudioStream, MediaInfo, MediaKind, PictureInfo, VideoStream, pix_fmt_has_alpha,
+};
+use crate::request::{ConversionRequest, FrameMode, QualityPreset};
 
 /// How the audio stream is produced.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -182,6 +184,8 @@ pub enum ConversionWarning {
     FewColors,
     /// Icon from a picture that is not square: centered on a transparent square.
     PaddedToSquare,
+    /// A series of frames with many pictures.
+    ManyFiles,
     /// The output format has no audio: the soundtrack is not kept.
     AudioDropped,
     /// The output format cannot store the cover picture.
@@ -195,6 +199,23 @@ pub enum ConversionWarning {
     /// The photo's EXIF data (camera, date, location) is not kept.
     MetadataDropped,
 }
+
+/// Pictures taken from a video.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FramePlan {
+    pub mode: FrameMode,
+    /// One frame: position in seconds, within the video.
+    pub at_secs: Option<f64>,
+    /// Series: one picture every `every_secs` seconds (`None`: every frame).
+    pub every_secs: Option<f64>,
+    /// Expected number of pictures (`None`: unknown duration).
+    pub count: Option<u32>,
+}
+
+/// Beyond this many pictures, the user is told about it.
+const MANY_FILES: u32 = 300;
 
 /// Every decision taken for one conversion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -212,6 +233,9 @@ pub struct ConversionPlan {
     pub cover_art_stream: Option<u32>,
     /// Picture output (picture formats only).
     pub image: Option<ImagePlan>,
+    /// Pictures taken from a video (picture formats from a video input).
+    #[serde(default)]
+    pub frames: Option<FramePlan>,
     pub warnings: Vec<ConversionWarning>,
     pub estimate: Option<SizeEstimate>,
 }
@@ -252,7 +276,11 @@ pub fn plan_conversion(
         )));
     }
     if spec.kind == FormatKind::Image {
-        return plan_picture(media, request, spec);
+        return if media.kind == MediaKind::Image {
+            plan_picture(media, request, spec)
+        } else {
+            plan_frames(media, request, spec)
+        };
     }
 
     // Re-encode when the user asked for a smaller file or for the same format
@@ -294,6 +322,7 @@ pub fn plan_conversion(
         audio,
         cover_art_stream,
         image: None,
+        frames: None,
         warnings: Vec::new(),
         estimate: None,
     };
@@ -313,14 +342,99 @@ fn plan_picture(
     request: &ConversionRequest,
     spec: &FormatSpec,
 ) -> Result<ConversionPlan, CoreError> {
-    use ConversionWarning as W;
-    let codec = spec
-        .image_codec
-        .expect("picture formats have a picture codec");
     let src = media
         .primary_video()
         .ok_or_else(|| unsupported("the input has no picture".into()))?;
     let picture = media.picture.clone().unwrap_or_default();
+    plan_still(media, request, spec, src, picture)
+}
+
+/// Pictures from a video: one frame at a chosen moment, or a series at
+/// regular intervals.
+fn plan_frames(
+    media: &MediaInfo,
+    request: &ConversionRequest,
+    spec: &FormatSpec,
+) -> Result<ConversionPlan, CoreError> {
+    use ConversionWarning as W;
+    let src = media
+        .primary_video()
+        .ok_or_else(|| unsupported("the input has no video".into()))?;
+    let options = request.frames.unwrap_or_default();
+    let duration = media.duration_secs;
+    let frames = match options.mode {
+        FrameMode::Single => {
+            let at = match options.at_secs {
+                Some(t) if !(t.is_finite() && t >= 0.0) => {
+                    return Err(unsupported(format!("invalid frame position {t}")));
+                }
+                Some(t) => t,
+                None => duration.map_or(0.0, |d| d / 2.0),
+            };
+            // The last frame starts one frame before the end.
+            let last = duration.map(|d| (d - 1.0 / src.fps.unwrap_or(25.0)).max(0.0));
+            let at = last.map_or(at, |last| at.min(last));
+            FramePlan {
+                mode: FrameMode::Single,
+                at_secs: Some((at * 1000.0).round() / 1000.0),
+                every_secs: None,
+                count: Some(1),
+            }
+        }
+        FrameMode::Sequence => {
+            let every = match options.every_secs {
+                Some(e) if !(e.is_finite() && e > 0.0) => {
+                    return Err(unsupported(format!("invalid frame interval {e}")));
+                }
+                // Shorter than a frame: every frame.
+                every => every.filter(|e| src.fps.is_none_or(|fps| *e > 1.0 / fps)),
+            };
+            let count = match (every, duration, src.fps) {
+                (Some(e), Some(d), _) => Some((d / e).ceil().max(1.0) as u32),
+                (None, Some(d), Some(fps)) => Some((d * fps).round().max(1.0) as u32),
+                _ => None,
+            };
+            FramePlan {
+                mode: FrameMode::Sequence,
+                at_secs: None,
+                every_secs: every,
+                count,
+            }
+        }
+    };
+    let picture = PictureInfo {
+        alpha: src.pix_fmt.as_deref().is_some_and(pix_fmt_has_alpha),
+        ..PictureInfo::default()
+    };
+    let mut plan = plan_still(media, request, spec, src, picture)?;
+    // Taking pictures out of a video is not a re-compression worth a warning.
+    plan.warnings.retain(|w| {
+        !matches!(
+            w,
+            W::LossyToLossless | W::LossyReencode | W::LosslessToLossy
+        )
+    });
+    if frames.count.is_some_and(|n| n > MANY_FILES) {
+        plan.warnings.push(W::ManyFiles);
+        plan.warnings.sort_by_key(|w| *w as u8);
+    }
+    plan.frames = Some(frames);
+    plan.estimate = estimate_size(media, &plan);
+    Ok(plan)
+}
+
+/// One picture (a photo, or a frame of a video) in a picture format.
+fn plan_still(
+    media: &MediaInfo,
+    request: &ConversionRequest,
+    spec: &FormatSpec,
+    src: &VideoStream,
+    picture: PictureInfo,
+) -> Result<ConversionPlan, CoreError> {
+    use ConversionWarning as W;
+    let codec = spec
+        .image_codec
+        .expect("picture formats have a picture codec");
     let adv = &request.advanced;
     let preset = request.preset;
     let source_lossless = is_lossless_image(&src.codec, src.pix_fmt.as_deref());
@@ -419,6 +533,7 @@ fn plan_picture(
         audio: None,
         cover_art_stream: None,
         image: Some(image),
+        frames: None,
         warnings,
         estimate: None,
     };
@@ -802,7 +917,7 @@ fn collect_warnings(
 mod tests {
     use super::*;
     use crate::probe::parse_ffprobe_json;
-    use crate::request::{AdvancedOptions, ChannelLayout};
+    use crate::request::{AdvancedOptions, ChannelLayout, FrameOptions};
 
     use ConversionWarning as W;
 
@@ -1169,6 +1284,76 @@ mod tests {
         assert_eq!((audio.codec, audio.channels), (AudioCodec::Mp2, Some(2)));
         assert!(mpg.warnings.contains(&W::LossyReencode));
         assert!(mpg.estimate.unwrap().approximate);
+    }
+
+    fn frames(mode: FrameMode, at: Option<f64>, every: Option<f64>) -> Option<FrameOptions> {
+        Some(FrameOptions {
+            mode,
+            at_secs: at,
+            every_secs: every,
+        })
+    }
+
+    #[test]
+    fn one_frame_of_a_video_defaults_to_the_middle_and_stays_inside() {
+        let movie = mp4_1080p();
+        let p = plan(
+            &movie,
+            &req(TargetFormat::Jpg, QualityPreset::Balanced),
+            "clip.mp4",
+        );
+        let f = p.frames.unwrap();
+        assert_eq!(
+            (f.mode, f.at_secs, f.count),
+            (FrameMode::Single, Some(60.0), Some(1))
+        );
+        let image = image_plan(&p);
+        assert_eq!((image.width, image.height), (Some(1920), Some(1080)));
+        assert_eq!(image.quality, ImageQuality::Lossy { quality: 85 });
+        // No "recompressed" warning for a picture taken from a video.
+        assert!(p.warnings.is_empty());
+        assert!(!p.is_remux());
+
+        let mut request = req(TargetFormat::Png, QualityPreset::Balanced);
+        request.frames = frames(FrameMode::Single, Some(500.0), None);
+        let f = plan(&movie, &request, "clip.mp4").frames.unwrap();
+        // 120 s at 30 fps: the last frame starts at 119.967 s.
+        assert_eq!(f.at_secs, Some(119.967));
+        request.frames = frames(FrameMode::Single, Some(-1.0), None);
+        assert!(plan_conversion(&movie, &request, Path::new("clip.mp4")).is_err());
+    }
+
+    #[test]
+    fn a_series_of_frames_counts_the_pictures() {
+        let movie = mp4_1080p();
+        let mut request = req(TargetFormat::Webp, QualityPreset::Small);
+        request.frames = frames(FrameMode::Sequence, None, Some(10.0));
+        let p = plan(&movie, &request, "clip.mp4");
+        let f = p.frames.unwrap();
+        assert_eq!((f.every_secs, f.count), (Some(10.0), Some(12)));
+        let one = plan(
+            &movie,
+            &req(TargetFormat::Webp, QualityPreset::Small),
+            "clip.mp4",
+        );
+        assert_eq!(p.estimate.unwrap().bytes, one.estimate.unwrap().bytes * 12);
+
+        // Every frame of two minutes at 30 fps: many files.
+        request.frames = frames(FrameMode::Sequence, None, None);
+        let p = plan(&movie, &request, "clip.mp4");
+        assert_eq!(p.frames.unwrap().count, Some(3600));
+        assert!(p.warnings.contains(&W::ManyFiles));
+        // An interval shorter than a frame means every frame.
+        request.frames = frames(FrameMode::Sequence, None, Some(0.001));
+        assert_eq!(
+            plan(&movie, &request, "clip.mp4")
+                .frames
+                .unwrap()
+                .every_secs,
+            None
+        );
+        request.frames = frames(FrameMode::Sequence, None, Some(0.0));
+        assert!(plan_conversion(&movie, &request, Path::new("clip.mp4")).is_err());
     }
 
     #[test]

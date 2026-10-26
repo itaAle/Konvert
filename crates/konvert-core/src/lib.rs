@@ -37,7 +37,9 @@ pub use formats::{TargetFormat, TargetOption, available_targets};
 pub use plan::{ConversionPlan, ConversionWarning, plan_conversion};
 pub use probe::{MediaInfo, MediaKind, probe};
 pub use progress::Progress;
-pub use request::{AdvancedOptions, ChannelLayout, ConversionRequest, QualityPreset};
+pub use request::{
+    AdvancedOptions, ChannelLayout, ConversionRequest, FrameMode, FrameOptions, QualityPreset,
+};
 pub use workspace::Workspace;
 
 /// First line of `ffmpeg -version` (e.g. `ffmpeg version n9.0.2 ...`).

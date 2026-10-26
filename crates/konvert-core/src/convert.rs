@@ -19,11 +19,11 @@ use crate::command::build_from_plan;
 use crate::error::CoreError;
 use crate::formats;
 use crate::naming;
-use crate::plan::plan_conversion;
+use crate::plan::{ConversionPlan, plan_conversion};
 use crate::probe::MediaInfo;
 use crate::process;
 use crate::progress::{Progress, ProgressParser};
-use crate::request::ConversionRequest;
+use crate::request::{ConversionRequest, FrameMode};
 use crate::workspace::Workspace;
 
 /// Lines of FFmpeg stderr kept for the "technical details" section.
@@ -48,8 +48,12 @@ pub struct ConversionJob {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ConversionOutcome {
+    /// The converted file, or the folder holding a series of pictures.
     pub output: PathBuf,
+    /// Total size of the produced files.
     pub size_bytes: u64,
+    /// Number of files produced (more than one: `output` is a folder).
+    pub files: u32,
     /// Seconds.
     #[serde(serialize_with = "serialize_secs")]
     #[ts(type = "number")]
@@ -77,6 +81,9 @@ pub async fn run_conversion(
     }
     let plan = plan_conversion(&job.media, &job.request, &job.input)?;
     let ext = formats::spec(job.request.target).extension;
+    if plan.frames.is_some_and(|f| f.mode == FrameMode::Sequence) {
+        return run_series(bins, workspace, job, &plan, cancel, on_progress, started).await;
+    }
     let temp_output = workspace.job_output(job.id, ext);
     let command = build_from_plan(&plan, &job.input, &temp_output);
 
@@ -87,7 +94,14 @@ pub async fn run_conversion(
         cancel,
         &mut on_progress,
     )
-    .await;
+    .await
+    .and_then(|()| {
+        // FFmpeg can succeed without writing anything (e.g. no frame there).
+        match std::fs::metadata(&temp_output) {
+            Ok(m) if m.len() > 0 => Ok(()),
+            _ => Err(nothing_written()),
+        }
+    });
 
     if let Err(e) = result {
         let _ = std::fs::remove_file(&temp_output);
@@ -113,8 +127,77 @@ pub async fn run_conversion(
     Ok(ConversionOutcome {
         output,
         size_bytes,
+        files: 1,
         elapsed: started.elapsed(),
     })
+}
+
+/// A series of pictures: FFmpeg writes them into a private folder, then they
+/// move into a new folder named after the input, next to the other outputs.
+async fn run_series(
+    bins: &Binaries,
+    workspace: &Workspace,
+    job: &ConversionJob,
+    plan: &ConversionPlan,
+    cancel: &CancellationToken,
+    mut on_progress: impl FnMut(Progress) + Send,
+    started: Instant,
+) -> Result<ConversionOutcome, CoreError> {
+    let ext = formats::spec(job.request.target).extension;
+    let temp_dir = workspace.job_dir(job.id);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir)?;
+    let command = build_from_plan(plan, &job.input, &series_pattern(&temp_dir, ext));
+
+    let result = run_ffmpeg(
+        bins,
+        &command.args,
+        job.media.duration_secs,
+        cancel,
+        &mut on_progress,
+    )
+    .await;
+    if let Err(e) = result {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Err(e);
+    }
+
+    let stem = output_stem(&job.input);
+    let output_dir = job.output_dir.clone();
+    let temp = temp_dir.clone();
+    let moved =
+        tokio::task::spawn_blocking(move || naming::move_series(&temp, &output_dir, &stem, ext))
+            .await
+            .map_err(|e| CoreError::Io(std::io::Error::other(e)));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    let (output, files, size_bytes) = moved??;
+    if files == 0 {
+        let _ = std::fs::remove_dir(&output);
+        return Err(nothing_written());
+    }
+    Ok(ConversionOutcome {
+        output,
+        size_bytes,
+        files,
+        elapsed: started.elapsed(),
+    })
+}
+
+/// File name pattern of a series for FFmpeg's image2 muxer: `%` in the
+/// folder name is escaped, `%06d` numbers the pictures.
+fn series_pattern(dir: &Path, ext: &str) -> PathBuf {
+    let dir = dir.to_string_lossy().replace('%', "%%");
+    PathBuf::from(format!(
+        "{dir}{}frame-%06d.{ext}",
+        std::path::MAIN_SEPARATOR
+    ))
+}
+
+fn nothing_written() -> CoreError {
+    CoreError::EngineFailed {
+        details: "the conversion produced no output".into(),
+    }
 }
 
 /// Output base name: the input's file name without extension.

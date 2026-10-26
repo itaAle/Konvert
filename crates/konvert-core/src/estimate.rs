@@ -11,6 +11,7 @@ use crate::plan::{
     AudioPlan, AudioRate, ConversionPlan, ImagePlan, ImageQuality, VideoPlan, VideoRate,
 };
 use crate::probe::{MediaInfo, MediaKind};
+use crate::request::FrameMode;
 
 /// Estimated output size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -29,7 +30,14 @@ const OVERHEAD: f64 = 1.01;
 /// the size) is unknown.
 pub fn estimate_size(media: &MediaInfo, plan: &ConversionPlan) -> Option<SizeEstimate> {
     if let Some(image) = &plan.image {
-        return estimate_picture(media, image);
+        let picture = estimate_picture(media, image)?;
+        return match &plan.frames {
+            Some(frames) if frames.mode == FrameMode::Sequence => Some(SizeEstimate {
+                bytes: picture.bytes * frames.count? as u64,
+                approximate: true,
+            }),
+            _ => Some(picture),
+        };
     }
     let duration = media.duration_secs?;
     let mut approximate = false;

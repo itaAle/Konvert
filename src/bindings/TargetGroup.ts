@@ -3,4 +3,4 @@
 /**
  * How a proposed target relates to the input, for grouping in the UI.
  */
-export type TargetGroup = "audio" | "video" | "audioOnly" | "image";
+export type TargetGroup = "audio" | "video" | "audioOnly" | "image" | "frames";

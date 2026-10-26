@@ -45,6 +45,7 @@ export const en: Messages = {
     groupVideo: "Video format",
     groupAudioOnly: "Audio only",
     groupImage: "Image format",
+    groupFrames: "Frames",
     lossless: "Lossless",
     sameFormat: "Same format",
     common: "Formats available for all the selected files.",
@@ -108,6 +109,7 @@ export const en: Messages = {
     pictureDownscaled: "The picture is larger than this format allows: it will be scaled down.",
     fewColors: "GIF pictures have at most 256 colors: photos and gradients lose quality.",
     paddedToSquare: "Icons are square: the picture will be centered on a transparent background.",
+    manyFiles: "This will create a lot of pictures: choose a longer interval to get fewer.",
     metadataDropped: "The photo's EXIF data (camera, date, location) will not be kept.",
   },
   actions: {

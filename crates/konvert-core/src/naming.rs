@@ -57,6 +57,54 @@ pub fn move_to_unique(src: &Path, dir: &Path, stem: &OsStr, ext: &str) -> io::Re
     ))
 }
 
+/// Creates the first free folder `dir/stem[ (n)]` and returns its path.
+pub fn create_unique_dir(dir: &Path, stem: &OsStr) -> io::Result<PathBuf> {
+    for n in 0..=MAX_SUFFIX {
+        let candidate = dir.join(candidate_name(stem, "", n));
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            // Taken (by a file or a folder): try the next name.
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "no free output folder name",
+    ))
+}
+
+/// Moves the `.ext` files of `src_dir`, in name order, into a new folder
+/// `dir/stem[ (n)]` as `stem-001.ext`, `stem-002.ext`, ... Returns the folder,
+/// the number of files and their total size. If a move fails, the new folder
+/// is removed again (it only holds files moved by this call).
+pub fn move_series(
+    src_dir: &Path,
+    dir: &Path,
+    stem: &OsStr,
+    ext: &str,
+) -> io::Result<(PathBuf, u32, u64)> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(src_dir)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == ext))
+        .collect();
+    files.sort();
+    let folder = create_unique_dir(dir, stem)?;
+    let digits = files.len().to_string().len().max(3);
+    let mut bytes = 0;
+    for (i, file) in files.iter().enumerate() {
+        let mut name = stem.to_os_string();
+        name.push(format!("-{:0digits$}.{ext}", i + 1));
+        let size = std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
+        if let Err(e) = move_no_replace(file, &folder.join(name)) {
+            let _ = std::fs::remove_dir_all(&folder);
+            return Err(e);
+        }
+        bytes += size;
+    }
+    Ok((folder, files.len() as u32, bytes))
+}
+
 /// Moves a file, failing with `AlreadyExists` instead of replacing `dst`.
 /// Works across volumes (falls back to copy + delete).
 #[cfg(windows)]
@@ -188,6 +236,53 @@ mod tests {
             move_no_replace(&out, &existing).unwrap_err().kind(),
             io::ErrorKind::AlreadyExists
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_series_goes_into_a_new_numbered_folder() {
+        let dir = std::env::temp_dir().join(format!(
+            "konvert-naming-test-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let work = dir.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        for (name, data) in [
+            ("frame-000002.png", &b"bb"[..]),
+            ("frame-000001.png", b"a"),
+            ("frame-000003.png", b"ccc"),
+            ("other.txt", b"ignored"),
+        ] {
+            std::fs::write(work.join(name), data).unwrap();
+        }
+        // A file and a folder already use the plain name.
+        std::fs::write(dir.join("Vacanze è"), b"").unwrap();
+        std::fs::create_dir(dir.join("Vacanze è (1)")).unwrap();
+
+        let (folder, count, bytes) =
+            move_series(&work, &dir, OsStr::new("Vacanze è"), "png").unwrap();
+
+        assert_eq!(folder, dir.join("Vacanze è (2)"));
+        assert_eq!((count, bytes), (3, 6));
+        let mut names: Vec<String> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "Vacanze è-001.png",
+                "Vacanze è-002.png",
+                "Vacanze è-003.png"
+            ]
+        );
+        assert_eq!(
+            std::fs::read(folder.join("Vacanze è-002.png")).unwrap(),
+            b"bb"
+        );
+        assert!(work.join("other.txt").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

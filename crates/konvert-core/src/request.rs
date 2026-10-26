@@ -85,6 +85,30 @@ impl AdvancedOptions {
     }
 }
 
+/// Pictures taken from a video: one frame, or a series.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum FrameMode {
+    /// One picture at a chosen moment.
+    #[default]
+    Single,
+    /// A picture at regular intervals, saved in a folder.
+    Sequence,
+}
+
+/// How pictures are taken from a video (picture targets of a video input).
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export, optional_fields = nullable)]
+pub struct FrameOptions {
+    pub mode: FrameMode,
+    /// One frame: position in seconds (`None`: the middle of the video).
+    pub at_secs: Option<f64>,
+    /// Series: one picture every `every_secs` seconds (`None`: every frame).
+    pub every_secs: Option<f64>,
+}
+
 /// A conversion requested by the user.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -95,6 +119,10 @@ pub struct ConversionRequest {
     pub preset: QualityPreset,
     #[serde(default)]
     pub advanced: AdvancedOptions,
+    /// Only for pictures taken from a video.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub frames: Option<FrameOptions>,
 }
 
 impl ConversionRequest {
@@ -104,6 +132,7 @@ impl ConversionRequest {
             target,
             preset,
             advanced: AdvancedOptions::default(),
+            frames: None,
         }
     }
 }
@@ -139,6 +168,23 @@ mod tests {
             (Some(70), Some(1920))
         );
         assert!(!req.advanced.touches_video() && !req.advanced.touches_audio());
+    }
+
+    #[test]
+    fn frame_options_are_optional() {
+        let req: ConversionRequest = serde_json::from_str(
+            r#"{ "target": "png", "frames": { "mode": "sequence", "everySecs": 2 } }"#,
+        )
+        .unwrap();
+        let frames = req.frames.unwrap();
+        assert_eq!(
+            (frames.mode, frames.at_secs, frames.every_secs),
+            (FrameMode::Sequence, None, Some(2.0))
+        );
+        let req: ConversionRequest =
+            serde_json::from_str(r#"{ "target": "jpg", "frames": {} }"#).unwrap();
+        assert_eq!(req.frames, Some(FrameOptions::default()));
+        assert_eq!(FrameOptions::default().mode, FrameMode::Single);
     }
 
     #[test]

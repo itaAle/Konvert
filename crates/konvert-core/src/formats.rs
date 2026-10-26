@@ -927,6 +927,9 @@ const IMAGE_TARGETS: &[TargetFormat] = &[
     TargetFormat::Ico,
 ];
 
+/// Pictures taken from a video (one frame or a series).
+const FRAME_TARGETS: &[TargetFormat] = &[TargetFormat::Jpg, TargetFormat::Png, TargetFormat::Webp];
+
 /// What Konvert proposes for one kind of input.
 #[derive(Debug)]
 pub struct Rule {
@@ -940,7 +943,7 @@ pub struct Rule {
 }
 
 /// Proposal rules. Audio inputs never get video outputs; pictures only get
-/// picture outputs.
+/// picture outputs; videos also give pictures (frames).
 pub static RULES: &[Rule] = &[
     Rule {
         input: MediaKind::Audio,
@@ -952,13 +955,13 @@ pub static RULES: &[Rule] = &[
         input: MediaKind::Video,
         video: VIDEO_TARGETS,
         audio: &[],
-        image: &[],
+        image: FRAME_TARGETS,
     },
     Rule {
         input: MediaKind::VideoWithAudio,
         video: VIDEO_TARGETS,
         audio: AUDIO_TARGETS,
-        image: &[],
+        image: FRAME_TARGETS,
     },
     Rule {
         input: MediaKind::Image,
@@ -981,6 +984,8 @@ pub enum TargetGroup {
     AudioOnly,
     /// Picture → picture.
     Image,
+    /// Video → pictures (one frame or a series).
+    Frames,
 }
 
 /// A conversion proposed to the user.
@@ -1069,10 +1074,15 @@ pub fn available_targets(media: &MediaInfo, input: &Path) -> Vec<TargetOption> {
     } else {
         TargetGroup::AudioOnly
     };
+    let image_group = if media.kind == MediaKind::Image {
+        TargetGroup::Image
+    } else {
+        TargetGroup::Frames
+    };
     let groups = [
         (rule.video, TargetGroup::Video),
         (rule.audio, audio_group),
-        (rule.image, TargetGroup::Image),
+        (rule.image, image_group),
     ];
 
     groups
@@ -1310,17 +1320,44 @@ mod tests {
         let heic = available_targets(&picture("hevc", "image2"), Path::new("a.heic"));
         assert_eq!(heic.len(), IMAGE_TARGETS.len());
 
-        // Pictures never reach audio or video formats, and vice versa.
+        // Pictures never reach audio or video formats.
         assert!(!is_offered(
             &picture("png", "png_pipe"),
             Path::new("a.png"),
             TargetFormat::Mp4
         ));
-        assert!(!is_offered(
-            &video_with_audio(),
-            Path::new("clip.mp4"),
-            TargetFormat::Jpg
-        ));
+    }
+
+    #[test]
+    fn videos_give_frames_in_the_classic_picture_formats() {
+        let options = available_targets(&video_with_audio(), Path::new("clip.mp4"));
+        let frames: Vec<_> = options
+            .iter()
+            .filter(|o| o.group == TargetGroup::Frames)
+            .collect();
+        assert_eq!(
+            frames.iter().map(|o| o.format).collect::<Vec<_>>(),
+            FRAME_TARGETS
+        );
+        assert!(
+            frames
+                .iter()
+                .all(|o| o.kind == FormatKind::Image && !o.same_as_input)
+        );
+        // A frame of a WebP animation is a WebP picture, not "the same format".
+        let anim = media(
+            r#"{ "streams": [{ "index": 0, "codec_name": "webp_anim", "codec_type": "video",
+            "width": 100, "height": 100 }], "format": { "format_name": "webp_anim" } }"#,
+        );
+        let webp = available_targets(&anim, Path::new("a.webp"));
+        let still = webp
+            .iter()
+            .find(|o| o.format == TargetFormat::Webp)
+            .unwrap();
+        assert_eq!(still.group, TargetGroup::Frames);
+        assert!(!still.same_as_input);
+        // Frames come last.
+        assert_eq!(options.last().unwrap().group, TargetGroup::Frames);
     }
 
     #[test]
@@ -1462,7 +1499,11 @@ mod tests {
     #[test]
     fn silent_video_gets_no_audio_formats_and_gif_is_not_proposed_for_gif() {
         let options = available_targets(&silent_video(), Path::new("anim.gif"));
-        assert!(options.iter().all(|o| o.group == TargetGroup::Video));
+        assert!(
+            options
+                .iter()
+                .all(|o| matches!(o.group, TargetGroup::Video | TargetGroup::Frames))
+        );
         assert!(!formats(&options).contains(&TargetFormat::Gif));
         assert!(formats(&options).contains(&TargetFormat::Mp4));
         assert!(formats(&options).contains(&TargetFormat::AnimatedWebp));

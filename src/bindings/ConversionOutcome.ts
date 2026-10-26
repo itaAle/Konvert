@@ -3,7 +3,19 @@
 /**
  * Result of a successful conversion.
  */
-export type ConversionOutcome = { output: string, sizeBytes: number, 
+export type ConversionOutcome = { 
+/**
+ * The converted file, or the folder holding a series of pictures.
+ */
+output: string, 
+/**
+ * Total size of the produced files.
+ */
+sizeBytes: number, 
+/**
+ * Number of files produced (more than one: `output` is a folder).
+ */
+files: number, 
 /**
  * Seconds.
  */

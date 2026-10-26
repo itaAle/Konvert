@@ -18,6 +18,7 @@ const GROUP_TITLES: Record<TargetGroup, MessageKey> = {
   audio: "formats.groupAudio",
   audioOnly: "formats.groupAudioOnly",
   image: "formats.groupImage",
+  frames: "formats.groupFrames",
 };
 
 /**
@@ -26,7 +27,7 @@ const GROUP_TITLES: Record<TargetGroup, MessageKey> = {
  */
 export function FormatGrid({ options, selected, onSelect }: FormatGridProps) {
   const buttons = useRef(new Map<TargetFormat, HTMLButtonElement>());
-  const groups = (["video", "audio", "audioOnly", "image"] as TargetGroup[])
+  const groups = (["video", "audio", "audioOnly", "image", "frames"] as TargetGroup[])
     .map((group) => ({ group, items: options.filter((o) => o.group === group) }))
     .filter((g) => g.items.length > 0);
   const order = groups.flatMap((g) => g.items.map((o) => o.format));

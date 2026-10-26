@@ -196,6 +196,7 @@ export const mockBackend: Backend = {
         },
         warnings: [png ? "lossyToLossless" : "lossyReencode", ...(png ? [] : (["metadataDropped"] as const))],
         estimate: { bytes: Math.round((media.sizeBytes ?? 0) * (png ? 6 : quality / 100)), approximate: true },
+        frames: null,
       };
       return plan;
     }
@@ -215,6 +216,7 @@ export const mockBackend: Backend = {
       audio: remux ? { mode: "copy", codec: "aac" } : null,
       coverArtStream: null,
       image: null,
+      frames: null,
       warnings,
       estimate: {
         bytes: Math.round(
@@ -247,7 +249,7 @@ export const mockBackend: Backend = {
             jobId,
             update: {
               state: "done",
-              outcome: { output: `C:\\Musica\\${name}.${request.target}`, sizeBytes: 5_400_000, elapsed: 6.2 },
+              outcome: { output: `C:\\Musica\\${name}.${request.target}`, sizeBytes: 5_400_000, files: 1, elapsed: 6.2 },
             },
           });
         }
