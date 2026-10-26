@@ -10,6 +10,10 @@
 //!
 //! Adding a format means adding a [`TargetFormat`] variant, one row to
 //! [`FORMATS`] and listing it in [`RULES`]; the unit tests check consistency.
+//!
+//! A few formats share an extension (ALAC and AAC are both `.m4a`): the
+//! identifier of a format is its serialized [`TargetFormat`] name, and the
+//! same-format detection also looks at the kind of input and its codec.
 
 use std::path::Path;
 
@@ -25,12 +29,23 @@ use crate::probe::{MediaInfo, MediaKind};
 pub enum TargetFormat {
     Mp3,
     M4a,
+    /// Apple Lossless in an M4A file.
+    Alac,
     Wav,
     Flac,
     Ogg,
     Opus,
     Wma,
     Aiff,
+    /// Raw AAC (ADTS).
+    Aac,
+    Ac3,
+    Eac3,
+    Mp2,
+    /// Apple Core Audio Format (ALAC or PCM).
+    Caf,
+    /// Matroska audio.
+    Mka,
     Mp4,
     Mkv,
     Mov,
@@ -44,12 +59,25 @@ pub enum TargetFormat {
 }
 
 impl TargetFormat {
-    /// Parses an extension-like identifier (`"mp3"`, `"AIF"`, `"m4v"`).
+    /// Stable identifier, as serialized for the UI (`"mp3"`, `"alac"`).
+    pub fn id(self) -> String {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::String(id)) => id,
+            _ => unreachable!("unit variants serialize to strings"),
+        }
+    }
+
+    /// Parses an identifier (`"alac"`) or an extension (`"mp3"`, `"AIF"`, `"m4v"`).
     pub fn from_id(id: &str) -> Option<Self> {
         let id = id.trim_start_matches('.').to_ascii_lowercase();
         FORMATS
             .iter()
-            .find(|s| s.input_extensions.contains(&id.as_str()))
+            .find(|s| s.format.id().eq_ignore_ascii_case(&id))
+            .or_else(|| {
+                FORMATS
+                    .iter()
+                    .find(|s| s.input_extensions.contains(&id.as_str()))
+            })
             .map(|s| s.format)
     }
 }
@@ -82,6 +110,14 @@ pub enum AudioCodec {
     Opus,
     /// Windows Media Audio 2
     Wma,
+    /// Apple Lossless (FFmpeg native encoder)
+    Alac,
+    /// Dolby Digital (FFmpeg native encoder)
+    Ac3,
+    /// Dolby Digital Plus (FFmpeg native encoder)
+    Eac3,
+    /// MPEG-1 Audio Layer II (FFmpeg native encoder)
+    Mp2,
 }
 
 /// Video encoders Konvert uses.
@@ -141,13 +177,15 @@ impl ImageCodec {
 impl AudioCodec {
     /// `true` for codecs that do not lose information.
     pub fn is_lossless(self) -> bool {
-        matches!(self, AudioCodec::Pcm | AudioCodec::Flac)
+        matches!(self, AudioCodec::Pcm | AudioCodec::Flac | AudioCodec::Alac)
     }
 
     /// Highest channel count the encoder accepts (`None`: no practical limit).
     pub fn max_channels(self) -> Option<u32> {
         match self {
-            AudioCodec::Mp3 | AudioCodec::Wma => Some(2),
+            AudioCodec::Mp3 | AudioCodec::Wma | AudioCodec::Mp2 => Some(2),
+            // 5.1
+            AudioCodec::Ac3 | AudioCodec::Eac3 => Some(6),
             _ => None,
         }
     }
@@ -160,6 +198,8 @@ impl AudioCodec {
             }
             AudioCodec::Opus => Some(&[8000, 12000, 16000, 24000, 48000]),
             AudioCodec::Wma => Some(&[8000, 11025, 16000, 22050, 32000, 44100, 48000]),
+            AudioCodec::Ac3 | AudioCodec::Eac3 => Some(&[32000, 44100, 48000]),
+            AudioCodec::Mp2 => Some(&[16000, 22050, 24000, 32000, 44100, 48000]),
             _ => None,
         }
     }
@@ -192,7 +232,31 @@ pub struct FormatSpec {
     pub muxer_args: &'static [&'static str],
     /// Picture encoder (picture formats only).
     pub image_codec: Option<ImageCodec>,
+    /// Less common format, shown under "More formats" in the UI.
+    pub secondary: bool,
+    /// For formats sharing an extension: source codecs (FFmpeg names) that
+    /// identify this format. Empty: any codec.
+    pub detect_codecs: &'static [&'static str],
 }
+
+/// Fields most formats leave empty (`..SPEC` in the catalog).
+const SPEC: FormatSpec = FormatSpec {
+    format: TargetFormat::Mp3,
+    label: "",
+    extension: "",
+    input_extensions: &[],
+    muxer: "",
+    kind: FormatKind::Audio,
+    video_codecs: &[],
+    audio_codecs: &[],
+    copy_video: &[],
+    copy_audio: &[],
+    cover_art: false,
+    muxer_args: &[],
+    image_codec: None,
+    secondary: false,
+    detect_codecs: &[],
+};
 
 impl FormatSpec {
     pub fn default_audio_codec(&self) -> Option<AudioCodec> {
@@ -235,6 +299,7 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: true,
         muxer_args: &["-id3v2_version", "3"],
         image_codec: None,
+        ..SPEC
     },
     FormatSpec {
         format: TargetFormat::M4a,
@@ -250,6 +315,20 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: true,
         muxer_args: &["-movflags", "+faststart"],
         image_codec: None,
+        ..SPEC
+    },
+    FormatSpec {
+        format: TargetFormat::Alac,
+        label: "ALAC (M4A)",
+        extension: "m4a",
+        input_extensions: &["m4a", "alac"],
+        muxer: "ipod",
+        audio_codecs: &[AudioCodec::Alac],
+        copy_audio: &["alac"],
+        cover_art: true,
+        muxer_args: &["-movflags", "+faststart"],
+        detect_codecs: &["alac"],
+        ..SPEC
     },
     FormatSpec {
         format: TargetFormat::Wav,
@@ -266,6 +345,7 @@ pub static FORMATS: &[FormatSpec] = &[
         // RF64 header only when the file exceeds 4 GB.
         muxer_args: &["-rf64", "auto"],
         image_codec: None,
+        ..SPEC
     },
     FormatSpec {
         format: TargetFormat::Flac,
@@ -281,6 +361,7 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: true,
         muxer_args: &[],
         image_codec: None,
+        ..SPEC
     },
     FormatSpec {
         format: TargetFormat::Ogg,
@@ -296,6 +377,7 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: false,
         muxer_args: &[],
         image_codec: None,
+        ..SPEC
     },
     FormatSpec {
         format: TargetFormat::Opus,
@@ -311,6 +393,7 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: false,
         muxer_args: &[],
         image_codec: None,
+        ..SPEC
     },
     FormatSpec {
         format: TargetFormat::Wma,
@@ -326,6 +409,7 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: false,
         muxer_args: &[],
         image_codec: None,
+        ..SPEC
     },
     FormatSpec {
         format: TargetFormat::Aiff,
@@ -341,6 +425,99 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: false,
         muxer_args: &[],
         image_codec: None,
+        ..SPEC
+    },
+    FormatSpec {
+        format: TargetFormat::Aac,
+        label: "AAC",
+        extension: "aac",
+        input_extensions: &["aac"],
+        muxer: "adts",
+        audio_codecs: &[AudioCodec::Aac],
+        copy_audio: &["aac"],
+        secondary: true,
+        ..SPEC
+    },
+    FormatSpec {
+        format: TargetFormat::Ac3,
+        label: "AC3",
+        extension: "ac3",
+        input_extensions: &["ac3"],
+        muxer: "ac3",
+        audio_codecs: &[AudioCodec::Ac3],
+        copy_audio: &["ac3"],
+        secondary: true,
+        ..SPEC
+    },
+    FormatSpec {
+        format: TargetFormat::Eac3,
+        label: "E-AC3",
+        extension: "eac3",
+        input_extensions: &["eac3", "ec3"],
+        muxer: "eac3",
+        audio_codecs: &[AudioCodec::Eac3],
+        copy_audio: &["eac3"],
+        secondary: true,
+        ..SPEC
+    },
+    FormatSpec {
+        format: TargetFormat::Mp2,
+        label: "MP2",
+        extension: "mp2",
+        input_extensions: &["mp2"],
+        muxer: "mp2",
+        audio_codecs: &[AudioCodec::Mp2],
+        copy_audio: &["mp2"],
+        secondary: true,
+        ..SPEC
+    },
+    FormatSpec {
+        format: TargetFormat::Caf,
+        label: "CAF (ALAC)",
+        extension: "caf",
+        input_extensions: &["caf"],
+        // FFmpeg's CAF muxer takes ALAC and PCM, not AAC or Opus.
+        muxer: "caf",
+        audio_codecs: &[AudioCodec::Alac, AudioCodec::Pcm],
+        copy_audio: &["alac"],
+        secondary: true,
+        ..SPEC
+    },
+    FormatSpec {
+        format: TargetFormat::Mka,
+        label: "MKA",
+        extension: "mka",
+        input_extensions: &["mka"],
+        muxer: "matroska",
+        // The default depends on the source (see `plan.rs`): FLAC or Opus.
+        audio_codecs: &[
+            AudioCodec::Opus,
+            AudioCodec::Flac,
+            AudioCodec::Aac,
+            AudioCodec::Mp3,
+            AudioCodec::Vorbis,
+        ],
+        // Matroska stores almost any audio codec: the soundtrack is usually copied.
+        copy_audio: &[
+            "aac",
+            "mp3",
+            "mp2",
+            "opus",
+            "vorbis",
+            "flac",
+            "alac",
+            "ac3",
+            "eac3",
+            "dts",
+            "truehd",
+            "wavpack",
+            "pcm_s16le",
+            "pcm_s24le",
+            "pcm_s32le",
+            "pcm_f32le",
+        ],
+        secondary: true,
+        ..SPEC
     },
     // --- Video ---------------------------------------------------------------
     FormatSpec {
@@ -357,6 +534,7 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: false,
         muxer_args: &["-movflags", "+faststart"],
         image_codec: None,
+        ..SPEC
     },
     FormatSpec {
         format: TargetFormat::Mkv,
@@ -389,6 +567,7 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: false,
         muxer_args: &[],
         image_codec: None,
+        ..SPEC
     },
     FormatSpec {
         format: TargetFormat::Mov,
@@ -404,6 +583,7 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: false,
         muxer_args: &["-movflags", "+faststart"],
         image_codec: None,
+        ..SPEC
     },
     FormatSpec {
         format: TargetFormat::Webm,
@@ -419,6 +599,7 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: false,
         muxer_args: &[],
         image_codec: None,
+        ..SPEC
     },
     FormatSpec {
         format: TargetFormat::Avi,
@@ -434,6 +615,7 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: false,
         muxer_args: &[],
         image_codec: None,
+        ..SPEC
     },
     FormatSpec {
         format: TargetFormat::Gif,
@@ -449,6 +631,7 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: false,
         muxer_args: &["-loop", "0"],
         image_codec: None,
+        ..SPEC
     },
     // --- Pictures ------------------------------------------------------------
     FormatSpec {
@@ -466,6 +649,7 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: false,
         muxer_args: &[],
         image_codec: Some(ImageCodec::Jpeg),
+        ..SPEC
     },
     FormatSpec {
         format: TargetFormat::Png,
@@ -481,6 +665,7 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: false,
         muxer_args: &[],
         image_codec: Some(ImageCodec::Png),
+        ..SPEC
     },
     FormatSpec {
         format: TargetFormat::Webp,
@@ -496,6 +681,7 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: false,
         muxer_args: &[],
         image_codec: Some(ImageCodec::Webp),
+        ..SPEC
     },
     FormatSpec {
         format: TargetFormat::Avif,
@@ -511,6 +697,7 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: false,
         muxer_args: &[],
         image_codec: Some(ImageCodec::Avif),
+        ..SPEC
     },
 ];
 
@@ -525,12 +712,19 @@ pub fn spec(format: TargetFormat) -> &'static FormatSpec {
 const AUDIO_TARGETS: &[TargetFormat] = &[
     TargetFormat::Mp3,
     TargetFormat::M4a,
+    TargetFormat::Alac,
     TargetFormat::Wav,
     TargetFormat::Flac,
     TargetFormat::Ogg,
     TargetFormat::Opus,
     TargetFormat::Wma,
     TargetFormat::Aiff,
+    TargetFormat::Aac,
+    TargetFormat::Ac3,
+    TargetFormat::Eac3,
+    TargetFormat::Mp2,
+    TargetFormat::Caf,
+    TargetFormat::Mka,
 ];
 
 const VIDEO_TARGETS: &[TargetFormat] = &[
@@ -619,6 +813,8 @@ pub struct TargetOption {
     /// Same format as the input (useful to change quality or size).
     pub same_as_input: bool,
     pub kind: FormatKind,
+    /// Less common format, shown under "More formats".
+    pub secondary: bool,
     /// Video encoders the user may pick in the advanced options (first = default).
     pub video_codecs: Vec<VideoCodec>,
     /// Audio encoders the user may pick (first = default); empty for GIF.
@@ -648,12 +844,26 @@ impl AudioCodecInfo {
     }
 }
 
-/// Format of an input file, guessed from its extension.
-pub fn source_format(input: &Path) -> Option<TargetFormat> {
+/// Format of an input file: its extension, the kind of content (a `.webp`
+/// file may be a picture or an animation) and, for formats sharing an
+/// extension, the codec (an `.m4a` file may hold AAC or ALAC).
+pub fn source_format(media: &MediaInfo, input: &Path) -> Option<TargetFormat> {
     let ext = input.extension()?.to_str()?.to_ascii_lowercase();
-    FORMATS
+    let codec = media
+        .primary_audio()
+        .filter(|_| media.kind == MediaKind::Audio)
+        .map(|a| a.codec.as_str())
+        .or_else(|| media.primary_video().map(|v| v.codec.as_str()))
+        .unwrap_or_default();
+    let candidates: Vec<&FormatSpec> = FORMATS
         .iter()
-        .find(|s| s.input_extensions.contains(&ext.as_str()))
+        .filter(|s| s.input_extensions.contains(&ext.as_str()))
+        .filter(|s| (s.kind == FormatKind::Image) == (media.kind == MediaKind::Image))
+        .collect();
+    candidates
+        .iter()
+        .find(|s| s.detect_codecs.contains(&codec))
+        .or_else(|| candidates.iter().find(|s| s.detect_codecs.is_empty()))
         .map(|s| s.format)
 }
 
@@ -669,7 +879,7 @@ pub fn available_targets(media: &MediaInfo, input: &Path) -> Vec<TargetOption> {
     let Some(rule) = RULES.iter().find(|r| r.input == media.kind) else {
         return Vec::new();
     };
-    let source = source_format(input);
+    let source = source_format(media, input);
     let audio_group = if rule.video.is_empty() {
         TargetGroup::Audio
     } else {
@@ -697,6 +907,7 @@ pub fn available_targets(media: &MediaInfo, input: &Path) -> Vec<TargetOption> {
                 lossless: spec.is_lossless(),
                 same_as_input,
                 kind: spec.kind,
+                secondary: spec.secondary,
                 video_codecs: spec.video_codecs.to_vec(),
                 audio_codecs: spec
                     .audio_codecs
@@ -763,12 +974,19 @@ mod tests {
     const ALL: &[TargetFormat] = &[
         TargetFormat::Mp3,
         TargetFormat::M4a,
+        TargetFormat::Alac,
         TargetFormat::Wav,
         TargetFormat::Flac,
         TargetFormat::Ogg,
         TargetFormat::Opus,
         TargetFormat::Wma,
         TargetFormat::Aiff,
+        TargetFormat::Aac,
+        TargetFormat::Ac3,
+        TargetFormat::Eac3,
+        TargetFormat::Mp2,
+        TargetFormat::Caf,
+        TargetFormat::Mka,
         TargetFormat::Mp4,
         TargetFormat::Mkv,
         TargetFormat::Mov,
@@ -822,14 +1040,22 @@ mod tests {
     #[test]
     fn catalog_is_complete_and_consistent() {
         assert_eq!(FORMATS.len(), ALL.len());
-        let mut extensions = HashSet::new();
+        let mut ids = HashSet::new();
         for f in ALL {
             let s = spec(*f);
-            assert!(
-                extensions.insert(s.extension),
-                "duplicate extension {}",
-                s.extension
-            );
+            assert!(ids.insert(f.id()), "duplicate id {}", f.id());
+            assert_eq!(TargetFormat::from_id(&f.id()), Some(*f));
+            // Formats sharing an extension must be told apart by the kind of
+            // content or by the codec.
+            for other in FORMATS.iter().filter(|o| o.format != *f) {
+                let shared = other.extension == s.extension
+                    && (other.kind == FormatKind::Image) == (s.kind == FormatKind::Image);
+                assert!(
+                    !shared || !s.detect_codecs.is_empty() || !other.detect_codecs.is_empty(),
+                    "{f:?} and {:?} cannot be told apart",
+                    other.format
+                );
+            }
             assert!(s.input_extensions.contains(&s.extension), "{:?}", f);
             match s.kind {
                 FormatKind::Audio => {
@@ -932,13 +1158,62 @@ mod tests {
             [
                 TargetFormat::Mp3,
                 TargetFormat::M4a,
+                TargetFormat::Alac,
                 TargetFormat::Wav,
                 TargetFormat::Ogg,
                 TargetFormat::Opus,
                 TargetFormat::Wma,
-                TargetFormat::Aiff
+                TargetFormat::Aiff,
+                TargetFormat::Aac,
+                TargetFormat::Ac3,
+                TargetFormat::Eac3,
+                TargetFormat::Mp2,
+                TargetFormat::Caf,
+                TargetFormat::Mka,
             ]
         );
+        // Less common formats are flagged for the "More formats" section.
+        let secondary: Vec<_> = options
+            .iter()
+            .filter(|o| o.secondary)
+            .map(|o| o.format)
+            .collect();
+        assert_eq!(
+            secondary,
+            [
+                TargetFormat::Aac,
+                TargetFormat::Ac3,
+                TargetFormat::Eac3,
+                TargetFormat::Mp2,
+                TargetFormat::Caf,
+                TargetFormat::Mka
+            ]
+        );
+    }
+
+    fn m4a(codec: &str) -> MediaInfo {
+        media(&format!(
+            r#"{{ "streams": [{{ "index": 0, "codec_name": "{codec}", "codec_type": "audio" }}],
+            "format": {{ "format_name": "mov,mp4,m4a,3gp,3g2,mj2" }} }}"#
+        ))
+    }
+
+    #[test]
+    fn alac_and_aac_share_m4a_but_are_told_apart() {
+        let aac = available_targets(&m4a("aac"), Path::new("song.m4a"));
+        let find = |options: &[TargetOption], f| options.iter().find(|o| o.format == f).cloned();
+        assert!(find(&aac, TargetFormat::M4a).unwrap().same_as_input);
+        let alac = find(&aac, TargetFormat::Alac).unwrap();
+        assert!(!alac.same_as_input && alac.lossless);
+        assert_eq!(alac.extension, "m4a");
+        assert_eq!(alac.audio_codecs[0].codec, AudioCodec::Alac);
+
+        // ALAC → ALAC gains nothing; ALAC → AAC is a normal lossy conversion.
+        let lossless = available_targets(&m4a("alac"), Path::new("song.m4a"));
+        assert!(find(&lossless, TargetFormat::Alac).is_none());
+        assert!(!find(&lossless, TargetFormat::M4a).unwrap().same_as_input);
+        assert_eq!(TargetFormat::from_id("alac"), Some(TargetFormat::Alac));
+        assert_eq!(TargetFormat::from_id("m4a"), Some(TargetFormat::M4a));
     }
 
     #[test]
@@ -1023,15 +1298,28 @@ mod tests {
     }
 
     #[test]
-    fn source_format_uses_the_extension() {
+    fn source_format_uses_the_extension_and_the_content() {
+        let song = audio();
+        let clip = video_with_audio();
         assert_eq!(
-            source_format(Path::new("a/b/Song.Flac")),
+            source_format(&song, Path::new("a/b/Song.Flac")),
             Some(TargetFormat::Flac)
         );
-        assert_eq!(source_format(Path::new("x.aif")), Some(TargetFormat::Aiff));
-        assert_eq!(source_format(Path::new("x.m4v")), Some(TargetFormat::Mp4));
-        assert_eq!(source_format(Path::new("x.ts")), None);
-        assert_eq!(source_format(Path::new("noext")), None);
+        assert_eq!(
+            source_format(&song, Path::new("x.aif")),
+            Some(TargetFormat::Aiff)
+        );
+        assert_eq!(
+            source_format(&clip, Path::new("x.m4v")),
+            Some(TargetFormat::Mp4)
+        );
+        assert_eq!(source_format(&clip, Path::new("x.m2ts")), None);
+        assert_eq!(source_format(&song, Path::new("noext")), None);
+        // A picture named like a video format is not "the same format".
+        assert_eq!(
+            source_format(&picture("png", "png_pipe"), Path::new("x.mp4")),
+            None
+        );
     }
 
     #[test]

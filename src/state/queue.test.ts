@@ -23,6 +23,7 @@ const option = (format: TargetFormat, group: TargetOption["group"]): TargetOptio
   extension: format,
   group,
   lossless: false,
+  secondary: false,
   sameAsInput: false,
   kind: group === "video" ? "video" : group === "image" ? "image" : "audio",
   videoCodecs: [],

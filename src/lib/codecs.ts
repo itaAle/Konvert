@@ -18,6 +18,10 @@ export const AUDIO_CODEC_NAMES: Record<AudioCodec, string> = {
   vorbis: "Vorbis",
   opus: "Opus",
   wma: "WMA",
+  alac: "ALAC",
+  ac3: "AC-3",
+  eac3: "E-AC-3",
+  mp2: "MP2",
 };
 
 /** Highest sensible bit rate per lossy encoder (kbit/s, stereo). */
@@ -27,4 +31,7 @@ export const MAX_AUDIO_BITRATE: Partial<Record<AudioCodec, number>> = {
   aac: 512,
   opus: 510,
   vorbis: 500,
+  ac3: 640,
+  eac3: 1024,
+  mp2: 384,
 };

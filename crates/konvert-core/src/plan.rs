@@ -55,6 +55,8 @@ pub enum AudioRate {
     Pcm { bits: u32 },
     /// FLAC compression level (0–12; size/speed only, quality is identical) and bit depth.
     Flac { level: u8, bits: u32 },
+    /// Apple Lossless with the given bit depth.
+    Alac { bits: u32 },
 }
 
 /// How the video stream is produced.
@@ -222,7 +224,7 @@ pub fn plan_conversion(
 
     // Re-encode when the user asked for a smaller file or for the same format
     // (copying would just duplicate the input).
-    let same_format = formats::source_format(input) == Some(request.target);
+    let same_format = formats::source_format(media, input) == Some(request.target);
     let force_encode = request.preset == QualityPreset::Small || same_format;
 
     let video_stream = match spec.kind {
@@ -400,7 +402,17 @@ fn plan_audio(
     }
     let codec = adv
         .audio_codec
-        .or(spec.default_audio_codec())
+        .or_else(|| match spec.format {
+            // Matroska takes anything: lossless sources stay lossless unless
+            // the user asked for a small file.
+            TargetFormat::Mka
+                if is_lossless_audio_codec(&src.codec)
+                    && request.preset != QualityPreset::Small =>
+            {
+                Some(AudioCodec::Flac)
+            }
+            _ => spec.default_audio_codec(),
+        })
         .expect("audio formats have an audio codec");
 
     let channels =
@@ -453,11 +465,18 @@ fn plan_audio(
         AudioCodec::Aac => bitrate(256, 192, 128, 512),
         AudioCodec::Opus => bitrate(192, 128, 64, 510),
         AudioCodec::Wma => bitrate(192, 160, 96, 192),
+        // Values of the standard rate tables, for stereo and mono alike.
+        AudioCodec::Ac3 => bitrate(448, 384, 192, 640),
+        AudioCodec::Eac3 => bitrate(384, 256, 128, 1024),
+        AudioCodec::Mp2 => bitrate(384, 256, 192, 384),
         AudioCodec::Pcm => AudioRate::Pcm {
             bits: lossless_bit_depth(src, preset),
         },
         AudioCodec::Flac => AudioRate::Flac {
             level: pick(preset, 5, 5, 8),
+            bits: lossless_bit_depth(src, preset),
+        },
+        AudioCodec::Alac => AudioRate::Alac {
             bits: lossless_bit_depth(src, preset),
         },
     };
@@ -1244,6 +1263,88 @@ mod tests {
         let mut request = req(TargetFormat::Png, QualityPreset::Balanced);
         request.advanced.video_codec = Some(VideoCodec::H264);
         assert!(plan_conversion(&photo(), &request, Path::new("a.jpg")).is_err());
+    }
+
+    #[test]
+    fn new_audio_formats_pick_sensible_settings() {
+        let hi_res = wav_24bit();
+        let alac = plan(
+            &hi_res,
+            &req(TargetFormat::Alac, QualityPreset::Max),
+            "a.wav",
+        );
+        assert_eq!(audio_encode(&alac).rate, AudioRate::Alac { bits: 24 });
+        assert!(alac.warnings.is_empty());
+        let caf = plan(
+            &hi_res,
+            &req(TargetFormat::Caf, QualityPreset::Small),
+            "a.wav",
+        );
+        assert_eq!(audio_encode(&caf).rate, AudioRate::Alac { bits: 16 });
+
+        // Dolby Digital: 5.1 at the highest standard rate, 96 kHz brought down to 48 kHz.
+        let movie = mp4_1080p();
+        let ac3 = plan(
+            &movie,
+            &req(TargetFormat::Ac3, QualityPreset::Balanced),
+            "clip.mp4",
+        );
+        let enc = audio_encode(&ac3);
+        assert_eq!(
+            (enc.codec, enc.rate),
+            (AudioCodec::Ac3, AudioRate::Bitrate { kbps: 640 })
+        );
+        assert_eq!(enc.channels, None);
+        let eac3 = plan(
+            &hi_res,
+            &req(TargetFormat::Eac3, QualityPreset::Balanced),
+            "a.wav",
+        );
+        assert_eq!(audio_encode(&eac3).sample_rate, Some(48000));
+        assert_eq!(audio_encode(&eac3).rate, AudioRate::Bitrate { kbps: 256 });
+
+        // MP2 is stereo at most.
+        let mp2 = plan(
+            &movie,
+            &req(TargetFormat::Mp2, QualityPreset::Small),
+            "clip.mp4",
+        );
+        let enc = audio_encode(&mp2);
+        assert_eq!(
+            (enc.channels, enc.rate),
+            (Some(2), AudioRate::Bitrate { kbps: 192 })
+        );
+        assert!(mp2.warnings.contains(&W::ChannelsDownmixed));
+    }
+
+    #[test]
+    fn matroska_audio_copies_or_keeps_lossless_sources_lossless() {
+        let movie = mp4_1080p();
+        let copy = plan(
+            &movie,
+            &req(TargetFormat::Mka, QualityPreset::Max),
+            "clip.mp4",
+        );
+        assert_eq!(
+            copy.audio,
+            Some(AudioPlan::Copy {
+                codec: "aac".into()
+            })
+        );
+        assert_eq!(copy.video, None);
+
+        let flac = plan(
+            &wav_24bit(),
+            &req(TargetFormat::Mka, QualityPreset::Balanced),
+            "a.mka",
+        );
+        assert_eq!(audio_encode(&flac).codec, AudioCodec::Flac);
+        let small = plan(
+            &wav_24bit(),
+            &req(TargetFormat::Mka, QualityPreset::Small),
+            "a.wav",
+        );
+        assert_eq!(audio_encode(&small).codec, AudioCodec::Opus);
     }
 
     #[test]

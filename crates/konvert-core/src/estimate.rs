@@ -90,7 +90,7 @@ fn audio_kbps(media: &MediaInfo, audio: &AudioPlan) -> Option<(f64, bool)> {
                     sample_rate * channels(enc.channels) * bits as f64 / 1000.0,
                     false,
                 ),
-                AudioRate::Flac { bits, .. } => {
+                AudioRate::Flac { bits, .. } | AudioRate::Alac { bits } => {
                     // Typical music compresses to roughly 60% of PCM.
                     (
                         sample_rate * channels(enc.channels) * bits as f64 / 1000.0 * 0.6,

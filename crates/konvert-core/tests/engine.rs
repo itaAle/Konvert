@@ -10,6 +10,7 @@ mod fixtures;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use konvert_core::formats;
 use konvert_core::{
     AdvancedOptions, Binaries, ChannelLayout, ConversionJob, ConversionOutcome, ConversionRequest,
     CoreError, MediaInfo, MediaKind, QualityPreset, TargetFormat, Workspace, plan_conversion,
@@ -262,17 +263,30 @@ async fn every_audio_format_from_wav() {
     let bins = engine();
     let tmp = TempDir::new("audio-matrix");
     let input = sample_wav(&bins, &tmp);
+    const MP4: &str = "mov,mp4,m4a,3gp,3g2,mj2";
+    // (target, container, codec with "Max", codec with "Small")
     let cases = [
-        (TargetFormat::Mp3, "mp3", "mp3"),
-        (TargetFormat::M4a, "mov,mp4,m4a,3gp,3g2,mj2", "aac"),
-        (TargetFormat::Flac, "flac", "flac"),
-        (TargetFormat::Ogg, "ogg", "vorbis"),
-        (TargetFormat::Opus, "ogg", "opus"),
-        (TargetFormat::Wma, "asf", "wmav2"),
-        (TargetFormat::Aiff, "aiff", "pcm_s16be"),
+        (TargetFormat::Mp3, "mp3", "mp3", "mp3"),
+        (TargetFormat::M4a, MP4, "aac", "aac"),
+        (TargetFormat::Alac, MP4, "alac", "alac"),
+        (TargetFormat::Flac, "flac", "flac", "flac"),
+        (TargetFormat::Ogg, "ogg", "vorbis", "vorbis"),
+        (TargetFormat::Opus, "ogg", "opus", "opus"),
+        (TargetFormat::Wma, "asf", "wmav2", "wmav2"),
+        (TargetFormat::Aiff, "aiff", "pcm_s16be", "pcm_s16be"),
+        (TargetFormat::Aac, "aac", "aac", "aac"),
+        (TargetFormat::Ac3, "ac3", "ac3", "ac3"),
+        (TargetFormat::Eac3, "eac3", "eac3", "eac3"),
+        (TargetFormat::Mp2, "mp3", "mp2", "mp2"),
+        (TargetFormat::Caf, "caf", "alac", "alac"),
+        // PCM fits Matroska as is; a small file means Opus.
+        (TargetFormat::Mka, "matroska,webm", "pcm_s16le", "opus"),
     ];
-    for (target, container, codec) in cases {
-        for preset in [QualityPreset::Max, QualityPreset::Small] {
+    for (target, container, max_codec, small_codec) in cases {
+        for (preset, codec) in [
+            (QualityPreset::Max, max_codec),
+            (QualityPreset::Small, small_codec),
+        ] {
             let (outcome, out) = convert(&bins, &tmp, &input, req(target, preset)).await;
             assert_eq!(out.container, container, "{target:?} {preset:?}");
             assert_eq!(
@@ -280,9 +294,30 @@ async fn every_audio_format_from_wav() {
                 codec,
                 "{target:?} {preset:?}"
             );
+            assert_eq!(
+                outcome.output.extension().unwrap(),
+                formats::spec(target).extension,
+                "{target:?}"
+            );
             assert_duration(&out, 3.0);
             std::fs::remove_file(&outcome.output).unwrap();
         }
+    }
+}
+
+#[tokio::test]
+async fn soundtrack_is_copied_into_raw_and_matroska_audio() {
+    let bins = engine();
+    let tmp = TempDir::new("audio-copy");
+    let input = sample_mp4(&bins, &tmp);
+    for target in [TargetFormat::Aac, TargetFormat::Mka] {
+        let media = probe(&bins, &input).await.unwrap();
+        let plan = plan_conversion(&media, &req(target, QualityPreset::Balanced), &input).unwrap();
+        assert!(plan.is_remux(), "{target:?}");
+        let (_, out) = convert(&bins, &tmp, &input, req(target, QualityPreset::Balanced)).await;
+        assert_eq!(out.kind, MediaKind::Audio, "{target:?}");
+        assert_eq!(out.primary_audio().unwrap().codec, "aac", "{target:?}");
+        assert_duration(&out, 3.0);
     }
 }
 

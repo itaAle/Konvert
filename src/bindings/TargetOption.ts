@@ -18,6 +18,10 @@ lossless: boolean,
  */
 sameAsInput: boolean, kind: FormatKind, 
 /**
+ * Less common format, shown under "More formats".
+ */
+secondary: boolean, 
+/**
  * Video encoders the user may pick in the advanced options (first = default).
  */
 videoCodecs: Array<VideoCodec>, 

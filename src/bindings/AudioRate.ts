@@ -3,4 +3,4 @@
 /**
  * Rate control of an audio encoder.
  */
-export type AudioRate = { "kind": "vbr", quality: number, } | { "kind": "bitrate", kbps: number, } | { "kind": "pcm", bits: number, } | { "kind": "flac", level: number, bits: number, };
+export type AudioRate = { "kind": "vbr", quality: number, } | { "kind": "bitrate", kbps: number, } | { "kind": "pcm", bits: number, } | { "kind": "flac", level: number, bits: number, } | { "kind": "alac", bits: number, };

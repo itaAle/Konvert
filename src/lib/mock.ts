@@ -40,6 +40,7 @@ const option = (format: TargetFormat, label: string, group: TargetOption["group"
   lossless,
   sameAsInput: false,
   kind: group === "video" ? "video" : group === "image" ? "image" : "audio",
+  secondary: false,
   videoCodecs:
     group !== "video" ? [] : format === "webm" ? ["vp9", "av1"] : format === "gif" ? ["gif"] : ["h264", "av1"],
   audioCodecs:

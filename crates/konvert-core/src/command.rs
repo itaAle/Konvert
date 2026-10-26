@@ -357,7 +357,10 @@ fn audio_args(a: &mut Args, enc: &AudioEncode, spec: &FormatSpec) {
                 AudioCodec::Vorbis => "libvorbis",
                 AudioCodec::Opus => "libopus",
                 AudioCodec::Wma => "wmav2",
-                AudioCodec::Pcm | AudioCodec::Flac => {
+                AudioCodec::Ac3 => "ac3",
+                AudioCodec::Eac3 => "eac3",
+                AudioCodec::Mp2 => "mp2",
+                AudioCodec::Pcm | AudioCodec::Flac | AudioCodec::Alac => {
                     unreachable!("lossless codecs have no bit rate")
                 }
             };
@@ -378,6 +381,19 @@ fn audio_args(a: &mut Args, enc: &AudioEncode, spec: &FormatSpec) {
                 ]);
             } else {
                 a.push(&["-sample_fmt", "s16"]);
+            }
+        }
+        (_, AudioRate::Alac { bits }) => {
+            a.push(&["-c:a", "alac"]);
+            if bits > 16 {
+                a.push(&[
+                    "-sample_fmt",
+                    "s32p",
+                    "-bits_per_raw_sample",
+                    &bits.to_string(),
+                ]);
+            } else {
+                a.push(&["-sample_fmt", "s16p"]);
             }
         }
         (codec, rate) => unreachable!("invalid plan: {codec:?} with {rate:?}"),
@@ -506,6 +522,13 @@ mod tests {
             (TargetFormat::Opus, &["-map", "0:0", "-map_metadata", "0", "-c:a", "libopus", "-b:a", "128k", "-vbr", "on", "-ar", "48000"]),
             (TargetFormat::Wma, &["-map", "0:0", "-map_metadata", "0", "-c:a", "wmav2", "-b:a", "160k"]),
             (TargetFormat::Aiff, &["-map", "0:0", "-map_metadata", "0", "-c:a", "pcm_s16be"]),
+            (TargetFormat::Alac, &["-map", "0:0", "-map_metadata", "0", "-c:a", "alac", "-sample_fmt", "s16p", "-movflags", "+faststart"]),
+            (TargetFormat::Aac, &["-map", "0:0", "-map_metadata", "0", "-c:a", "aac", "-b:a", "192k"]),
+            (TargetFormat::Ac3, &["-map", "0:0", "-map_metadata", "0", "-c:a", "ac3", "-b:a", "384k"]),
+            (TargetFormat::Eac3, &["-map", "0:0", "-map_metadata", "0", "-c:a", "eac3", "-b:a", "256k"]),
+            (TargetFormat::Mp2, &["-map", "0:0", "-map_metadata", "0", "-c:a", "mp2", "-b:a", "256k"]),
+            (TargetFormat::Caf, &["-map", "0:0", "-map_metadata", "0", "-c:a", "alac", "-sample_fmt", "s16p"]),
+            (TargetFormat::Mka, &["-map", "0:0", "-map_metadata", "0", "-c:a", "copy"]),
         ];
         for (target, expected) in cases {
             assert_eq!(body(&wav(), &req(*target, QualityPreset::Balanced), "a.wav"), *expected, "{target:?}");
@@ -516,8 +539,12 @@ mod tests {
     fn muxers_match_the_catalog() {
         for (target, muxer) in [
             (TargetFormat::M4a, "ipod"),
+            (TargetFormat::Alac, "ipod"),
             (TargetFormat::Wma, "asf"),
             (TargetFormat::Opus, "opus"),
+            (TargetFormat::Aac, "adts"),
+            (TargetFormat::Caf, "caf"),
+            (TargetFormat::Mka, "matroska"),
         ] {
             let cmd = build_command(
                 &wav(),
@@ -549,6 +576,12 @@ mod tests {
             body(&src, &req(TargetFormat::Mp3, QualityPreset::Max), "a.flac"),
             ["-map", "0:0", "-map", "0:1", "-map_metadata", "0", "-c:a", "libmp3lame", "-q:a", "0",
              "-ar", "48000", "-c:v", "copy", "-disposition:v:0", "attached_pic", "-id3v2_version", "3"]
+        );
+        assert_eq!(
+            body(&src, &req(TargetFormat::Alac, QualityPreset::Max), "a.flac"),
+            ["-map", "0:0", "-map", "0:1", "-map_metadata", "0",
+             "-c:a", "alac", "-sample_fmt", "s32p", "-bits_per_raw_sample", "24",
+             "-c:v", "copy", "-disposition:v:0", "attached_pic", "-movflags", "+faststart"]
         );
     }
 

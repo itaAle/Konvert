@@ -3,4 +3,4 @@
 /**
  * Audio encoders Konvert uses.
  */
-export type AudioCodec = "mp3" | "aac" | "pcm" | "flac" | "vorbis" | "opus" | "wma";
+export type AudioCodec = "mp3" | "aac" | "pcm" | "flac" | "vorbis" | "opus" | "wma" | "alac" | "ac3" | "eac3" | "mp2";
