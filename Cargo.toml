@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/konvert-core", "crates/konvert-cli", "src-tauri"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 # `File::try_lock` (used for crash-safe temp-dir cleanup) is stable since 1.89.

@@ -119,13 +119,11 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
   - the low disk space warning;
   - 0.2.0 installer: upgrade over 0.1.0, "Open with" on pictures, real iPhone HEIC photos (tests use synthetic HEIC files).
 
-- 2026-10-26: **macOS (Apple Silicon) and Linux support** on `main`, not pushed, not yet run on real CI. Owner's decisions: macOS without an Apple Developer account for now (ad hoc signature, no notarization, Gatekeeper "Open Anyway" documented in the README); .deb + .rpm + AppImage; Linux x86_64 + arm64.
-  To do by the owner, in order:
-  1. push, then run the **FFmpeg for macOS** workflow;
-  2. upload its two archives, plus the BtbN `linux64-lgpl` and `linuxarm64-lgpl` archives, to the `ffmpeg-n9.0.2-36` mirror release;
-  3. pin the macOS archive's SHA-256 in `ffmpeg-manifest.json` (`platforms.macos-aarch64.sha256`) and regenerate the licenses;
-  4. run **Release packages** (no secrets needed).
-  Not verified on real hardware yet: drag & drop and "Open With" on macOS/Linux, Gatekeeper, the Linux desktop integration.
+- 2026-10-26: **v0.3.0, macOS (Apple Silicon) and Linux support** on `main`. Owner's decisions: macOS without an Apple Developer account for now (ad hoc signature, no notarization, Gatekeeper "Open Anyway" documented in the README); .deb + .rpm + AppImage; Linux x86_64 + arm64.
+  - CI green on Windows x64, macOS arm64, Linux x64 and arm64, including the network monitor of the running app (no connection).
+  - The macOS FFmpeg build is pinned and mirrored with its sources; the Linux archives are mirrored too (all hashes verified).
+  - Release flow: the Windows installer comes from `npm run release` locally; the macOS/Linux packages come from the **Release packages** workflow artifacts; the owner creates the `v0.3.0` tag and the GitHub release.
+  - Not verified on real hardware yet: drag & drop and "Open With" on macOS/Linux, Gatekeeper, the Linux desktop integration.
 
 ## Backlog (next work, by priority)
 1. **Bug fix: stretched portrait videos** (listed in the README as an upcoming fix, at the owner's request).
