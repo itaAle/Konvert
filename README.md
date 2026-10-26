@@ -5,7 +5,7 @@ Konvert converts audio, video and image files from one format to another **entir
 your computer**: no network connections, no telemetry, no account.
 
 Platforms: Windows 10/11 (64-bit), macOS 11 or later on Apple Silicon (M1 and later),
-Linux (x86_64 and arm64).
+Linux x86_64. Linux arm64 packages are coming in a later release.
 
 ## How to use it
 
@@ -68,9 +68,12 @@ below) before opening the package.
 | ---------------------- | ---------------------------------------------- |
 | Windows 10/11 (64-bit) | `Konvert_<version>_x64-setup.exe`              |
 | macOS, Apple Silicon   | `Konvert_<version>_aarch64.dmg`                |
-| Debian, Ubuntu, Mint…  | `Konvert_<version>_amd64.deb` / `_arm64.deb`   |
-| Fedora, openSUSE…      | `Konvert-<version>-1.x86_64.rpm` / `.aarch64.rpm` |
-| Any Linux distribution | `Konvert_<version>_amd64.AppImage` / `_aarch64.AppImage` |
+| Debian, Ubuntu, Mint…  | `Konvert_<version>_amd64.deb`                  |
+| Fedora, openSUSE…      | `Konvert-<version>-1.x86_64.rpm`               |
+| Any Linux distribution | `Konvert_<version>_amd64.AppImage`             |
+
+The Linux packages are for x86_64 (64-bit Intel/AMD) computers. Packages for arm64
+(`_arm64.deb`, `.aarch64.rpm`, `_aarch64.AppImage`) are coming in a later release.
 
 **Windows.** Run the installer: it installs Konvert for your user only (no administrator
 rights), creates the Start menu entry and adds Konvert to the **Open with** menu of the
