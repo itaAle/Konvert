@@ -410,7 +410,7 @@ pub fn apply_first_frame_json(info: &mut MediaInfo, json: &[u8]) -> Result<(), C
 }
 
 /// Pixel formats with an alpha channel (`pal8`: the palette may have one).
-fn pix_fmt_has_alpha(pix_fmt: &str) -> bool {
+pub(crate) fn pix_fmt_has_alpha(pix_fmt: &str) -> bool {
     pix_fmt == "pal8"
         || ["yuva", "gbrap", "ya", "rgba", "bgra", "argb", "abgr"]
             .iter()

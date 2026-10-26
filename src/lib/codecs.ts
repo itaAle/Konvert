@@ -7,7 +7,10 @@ export const VIDEO_CODEC_NAMES: Record<VideoCodec, string> = {
   av1: "AV1",
   vp9: "VP9",
   mpeg4: "MPEG-4",
+  mpeg2: "MPEG-2",
   gif: "GIF",
+  webp: "WebP",
+  apng: "APNG",
 };
 
 export const AUDIO_CODEC_NAMES: Record<AudioCodec, string> = {

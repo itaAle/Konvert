@@ -51,7 +51,16 @@ pub enum TargetFormat {
     Mov,
     Webm,
     Avi,
+    /// MPEG transport stream.
+    Ts,
+    /// MPEG-2 program stream.
+    Mpg,
+    #[serde(rename = "3gp")]
+    ThreeGp,
+    Flv,
     Gif,
+    AnimatedWebp,
+    Apng,
     Jpg,
     Png,
     Webp,
@@ -133,8 +142,25 @@ pub enum VideoCodec {
     Vp9,
     /// MPEG-4 Part 2 (FFmpeg native, Xvid compatible)
     Mpeg4,
+    /// MPEG-2 (FFmpeg native, DVD compatible)
+    Mpeg2,
     /// GIF with an optimized palette
     Gif,
+    /// Animated WebP (libwebp)
+    Webp,
+    /// Animated PNG (FFmpeg native, lossless)
+    Apng,
+}
+
+impl VideoCodec {
+    /// Short looping animations (no audio, limited size and frame rate).
+    pub fn is_animation(self) -> bool {
+        matches!(self, VideoCodec::Gif | VideoCodec::Webp | VideoCodec::Apng)
+    }
+
+    pub fn is_lossless(self) -> bool {
+        self == VideoCodec::Apng
+    }
 }
 
 /// Picture encoders Konvert uses.
@@ -274,7 +300,9 @@ impl FormatSpec {
                 .default_audio_codec()
                 .is_some_and(AudioCodec::is_lossless),
             FormatKind::Image => self.image_codec.is_some_and(ImageCodec::is_lossless),
-            FormatKind::Video => false,
+            FormatKind::Video => self
+                .default_video_codec()
+                .is_some_and(VideoCodec::is_lossless),
         }
     }
 }
@@ -618,6 +646,64 @@ pub static FORMATS: &[FormatSpec] = &[
         ..SPEC
     },
     FormatSpec {
+        format: TargetFormat::Ts,
+        label: "TS",
+        extension: "ts",
+        input_extensions: &["ts"],
+        muxer: "mpegts",
+        kind: FormatKind::Video,
+        video_codecs: &[VideoCodec::H264],
+        audio_codecs: &[AudioCodec::Aac, AudioCodec::Ac3, AudioCodec::Mp2],
+        copy_video: &["h264", "hevc", "mpeg2video"],
+        copy_audio: &["aac", "mp3", "mp2", "ac3", "eac3"],
+        secondary: true,
+        ..SPEC
+    },
+    FormatSpec {
+        format: TargetFormat::Mpg,
+        label: "MPG (MPEG-2)",
+        extension: "mpg",
+        input_extensions: &["mpg", "mpeg"],
+        // MPEG-2 program stream, as on DVDs.
+        muxer: "vob",
+        kind: FormatKind::Video,
+        video_codecs: &[VideoCodec::Mpeg2],
+        audio_codecs: &[AudioCodec::Mp2, AudioCodec::Ac3],
+        copy_video: &["mpeg2video", "mpeg1video"],
+        copy_audio: &["mp2", "ac3"],
+        secondary: true,
+        ..SPEC
+    },
+    FormatSpec {
+        format: TargetFormat::ThreeGp,
+        label: "3GP",
+        extension: "3gp",
+        input_extensions: &["3gp"],
+        muxer: "3gp",
+        kind: FormatKind::Video,
+        video_codecs: &[VideoCodec::H264],
+        audio_codecs: &[AudioCodec::Aac],
+        copy_video: &["h264", "mpeg4", "h263"],
+        copy_audio: &["aac", "amr_nb", "amr_wb"],
+        muxer_args: &["-movflags", "+faststart"],
+        secondary: true,
+        ..SPEC
+    },
+    FormatSpec {
+        format: TargetFormat::Flv,
+        label: "FLV",
+        extension: "flv",
+        input_extensions: &["flv"],
+        muxer: "flv",
+        kind: FormatKind::Video,
+        video_codecs: &[VideoCodec::H264],
+        audio_codecs: &[AudioCodec::Aac, AudioCodec::Mp3],
+        copy_video: &["h264", "flv1"],
+        copy_audio: &["aac", "mp3"],
+        secondary: true,
+        ..SPEC
+    },
+    FormatSpec {
         format: TargetFormat::Gif,
         label: "GIF",
         extension: "gif",
@@ -631,6 +717,30 @@ pub static FORMATS: &[FormatSpec] = &[
         cover_art: false,
         muxer_args: &["-loop", "0"],
         image_codec: None,
+        ..SPEC
+    },
+    FormatSpec {
+        format: TargetFormat::AnimatedWebp,
+        label: "WebP",
+        extension: "webp",
+        input_extensions: &["webp"],
+        muxer: "webp",
+        kind: FormatKind::Video,
+        video_codecs: &[VideoCodec::Webp],
+        muxer_args: &["-loop", "0"],
+        ..SPEC
+    },
+    FormatSpec {
+        format: TargetFormat::Apng,
+        label: "APNG",
+        extension: "apng",
+        // Animated PNG files often keep the plain .png extension.
+        input_extensions: &["apng", "png"],
+        muxer: "apng",
+        kind: FormatKind::Video,
+        video_codecs: &[VideoCodec::Apng],
+        muxer_args: &["-plays", "0"],
+        secondary: true,
         ..SPEC
     },
     // --- Pictures ------------------------------------------------------------
@@ -733,7 +843,13 @@ const VIDEO_TARGETS: &[TargetFormat] = &[
     TargetFormat::Mov,
     TargetFormat::Webm,
     TargetFormat::Avi,
+    TargetFormat::Ts,
+    TargetFormat::Mpg,
+    TargetFormat::ThreeGp,
+    TargetFormat::Flv,
     TargetFormat::Gif,
+    TargetFormat::AnimatedWebp,
+    TargetFormat::Apng,
 ];
 
 const IMAGE_TARGETS: &[TargetFormat] = &[
@@ -896,9 +1012,12 @@ pub fn available_targets(media: &MediaInfo, input: &Path) -> Vec<TargetOption> {
         .flat_map(|(formats, group)| formats.iter().map(move |f| (spec(*f), group)))
         .filter_map(|(spec, group)| {
             let same_as_input = source == Some(spec.format);
-            // Re-encoding into the same lossless format (or GIF into GIF) gains nothing.
-            let pointless =
-                same_as_input && (spec.is_lossless() || spec.format == TargetFormat::Gif);
+            // Re-encoding into the same lossless format (or an animation into
+            // the same kind of animation) gains nothing.
+            let animation = spec
+                .default_video_codec()
+                .is_some_and(VideoCodec::is_animation);
+            let pointless = same_as_input && (spec.is_lossless() || animation);
             (!pointless).then(|| TargetOption {
                 format: spec.format,
                 label: spec.label.to_owned(),
@@ -992,7 +1111,13 @@ mod tests {
         TargetFormat::Mov,
         TargetFormat::Webm,
         TargetFormat::Avi,
+        TargetFormat::Ts,
+        TargetFormat::Mpg,
+        TargetFormat::ThreeGp,
+        TargetFormat::Flv,
         TargetFormat::Gif,
+        TargetFormat::AnimatedWebp,
+        TargetFormat::Apng,
         TargetFormat::Jpg,
         TargetFormat::Png,
         TargetFormat::Webp,
@@ -1262,6 +1387,31 @@ mod tests {
         assert!(options.iter().all(|o| o.group == TargetGroup::Video));
         assert!(!formats(&options).contains(&TargetFormat::Gif));
         assert!(formats(&options).contains(&TargetFormat::Mp4));
+        assert!(formats(&options).contains(&TargetFormat::AnimatedWebp));
+    }
+
+    #[test]
+    fn animations_are_not_converted_into_themselves() {
+        let anim = |codec: &str, container: &str| {
+            media(&format!(
+                r#"{{ "streams": [{{ "index": 0, "codec_name": "{codec}", "codec_type": "video",
+                "width": 100, "height": 100 }}], "format": {{ "format_name": "{container}" }} }}"#
+            ))
+        };
+        let webp = available_targets(&anim("webp_anim", "webp_anim"), Path::new("a.webp"));
+        assert!(!formats(&webp).contains(&TargetFormat::AnimatedWebp));
+        assert!(formats(&webp).contains(&TargetFormat::Gif));
+        // An animated PNG named .png is an APNG, and APNG → APNG is pointless.
+        let apng = available_targets(&anim("apng", "apng"), Path::new("a.png"));
+        assert!(!formats(&apng).contains(&TargetFormat::Apng));
+        let apng_option = available_targets(&video_with_audio(), Path::new("clip.mp4"))
+            .into_iter()
+            .find(|o| o.format == TargetFormat::Apng)
+            .unwrap();
+        assert!(apng_option.lossless && apng_option.secondary);
+        assert_eq!(apng_option.extension, "apng");
+        assert_eq!(TargetFormat::from_id("3gp"), Some(TargetFormat::ThreeGp));
+        assert_eq!(TargetFormat::ThreeGp.id(), "3gp");
     }
 
     #[test]

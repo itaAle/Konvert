@@ -14,4 +14,8 @@ resize: boolean,
 /**
  * Forced output frame rate (`None`: same as the input).
  */
-fps: number | null, };
+fps: number | null, 
+/**
+ * Transparency is kept (animated WebP and APNG from transparent sources).
+ */
+alpha: boolean, };

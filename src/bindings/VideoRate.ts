@@ -3,4 +3,4 @@
 /**
  * Rate control of a video encoder.
  */
-export type VideoRate = { "kind": "bitrate", kbps: number, } | { "kind": "crf", crf: number, speed: number, } | { "kind": "quantizer", q: number, } | { "kind": "palette" };
+export type VideoRate = { "kind": "bitrate", kbps: number, } | { "kind": "crf", crf: number, speed: number, } | { "kind": "quantizer", q: number, } | { "kind": "palette" } | { "kind": "quality", quality: number, } | { "kind": "lossless" };

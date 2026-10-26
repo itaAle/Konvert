@@ -100,7 +100,8 @@ export const it = {
       "Conversione con perdita: il file sarà molto più piccolo, con una lieve riduzione della qualità.",
     gifLimitations:
       "Le GIF hanno al massimo 256 colori e producono file grandi: adatte a clip brevi.",
-    audioDropped: "Il formato GIF non contiene audio: la traccia audio verrà scartata.",
+    largeFile: "L'APNG conserva ogni pixel di ogni fotogramma: i file possono diventare molto grandi.",
+    audioDropped: "Le animazioni non hanno audio: la traccia audio verrà scartata.",
     coverArtDropped: "Questo formato non può contenere la copertina: verrà omessa.",
     subtitlesDropped: "I sottotitoli non verranno conservati.",
     extraAudioTracksDropped: "Verrà conservata solo la prima traccia audio.",

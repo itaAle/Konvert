@@ -298,21 +298,38 @@ fn video_args(a: &mut Args, enc: &VideoEncode) {
                 _ => {}
             }
         }
-        VideoCodec::Mpeg4 => {
-            // The "xvid" tag makes the AVI playable by more players.
-            a.push(&["-c:v", "mpeg4", "-vtag", "xvid"]);
+        VideoCodec::Mpeg4 | VideoCodec::Mpeg2 => {
+            if enc.codec == VideoCodec::Mpeg4 {
+                // The "xvid" tag makes the AVI playable by more players.
+                a.push(&["-c:v", "mpeg4", "-vtag", "xvid"]);
+            } else {
+                a.push(&["-c:v", "mpeg2video", "-bf", "2"]);
+            }
             match enc.rate {
                 VideoRate::Quantizer { q } => a.push(&["-q:v", &q.to_string()]),
                 VideoRate::Bitrate { kbps } => bitrate(a, kbps),
                 _ => {}
             }
         }
+        VideoCodec::Webp => {
+            a.push(&["-c:v", "libwebp_anim"]);
+            if let VideoRate::Quality { quality } = enc.rate {
+                a.push(&["-quality", &quality.to_string()]);
+            }
+        }
+        VideoCodec::Apng => a.push(&["-c:v", "apng", "-pred", "mixed"]),
         VideoCodec::Gif => unreachable!("GIF uses a filter graph"),
     }
 
     let mut filters = Vec::new();
     if let (true, Some(w), Some(h)) = (enc.resize, enc.width, enc.height) {
-        filters.push(format!("scale={w}:{h}:flags=bicubic"));
+        // Animations are small: the sharper (slower) filter is affordable.
+        let flags = if enc.codec.is_animation() {
+            "lanczos"
+        } else {
+            "bicubic"
+        };
+        filters.push(format!("scale={w}:{h}:flags={flags}"));
     }
     if let Some(fps) = enc.fps {
         filters.push(format!("fps={}", format_number(fps)));
@@ -320,8 +337,14 @@ fn video_args(a: &mut Args, enc: &VideoEncode) {
     if !filters.is_empty() {
         a.push(&["-vf", &filters.join(",")]);
     }
-    // 8-bit 4:2:0: what every player and OpenH264 support.
-    a.push(&["-pix_fmt", "yuv420p"]);
+    let pix_fmt = match (enc.codec, enc.alpha) {
+        (VideoCodec::Webp, true) => "yuva420p",
+        (VideoCodec::Apng, true) => "rgba",
+        (VideoCodec::Apng, false) => "rgb24",
+        // 8-bit 4:2:0: what every player and OpenH264 support.
+        _ => "yuv420p",
+    };
+    a.push(&["-pix_fmt", pix_fmt]);
 }
 
 /// Palette-optimized GIF in a single pass of the filter graph.
@@ -629,6 +652,30 @@ mod tests {
               [s1][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle[gif]",
              "-map", "[gif]", "-map_metadata", "0", "-loop", "0"]
         );
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn animated_webp_apng_and_mpeg2() {
+        assert_eq!(
+            body(&mp4(), &req(TargetFormat::AnimatedWebp, QualityPreset::Balanced), "clip.mp4"),
+            ["-map", "0:0", "-map_metadata", "0", "-c:v", "libwebp_anim", "-quality", "75",
+             "-vf", "scale=640:360:flags=lanczos,fps=15", "-pix_fmt", "yuv420p", "-loop", "0"]
+        );
+        assert_eq!(
+            body(&mp4(), &req(TargetFormat::Apng, QualityPreset::Small), "clip.mp4"),
+            ["-map", "0:0", "-map_metadata", "0", "-c:v", "apng", "-pred", "mixed",
+             "-vf", "scale=480:270:flags=lanczos,fps=10", "-pix_fmt", "rgb24", "-plays", "0"]
+        );
+        assert_eq!(
+            body(&mp4(), &req(TargetFormat::Mpg, QualityPreset::Max), "clip.mp4"),
+            ["-map", "0:0", "-map", "0:1", "-map_metadata", "0",
+             "-c:v", "mpeg2video", "-bf", "2", "-q:v", "2", "-pix_fmt", "yuv420p",
+             "-c:a", "mp2", "-b:a", "384k"]
+        );
+        let cmd = build_command(&mp4(), &req(TargetFormat::Mpg, QualityPreset::Max),
+            Path::new("a.mp4"), Path::new("o")).unwrap().args_lossy();
+        assert!(cmd.windows(2).any(|w| w == ["-f", "vob"]));
     }
 
     #[test]

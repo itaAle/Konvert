@@ -359,6 +359,49 @@ async fn every_video_format_from_mp4() {
             Some("mp3"),
         ),
         (TargetFormat::Gif, QualityPreset::Small, "gif", "gif", None),
+        // Broadcast and legacy containers: H.264 + AAC copied, MPEG-2 encoded.
+        (
+            TargetFormat::Ts,
+            QualityPreset::Balanced,
+            "mpegts",
+            "h264",
+            Some("aac"),
+        ),
+        (
+            TargetFormat::ThreeGp,
+            QualityPreset::Balanced,
+            "mov,mp4,m4a,3gp,3g2,mj2",
+            "h264",
+            Some("aac"),
+        ),
+        (
+            TargetFormat::Flv,
+            QualityPreset::Max,
+            "flv",
+            "h264",
+            Some("aac"),
+        ),
+        (
+            TargetFormat::Mpg,
+            QualityPreset::Balanced,
+            "mpeg",
+            "mpeg2video",
+            Some("mp2"),
+        ),
+        (
+            TargetFormat::AnimatedWebp,
+            QualityPreset::Small,
+            "webp_anim",
+            "webp_anim",
+            None,
+        ),
+        (
+            TargetFormat::Apng,
+            QualityPreset::Small,
+            "apng",
+            "apng",
+            None,
+        ),
     ];
     for (target, preset, container, vcodec, acodec) in cases {
         let (outcome, out) = convert(&bins, &tmp, &input, req(target, preset)).await;
@@ -802,6 +845,35 @@ async fn exif_orientation_is_applied_once_and_exif_kept_in_png() {
             .contains(&konvert_core::ConversionWarning::MetadataDropped);
         assert_eq!(warned, !exif_kept, "{target:?}");
         std::fs::remove_file(&outcome.output).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn transparent_animations_stay_transparent() {
+    let bins = engine();
+    let tmp = TempDir::new("animations");
+    // 1 s, 10 fps animated GIF whose left half is transparent.
+    let input = tmp.path("Animazione.gif");
+    generate(
+        &bins,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:size=64x48:rate=10:duration=1,format=rgba,\
+             geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lt(X,32),0,255)',\
+             split[a][b];[a]palettegen=reserve_transparent=1[p];\
+             [b][p]paletteuse=alpha_threshold=128",
+        ],
+        &input,
+    );
+    let media = probe(&bins, &input).await.unwrap();
+    assert_eq!(media.kind, MediaKind::Video);
+    for target in [TargetFormat::AnimatedWebp, TargetFormat::Apng] {
+        let (outcome, out) = convert(&bins, &tmp, &input, req(target, QualityPreset::Max)).await;
+        assert_eq!(size_of(&out), (Some(64), Some(48)), "{target:?}");
+        assert_eq!(pixel(&bins, &outcome.output, 5, 20)[3], 0, "{target:?}");
+        assert_eq!(pixel(&bins, &outcome.output, 50, 20)[3], 255, "{target:?}");
     }
 }
 

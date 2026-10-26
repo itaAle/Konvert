@@ -3,4 +3,4 @@
 /**
  * Video encoders Konvert uses.
  */
-export type VideoCodec = "h264" | "av1" | "vp9" | "mpeg4" | "gif";
+export type VideoCodec = "h264" | "av1" | "vp9" | "mpeg4" | "mpeg2" | "gif" | "webp" | "apng";

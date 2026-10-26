@@ -16,7 +16,7 @@ use crate::formats::{
     self, AudioCodec, FormatKind, FormatSpec, ImageCodec, TargetFormat, VideoCodec,
     is_lossless_audio_codec, is_lossless_image, is_lossless_video_codec,
 };
-use crate::probe::{AudioStream, MediaInfo, MediaKind, VideoStream};
+use crate::probe::{AudioStream, MediaInfo, MediaKind, VideoStream, pix_fmt_has_alpha};
 use crate::request::{ConversionRequest, QualityPreset};
 
 /// How the audio stream is produced.
@@ -81,6 +81,9 @@ pub struct VideoEncode {
     pub resize: bool,
     /// Forced output frame rate (`None`: same as the input).
     pub fps: Option<f64>,
+    /// Transparency is kept (animated WebP and APNG from transparent sources).
+    #[serde(default)]
+    pub alpha: bool,
 }
 
 /// Rate control of a video encoder.
@@ -92,10 +95,14 @@ pub enum VideoRate {
     Bitrate { kbps: u32 },
     /// Constant quality (lower = better) and encoder speed preset (higher = faster).
     Crf { crf: u8, speed: u8 },
-    /// Fixed quantizer (MPEG-4 `-q:v`, 1 = best … 31).
+    /// Fixed quantizer (MPEG-4/MPEG-2 `-q:v`, 1 = best … 31).
     Quantizer { q: u8 },
     /// GIF: optimized 256-color palette.
     Palette,
+    /// Encoder quality from 1 (smallest file) to 100 (best): animated WebP.
+    Quality { quality: u8 },
+    /// Every pixel is kept: APNG.
+    Lossless,
 }
 
 /// How a picture is produced. Pictures are always encoded again: copying
@@ -145,6 +152,8 @@ pub enum ConversionWarning {
     LosslessToLossy,
     /// GIF: 256 colors, no audio, large files.
     GifLimitations,
+    /// Lossless animation (APNG): files can get very large.
+    LargeFile,
     /// The picture format has no transparency: transparent areas become white.
     TransparencyLost,
     /// The picture is larger than the format allows: it is scaled down.
@@ -544,16 +553,19 @@ fn plan_video(
     };
     let resize = size.is_some_and(|s| Some(s) != src.width.zip(src.height));
 
-    let fps = match codec {
-        VideoCodec::Gif => {
-            let wanted = adv.fps.unwrap_or(pick(preset, 24.0, 15.0, 10.0));
-            Some(src.fps.map_or(wanted, |f| wanted.min(f)))
-        }
-        _ => adv.fps,
+    let fps = if codec.is_animation() {
+        let wanted = adv.fps.unwrap_or(pick(preset, 24.0, 15.0, 10.0));
+        Some(src.fps.map_or(wanted, |f| wanted.min(f)))
+    } else {
+        adv.fps
     };
 
     let rate = match (codec, adv.video_bitrate_kbps) {
         (VideoCodec::Gif, _) => VideoRate::Palette,
+        (VideoCodec::Webp, _) => VideoRate::Quality {
+            quality: pick(preset, 90, 75, 60),
+        },
+        (VideoCodec::Apng, _) => VideoRate::Lossless,
         (_, Some(kbps)) => VideoRate::Bitrate { kbps },
         (VideoCodec::H264, None) => VideoRate::Bitrate {
             kbps: h264_bitrate_kbps(src, size, fps, preset),
@@ -566,7 +578,7 @@ fn plan_video(
             crf: pick(preset, 26, 34, 42),
             speed: pick(preset, 6, 8, 10),
         },
-        (VideoCodec::Mpeg4, None) => VideoRate::Quantizer {
+        (VideoCodec::Mpeg4 | VideoCodec::Mpeg2, None) => VideoRate::Quantizer {
             q: pick(preset, 2, 4, 7),
         },
     };
@@ -578,11 +590,13 @@ fn plan_video(
         height: size.map(|s| s.1),
         resize,
         fps,
+        alpha: matches!(codec, VideoCodec::Webp | VideoCodec::Apng)
+            && src.pix_fmt.as_deref().is_some_and(pix_fmt_has_alpha),
     })
 }
 
 /// Output dimensions: never upscales, keeps the aspect ratio. YUV 4:2:0 codecs
-/// need even dimensions; GIF is limited to a preset width.
+/// need even dimensions; animations are limited to a preset width.
 fn output_size(
     codec: VideoCodec,
     width: u32,
@@ -593,7 +607,7 @@ fn output_size(
     let scale_to_height = |h: u32| (scaled(width, h, height), h);
     let (w, h) = match (codec, max_height) {
         (_, Some(max_h)) if max_h < height => scale_to_height(max_h),
-        (VideoCodec::Gif, None) => {
+        (_, None) if codec.is_animation() => {
             let max_w = pick(preset, 960, 640, 480);
             if width > max_w {
                 (max_w, scaled(height, max_w, width))
@@ -603,7 +617,7 @@ fn output_size(
         }
         _ => (width, height),
     };
-    if codec == VideoCodec::Gif {
+    if codec.is_animation() {
         (w.max(1), h.max(1))
     } else {
         (even(w), even(h))
@@ -679,15 +693,14 @@ fn collect_warnings(
             warnings.push(W::ChannelsDownmixed);
         }
     }
-    if let (Some(VideoPlan::Encode(enc)), Some(src)) = (&plan.video, media.primary_video())
-        && enc.codec != VideoCodec::Gif
-        && !is_lossless_video_codec(&src.codec)
-    {
-        warnings.push(W::LossyReencode);
-    }
-    if plan.target == TargetFormat::Gif {
-        warnings.push(W::GifLimitations);
-        if !media.audio.is_empty() {
+    if let (Some(VideoPlan::Encode(enc)), Some(src)) = (&plan.video, media.primary_video()) {
+        match enc.codec {
+            VideoCodec::Gif => warnings.push(W::GifLimitations),
+            VideoCodec::Apng => warnings.push(W::LargeFile),
+            _ if !is_lossless_video_codec(&src.codec) => warnings.push(W::LossyReencode),
+            _ => {}
+        }
+        if enc.codec.is_animation() && !media.audio.is_empty() {
             warnings.push(W::AudioDropped);
         }
     }
@@ -1015,6 +1028,77 @@ mod tests {
             p.warnings
                 .starts_with(&[W::GifLimitations, W::AudioDropped])
         );
+    }
+
+    #[test]
+    fn animated_webp_and_apng_follow_the_gif_limits() {
+        let webp = plan(
+            &mp4_1080p(),
+            &req(TargetFormat::AnimatedWebp, QualityPreset::Balanced),
+            "clip.mp4",
+        );
+        let video = video_encode(&webp);
+        assert_eq!(video.codec, VideoCodec::Webp);
+        assert_eq!(video.rate, VideoRate::Quality { quality: 75 });
+        assert_eq!(
+            (video.width, video.height, video.fps),
+            (Some(640), Some(360), Some(15.0))
+        );
+        assert!(!video.alpha);
+        assert_eq!(webp.audio, None);
+        assert_eq!(webp.warnings[..2], [W::LossyReencode, W::AudioDropped]);
+
+        let apng = plan(
+            &mp4_1080p(),
+            &req(TargetFormat::Apng, QualityPreset::Small),
+            "clip.mp4",
+        );
+        let video = video_encode(&apng);
+        assert_eq!(video.rate, VideoRate::Lossless);
+        assert_eq!((video.width, video.fps), (Some(480), Some(10.0)));
+        assert_eq!(apng.warnings[..2], [W::LargeFile, W::AudioDropped]);
+
+        // Transparent GIF → animated WebP keeps the transparency.
+        let gif = media(
+            r#"{ "streams": [{ "index": 0, "codec_name": "gif", "codec_type": "video",
+            "width": 200, "height": 100, "pix_fmt": "bgra", "avg_frame_rate": "10/1" }],
+            "format": { "format_name": "gif", "duration": "2" } }"#,
+        );
+        let p = plan(
+            &gif,
+            &req(TargetFormat::AnimatedWebp, QualityPreset::Max),
+            "a.gif",
+        );
+        let video = video_encode(&p);
+        assert!(video.alpha);
+        assert_eq!(
+            (video.width, video.height, video.fps),
+            (Some(200), Some(100), Some(10.0))
+        );
+    }
+
+    #[test]
+    fn broadcast_and_legacy_containers() {
+        let src = mp4_1080p();
+        // H.264 + AAC fit TS, 3GP and FLV as they are.
+        for target in [TargetFormat::Ts, TargetFormat::ThreeGp, TargetFormat::Flv] {
+            let p = plan(&src, &req(target, QualityPreset::Balanced), "clip.mp4");
+            assert!(p.is_remux(), "{target:?}");
+        }
+        let mpg = plan(
+            &src,
+            &req(TargetFormat::Mpg, QualityPreset::Balanced),
+            "clip.mp4",
+        );
+        let video = video_encode(&mpg);
+        assert_eq!(
+            (video.codec, video.rate),
+            (VideoCodec::Mpeg2, VideoRate::Quantizer { q: 4 })
+        );
+        let audio = audio_encode(&mpg);
+        assert_eq!((audio.codec, audio.channels), (AudioCodec::Mp2, Some(2)));
+        assert!(mpg.warnings.contains(&W::LossyReencode));
+        assert!(mpg.estimate.unwrap().approximate);
     }
 
     #[test]

@@ -128,7 +128,21 @@ fn video_kbps(media: &MediaInfo, video: &VideoPlan, audio_kbps: f64) -> Option<(
                     let bpp = reference_bpp * 2f64.powf((reference_crf - crf as f64) / 6.0);
                     (from_bpp(bpp), true)
                 }
-                VideoRate::Quantizer { q } => (from_bpp(0.48 / q as f64), true),
+                VideoRate::Quantizer { q } => {
+                    // MPEG-2 needs about 50% more bits than MPEG-4 Part 2.
+                    let reference = match enc.codec {
+                        VideoCodec::Mpeg2 => 0.72,
+                        _ => 0.48,
+                    };
+                    (from_bpp(reference / q as f64), true)
+                }
+                // Animated WebP: about a third of a GIF at the default quality.
+                VideoRate::Quality { quality } => (
+                    from_bpp(0.3 * 2f64.powf((quality as f64 - 75.0) / 15.0)),
+                    true,
+                ),
+                // APNG: lossless RGB, only partly helped by frame differences.
+                VideoRate::Lossless => (from_bpp(4.0), true),
                 VideoRate::Palette => unreachable!("handled by the caller"),
             }
         }
