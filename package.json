@@ -10,7 +10,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "setup:ffmpeg": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-ffmpeg.ps1",
+    "setup:ffmpeg": "node scripts/setup-ffmpeg.mjs",
     "cli": "cargo run -q -p konvert-cli --",
     "test": "node scripts/check-privacy.mjs && node scripts/generate-licenses.mjs --check && vitest run && cargo test --workspace",
     "test:ui": "vitest run",

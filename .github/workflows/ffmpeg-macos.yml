@@ -1,0 +1,32 @@
+# Builds the LGPL FFmpeg/FFprobe for macOS on Apple Silicon (scripts/build-ffmpeg-macos.sh).
+# Run it by hand when the pinned FFmpeg version changes. It only produces workflow
+# artifacts: the owner uploads them to the FFmpeg mirror release and pins the SHA-256
+# in scripts/ffmpeg-manifest.json.
+name: FFmpeg for macOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build tools
+        run: brew install nasm cmake meson ninja pkg-config autoconf automake libtool subversion
+
+      - name: Build FFmpeg
+        run: bash scripts/build-ffmpeg-macos.sh "$RUNNER_TEMP/ffmpeg-out"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ffmpeg-macos-arm64
+          path: ${{ runner.temp }}/ffmpeg-out/
+          if-no-files-found: error

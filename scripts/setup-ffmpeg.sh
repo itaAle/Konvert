@@ -8,8 +8,9 @@
 # Usage: bash scripts/setup-ffmpeg.sh [--force]
 #
 # Requirements: curl, sha256sum (or shasum), tar/unzip, node (to read the manifest).
-# Status: Windows uses scripts/setup-ffmpeg.ps1. Linux is prepared but untested
-# (phase 2). macOS has no pinned LGPL build yet: see the message below.
+# Platforms: Linux x86_64/arm64 and macOS on Apple Silicon. Windows uses
+# scripts/setup-ffmpeg.ps1 (`npm run setup:ffmpeg` picks the right script).
+# Written for the bash 3.2 that ships with macOS (no mapfile).
 
 set -euo pipefail
 
@@ -24,15 +25,9 @@ DEST_DIR="$REPO_ROOT/src-tauri/binaries/ffmpeg"
 
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64)               PLATFORM="linux-x86_64" ;;
+  Linux-aarch64|Linux-arm64)  PLATFORM="linux-aarch64" ;;
+  Darwin-arm64)               PLATFORM="macos-aarch64" ;;
   MINGW*-x86_64|MSYS*-x86_64) PLATFORM="windows-x86_64" ;;
-  Darwin-*)
-    cat >&2 <<'EOF'
-macOS: no pinned LGPL FFmpeg build is available yet (planned for phase 2).
-Build FFmpeg with an LGPL configuration (no --enable-gpl) including libmp3lame,
-libopus, libvorbis, libvpx, libsvtav1 and libopenh264, then copy `ffmpeg` and
-`ffprobe` into src-tauri/binaries/ffmpeg/.
-EOF
-    exit 1 ;;
   *) echo "Unsupported platform: $(uname -s) $(uname -m)" >&2; exit 1 ;;
 esac
 
@@ -52,11 +47,15 @@ sha256() {
 }
 
 EXPECTED="$(manifest "platforms.$PLATFORM.sha256" | tr 'A-F' 'a-f')"
+if [[ -z "$EXPECTED" ]]; then
+  echo "No pinned FFmpeg build for $PLATFORM yet: see scripts/build-ffmpeg-macos.sh." >&2
+  exit 1
+fi
 ARCHIVE_TYPE="$(manifest "platforms.$PLATFORM.archive")"
 BIN_SUBDIR="$(manifest "platforms.$PLATFORM.binDir")"
-mapfile -t URLS < <(manifest "platforms.$PLATFORM.urls")
-mapfile -t FILES < <(manifest "platforms.$PLATFORM.files")
-mapfile -t REQUIRED < <(manifest "requiredEncoders")
+URLS=();     while IFS= read -r l; do URLS+=("$l"); done < <(manifest "platforms.$PLATFORM.urls")
+FILES=();    while IFS= read -r l; do FILES+=("$l"); done < <(manifest "platforms.$PLATFORM.files")
+REQUIRED=(); while IFS= read -r l; do REQUIRED+=("$l"); done < <(manifest requiredEncoders)
 ARCHIVE="$DOWNLOAD_DIR/$(basename "${URLS[0]}")"
 
 mkdir -p "$DOWNLOAD_DIR"

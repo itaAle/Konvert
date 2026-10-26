@@ -20,7 +20,11 @@
     "flac",
     "wmav2",
     "mpeg4",
-    "gif"
+    "gif",
+    "mjpeg",
+    "png",
+    "libwebp",
+    "libaom-av1"
   ],
   "platforms": {
     "windows-x86_64": {
@@ -38,11 +42,37 @@
       ]
     },
     "linux-x86_64": {
-      "status": "untested: Linux packaging is planned for phase 2",
       "urls": [
-        "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-25-13-00/ffmpeg-n9.0.2-36-g6882969ce9-linux64-lgpl-9.0.tar.xz"
+        "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-25-13-00/ffmpeg-n9.0.2-36-g6882969ce9-linux64-lgpl-9.0.tar.xz",
+        "https://github.com/itaAle/Konvert/releases/download/ffmpeg-n9.0.2-36/ffmpeg-n9.0.2-36-g6882969ce9-linux64-lgpl-9.0.tar.xz"
       ],
       "sha256": "e3164231897b2e503686acd5829c4dab945d9ee02bdc98ef69793ecc72fc0546",
+      "archive": "tar.xz",
+      "binDir": "bin",
+      "files": [
+        "ffmpeg",
+        "ffprobe"
+      ]
+    },
+    "linux-aarch64": {
+      "urls": [
+        "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-25-13-00/ffmpeg-n9.0.2-36-g6882969ce9-linuxarm64-lgpl-9.0.tar.xz",
+        "https://github.com/itaAle/Konvert/releases/download/ffmpeg-n9.0.2-36/ffmpeg-n9.0.2-36-g6882969ce9-linuxarm64-lgpl-9.0.tar.xz"
+      ],
+      "sha256": "9918a774293c51ecb8c01cde73efaab9d6e34e32f639808f818a0c4535fd8641",
+      "archive": "tar.xz",
+      "binDir": "bin",
+      "files": [
+        "ffmpeg",
+        "ffprobe"
+      ]
+    },
+    "macos-aarch64": {
+      "note": "Built by scripts/build-ffmpeg-macos.sh (.github/workflows/ffmpeg-macos.yml) with the same libraries and --disable-network; sources are in the mirror release next to the archive. Fill sha256 after uploading the archive.",
+      "urls": [
+        "https://github.com/itaAle/Konvert/releases/download/ffmpeg-n9.0.2-36/ffmpeg-n9.0.2-36-g6882969ce9-macos-arm64-lgpl.tar.xz"
+      ],
+      "sha256": "",
       "archive": "tar.xz",
       "binDir": "bin",
       "files": [

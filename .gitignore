@@ -181,3 +181,6 @@ desktop.ini
 
 # Local preview configuration of the coding assistant
 .claude/launch.json
+
+# FFmpeg built from source on macOS by scripts/build-ffmpeg-macos.sh
+.ffmpeg-build/
