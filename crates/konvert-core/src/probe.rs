@@ -101,8 +101,8 @@ pub struct MediaInfo {
     /// Overall bit rate in bits per second.
     pub bit_rate: Option<u64>,
     pub audio: Vec<AudioStream>,
-    /// Real video streams (attached cover pictures excluded). For a picture:
-    /// only the picture itself, with its displayed (rotated) size.
+    /// Real video streams (attached cover pictures excluded), with their
+    /// displayed (rotated) size. For a picture: only the picture itself.
     pub video: Vec<VideoStream>,
     /// Embedded cover picture (e.g. album art in MP3/M4A/FLAC).
     pub cover_art: Option<CoverArt>,
@@ -219,16 +219,26 @@ pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
                     codec,
                 });
             }
-            Some("video") => video.push(VideoStream {
-                index: s.index,
-                codec,
-                width: s.width,
-                height: s.height,
-                fps: parse_rate(s.avg_frame_rate.as_deref())
-                    .or_else(|| parse_rate(s.r_frame_rate.as_deref())),
-                bit_rate: parse_num(&s.bit_rate),
-                pix_fmt: s.pix_fmt,
-            }),
+            Some("video") => {
+                // Phone videos are often stored sideways with a display matrix:
+                // FFmpeg rotates them before any filter, so plans need the
+                // displayed size.
+                let (width, height) = if s.side_data_list.iter().any(RawSideData::is_quarter_turn) {
+                    (s.height, s.width)
+                } else {
+                    (s.width, s.height)
+                };
+                video.push(VideoStream {
+                    index: s.index,
+                    codec,
+                    width,
+                    height,
+                    fps: parse_rate(s.avg_frame_rate.as_deref())
+                        .or_else(|| parse_rate(s.r_frame_rate.as_deref())),
+                    bit_rate: parse_num(&s.bit_rate),
+                    pix_fmt: s.pix_fmt,
+                })
+            }
             Some("subtitle") => subtitle_streams += 1,
             _ => {}
         }
@@ -613,6 +623,23 @@ mod tests {
         assert!((v.fps.unwrap() - 29.97).abs() < 0.01);
         assert_eq!(info.subtitle_streams, 1);
         assert_eq!(info.bit_rate, None);
+    }
+
+    #[test]
+    fn sideways_phone_video_reports_its_displayed_size() {
+        let json = r#"{ "streams": [{ "index": 0, "codec_name": "h264", "codec_type": "video",
+            "width": 1920, "height": 1080, "avg_frame_rate": "30/1",
+            "side_data_list": [{ "side_data_type": "Display Matrix", "rotation": -90 }] }],
+            "format": { "format_name": "mov,mp4,m4a,3gp,3g2,mj2", "duration": "5" } }"#;
+        let info = parse_ffprobe_json(json.as_bytes()).unwrap();
+        assert_eq!(info.kind, MediaKind::Video);
+        let v = info.primary_video().unwrap();
+        assert_eq!((v.width, v.height), (Some(1080), Some(1920)));
+
+        // Upside down: same size.
+        let json = json.replace("-90", "180");
+        let v = parse_ffprobe_json(json.as_bytes()).unwrap().video[0].clone();
+        assert_eq!((v.width, v.height), (Some(1920), Some(1080)));
     }
 
     #[test]

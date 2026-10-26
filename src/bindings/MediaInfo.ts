@@ -18,8 +18,8 @@ container: string, kind: MediaKind, durationSecs: number | null, sizeBytes: numb
  */
 bitRate: number | null, audio: Array<AudioStream>, 
 /**
- * Real video streams (attached cover pictures excluded). For a picture:
- * only the picture itself, with its displayed (rotated) size.
+ * Real video streams (attached cover pictures excluded), with their
+ * displayed (rotated) size. For a picture: only the picture itself.
  */
 video: Array<VideoStream>, 
 /**

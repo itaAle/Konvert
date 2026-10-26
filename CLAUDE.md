@@ -127,15 +127,14 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
   - Not verified on real hardware yet: drag & drop and "Open With" on macOS/Linux, Gatekeeper, the Linux desktop integration.
 
 ## Backlog (next work, by priority)
-1. **Bug fix: stretched portrait videos** (listed in the README as an upcoming fix, at the owner's request).
-   - A phone video with a 90° rotation (display matrix) that gets resized (GIF or "Maximum resolution") comes out stretched: `plan.rs::output_size` uses the coded dimensions, while FFmpeg rotates before `scale`.
-   - Reproduced: 320×240 with rotation 90 and `--height 120` → 160×120 instead of 90×120.
-   - Fix: read the rotation from the stream's `side_data_list` in `probe.rs` (as already done for pictures) and swap width and height.
+1. **More formats and PDF**, in three phases agreed with the owner (in progress):
+   - A: easy formats FFmpeg already has (ALAC, AAC, AC3, E-AC3, MP2, CAF, MKA, TS, MPG, 3GP, FLV, animated WebP, APNG, BMP, TIFF, still GIF, ICO, frames from videos);
+   - B: tags and cover art in more containers, EXIF kept in JPG/WebP/AVIF (with a "remove location" option), JPEG XL where the engine has libjxl, SVG input with resvg (no RAW);
+   - C: PDF in pure Rust (hayro, lopdf, pdf-writer): pictures → PDF, PDF → pictures, merge; split/rotate/reorder only after a further OK.
 2. Finish the macOS/Linux rollout (see Current status), and macOS window vibrancy (needs `macOSPrivateApi`).
 3. Hardware encoders NVENC/QSV/AMF/h264_mf/VideoToolbox, with automatic detection.
 4. FFmpeg built without any network support on Windows and Linux (macOS already is).
 5. Code signing of the Windows installer; Developer ID signing + notarization on macOS (add the `APPLE_*` secrets, the workflow is ready).
-6. Maybe: keep EXIF in JPG/WebP/AVIF too (FFmpeg does not write it: it would have to be copied by hand, with the orientation reset).
 
 ## Workflow for every feature
 1. Short plan for the owner.

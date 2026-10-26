@@ -448,6 +448,39 @@ async fn advanced_options_are_applied() {
 }
 
 #[tokio::test]
+async fn sideways_phone_videos_are_resized_without_stretching() {
+    let bins = engine();
+    let tmp = TempDir::new("rotated");
+    let landscape = sample_mp4(&bins, &tmp);
+    // Same 320×240 frames, displayed as a 240×320 portrait video (like phones do).
+    let input = tmp.path("Verticale.mp4");
+    generate(
+        &bins,
+        &[
+            "-display_rotation",
+            "90",
+            "-i",
+            landscape.to_str().unwrap(),
+            "-c",
+            "copy",
+        ],
+        &input,
+    );
+    let media = probe(&bins, &input).await.unwrap();
+    assert_eq!(size_of(&media), (Some(240), Some(320)));
+
+    let mut request = req(TargetFormat::Mp4, QualityPreset::Balanced);
+    request.advanced.max_height = Some(120);
+    let (_, out) = convert(&bins, &tmp, &input, request).await;
+    assert_eq!(size_of(&out), (Some(90), Some(120)));
+
+    let mut request = req(TargetFormat::Gif, QualityPreset::Small);
+    request.advanced.max_height = Some(160);
+    let (_, gif) = convert(&bins, &tmp, &input, request).await;
+    assert_eq!(size_of(&gif), (Some(120), Some(160)));
+}
+
+#[tokio::test]
 async fn high_resolution_audio_keeps_24_bit_and_pcm_estimate_is_exact() {
     let bins = engine();
     let tmp = TempDir::new("hires");

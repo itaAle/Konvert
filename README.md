@@ -45,6 +45,7 @@ Konvert only offers the conversions that make sense for the file you give it:
   and when cover art, subtitles or extra audio tracks are dropped.
 - Metadata and cover art are kept where the format allows it (MP3, M4A, FLAC).
 - H.264 video with OpenH264, VP9 for WebM, AV1 (SVT-AV1) among the advanced options.
+- Videos recorded with the phone upright keep their proportions when they are resized.
 
 Pictures:
 
@@ -212,9 +213,6 @@ Every dependency and its license is listed in
 
 Ideas collected for upcoming updates:
 
-- **Bug fix: portrait videos.** Videos recorded with the phone upright come out stretched
-  when Konvert resizes them (GIF, or **Maximum resolution** under **Advanced**): the new
-  size is computed without the rotation stored in the video.
 - **Hardware-accelerated** video (NVIDIA NVENC, Intel Quick Sync, AMD AMF, Apple
   VideoToolbox), with automatic detection.
 - FFmpeg built **without any network support** on Windows and Linux too (today the network
