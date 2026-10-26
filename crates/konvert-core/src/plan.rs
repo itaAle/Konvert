@@ -126,7 +126,25 @@ pub struct ImagePlan {
     pub grid_group: Option<u32>,
     /// Separate transparency plane to merge back (AVIF).
     pub alpha_stream: Option<u32>,
+    /// Pictures of a Windows icon, largest last (ICO only).
+    #[serde(default)]
+    pub icons: Vec<IconFrame>,
 }
+
+/// One picture of a Windows icon: the source fitted into a transparent square.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct IconFrame {
+    /// Side of the square.
+    pub size: u32,
+    /// Size of the picture inside the square.
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Standard sizes of a Windows icon.
+pub const ICON_SIZES: [u32; 4] = [16, 32, 48, 256];
 
 /// Quality setting of a picture encoder.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
@@ -137,6 +155,8 @@ pub enum ImageQuality {
     Lossy { quality: u8 },
     /// Every pixel is kept; `effort` (PNG 0–9, WebP 0–6) only trades speed for size.
     Lossless { effort: u8 },
+    /// GIF: optimized 256-color palette.
+    Palette,
 }
 
 /// Things the user should know before converting. Ordered by importance.
@@ -158,6 +178,10 @@ pub enum ConversionWarning {
     TransparencyLost,
     /// The picture is larger than the format allows: it is scaled down.
     PictureDownscaled,
+    /// GIF picture: at most 256 colors.
+    FewColors,
+    /// Icon from a picture that is not square: centered on a transparent square.
+    PaddedToSquare,
     /// The output format has no audio: the soundtrack is not kept.
     AudioDropped,
     /// The output format cannot store the cover picture.
@@ -308,6 +332,11 @@ fn plan_picture(
         (ImageCodec::Png, _) => ImageQuality::Lossless {
             effort: pick(preset, 6, 6, 9),
         },
+        // Icons are tiny: always the best PNG compression.
+        (ImageCodec::Ico, _) => ImageQuality::Lossless { effort: 9 },
+        // Nothing to tune: BMP is uncompressed, TIFF uses Deflate.
+        (ImageCodec::Bmp | ImageCodec::Tiff, _) => ImageQuality::Lossless { effort: 0 },
+        (ImageCodec::Gif, _) => ImageQuality::Palette,
         // From a lossless source, the best WebP keeps every pixel.
         (ImageCodec::Webp, None) if preset == QualityPreset::Max && source_lossless => {
             ImageQuality::Lossless { effort: 4 }
@@ -326,9 +355,18 @@ fn plan_picture(
     };
 
     let wanted = adv.max_dimension.filter(|d| *d > 0);
-    let limit = [wanted, codec.max_dimension()].into_iter().flatten().min();
     let source_size = src.width.zip(src.height).filter(|(w, h)| *w > 0 && *h > 0);
-    let size = source_size.map(|(w, h)| fit_within(w, h, limit));
+    let icons = match (codec, source_size) {
+        (ImageCodec::Ico, Some((w, h))) => icon_frames(w, h, wanted),
+        _ => Vec::new(),
+    };
+    let size = match icons.last() {
+        Some(largest) => Some((largest.size, largest.size)),
+        None => {
+            let limit = [wanted, codec.max_dimension()].into_iter().flatten().min();
+            source_size.map(|(w, h)| fit_within(w, h, limit))
+        }
+    };
     let resize = size.is_some() && size != source_size;
 
     let image = ImagePlan {
@@ -337,10 +375,11 @@ fn plan_picture(
         width: size.map(|s| s.0),
         height: size.map(|s| s.1),
         resize,
-        alpha: picture.alpha && codec.supports_alpha(),
+        alpha: (picture.alpha || !icons.is_empty()) && codec.supports_alpha(),
         flatten: picture.alpha && !codec.supports_alpha(),
         grid_group: picture.grid_group,
         alpha_stream: picture.alpha_stream,
+        icons,
     };
 
     let mut warnings = Vec::new();
@@ -356,8 +395,15 @@ fn plan_picture(
     }
     let longest = source_size.map_or(0, |(w, h)| w.max(h));
     let format_limit = codec.max_dimension().filter(|max| longest > *max);
-    if format_limit.is_some_and(|max| wanted.is_none_or(|w| w > max)) {
+    // An icon is small by nature: nothing to tell.
+    if codec != ImageCodec::Ico && format_limit.is_some_and(|max| wanted.is_none_or(|w| w > max)) {
         warnings.push(W::PictureDownscaled);
+    }
+    if codec == ImageCodec::Gif {
+        warnings.push(W::FewColors);
+    }
+    if codec == ImageCodec::Ico && source_size.is_some_and(|(w, h)| w != h) {
+        warnings.push(W::PaddedToSquare);
     }
     // FFmpeg carries EXIF data over only from JPEG/PNG/WebP files into PNG.
     if picture.exif && (codec != ImageCodec::Png || media.is_heif()) {
@@ -378,6 +424,30 @@ fn plan_picture(
     };
     plan.estimate = estimate_size(media, &plan);
     Ok(plan)
+}
+
+/// Pictures of a Windows icon: the standard sizes up to the picture's own
+/// size (never upscaled) and the requested maximum, at least the smallest one.
+fn icon_frames(width: u32, height: u32, max: Option<u32>) -> Vec<IconFrame> {
+    let longest = width.max(height);
+    let mut sizes: Vec<u32> = ICON_SIZES
+        .into_iter()
+        .filter(|s| *s <= longest && max.is_none_or(|m| *s <= m))
+        .collect();
+    if sizes.is_empty() {
+        sizes.push(ICON_SIZES[0]);
+    }
+    sizes
+        .into_iter()
+        .map(|size| {
+            let (w, h) = fit_within(width, height, Some(size));
+            IconFrame {
+                size,
+                width: w,
+                height: h,
+            }
+        })
+        .collect()
 }
 
 /// Scales `width`×`height` so that the longest side is at most `limit`
@@ -1328,6 +1398,100 @@ mod tests {
             "pano.jpg",
         );
         assert!(!image_plan(&p).resize);
+    }
+
+    #[test]
+    fn icons_get_every_standard_size_up_to_the_picture() {
+        let p = plan(
+            &photo(),
+            &req(TargetFormat::Ico, QualityPreset::Balanced),
+            "a.jpg",
+        );
+        let image = image_plan(&p);
+        let sizes: Vec<u32> = image.icons.iter().map(|i| i.size).collect();
+        assert_eq!(sizes, ICON_SIZES);
+        // 4032×3024 fitted into 256×256: 256×192, centered on transparency.
+        assert_eq!(
+            image.icons[3],
+            IconFrame {
+                size: 256,
+                width: 256,
+                height: 192
+            }
+        );
+        assert_eq!(
+            (image.width, image.height, image.alpha),
+            (Some(256), Some(256), true)
+        );
+        assert_eq!(image.quality, ImageQuality::Lossless { effort: 9 });
+        assert!(p.warnings.contains(&W::PaddedToSquare));
+        assert!(!p.warnings.contains(&W::PictureDownscaled));
+
+        // A 40 px square logo is never upscaled: 16 and 32 px only.
+        let logo = picture("png", "png_pipe", (40, 40), "rgba", false);
+        let p = plan(
+            &logo,
+            &req(TargetFormat::Ico, QualityPreset::Max),
+            "logo.png",
+        );
+        let image = image_plan(&p);
+        let sizes: Vec<u32> = image.icons.iter().map(|i| i.size).collect();
+        assert_eq!(sizes, [16, 32]);
+        assert!(p.warnings.is_empty());
+        // A tiny picture still gets the smallest size.
+        let dot = picture("png", "png_pipe", (8, 4), "rgba", false);
+        let p = plan(&dot, &req(TargetFormat::Ico, QualityPreset::Max), "dot.png");
+        assert_eq!(
+            image_plan(&p).icons,
+            [IconFrame {
+                size: 16,
+                width: 8,
+                height: 4
+            }]
+        );
+    }
+
+    #[test]
+    fn bmp_tiff_and_still_gif() {
+        let bmp = plan(
+            &transparent_png(),
+            &req(TargetFormat::Bmp, QualityPreset::Small),
+            "a.png",
+        );
+        let image = image_plan(&bmp);
+        assert!(image.flatten && !image.alpha);
+        assert_eq!(bmp.warnings, [W::TransparencyLost]);
+        // 800 × 600 × 3 bytes + header: exact.
+        assert_eq!(
+            bmp.estimate,
+            Some(SizeEstimate {
+                bytes: 1_440_054,
+                approximate: false
+            })
+        );
+
+        let tiff = plan(
+            &transparent_png(),
+            &req(TargetFormat::Tiff, QualityPreset::Max),
+            "a.png",
+        );
+        assert!(image_plan(&tiff).alpha && tiff.warnings.is_empty());
+        let tiff = plan(
+            &photo(),
+            &req(TargetFormat::Tiff, QualityPreset::Max),
+            "a.jpg",
+        );
+        assert_eq!(tiff.warnings, [W::LossyToLossless, W::MetadataDropped]);
+
+        let gif = plan(
+            &transparent_png(),
+            &req(TargetFormat::StillGif, QualityPreset::Max),
+            "a.png",
+        );
+        let image = image_plan(&gif);
+        assert_eq!(image.quality, ImageQuality::Palette);
+        assert!(image.alpha);
+        assert_eq!(gif.warnings, [W::LosslessToLossy, W::FewColors]);
     }
 
     #[test]

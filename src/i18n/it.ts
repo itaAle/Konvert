@@ -109,6 +109,8 @@ export const it = {
     transparencyLost:
       "Questo formato non supporta la trasparenza: le eventuali parti trasparenti diventeranno bianche.",
     pictureDownscaled: "L'immagine supera le dimensioni massime di questo formato: verrà ridotta.",
+    fewColors: "Le GIF hanno al massimo 256 colori: foto e sfumature perdono qualità.",
+    paddedToSquare: "Le icone sono quadrate: l'immagine verrà centrata su uno sfondo trasparente.",
     metadataDropped: "I dati EXIF della foto (fotocamera, data, posizione) non verranno conservati.",
   },
   actions: {

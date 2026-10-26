@@ -192,6 +192,7 @@ export const mockBackend: Backend = {
           flatten: false,
           gridGroup: media.picture?.gridGroup ?? null,
           alphaStream: null,
+          icons: [],
         },
         warnings: [png ? "lossyToLossless" : "lossyReencode", ...(png ? [] : (["metadataDropped"] as const))],
         estimate: { bytes: Math.round((media.sizeBytes ?? 0) * (png ? 6 : quality / 100)), approximate: true },

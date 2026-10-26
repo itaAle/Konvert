@@ -106,6 +106,8 @@ export const en: Messages = {
     channelsDownmixed: "This format supports at most two channels: the audio will be downmixed to stereo.",
     transparencyLost: "This format has no transparency: any transparent areas will become white.",
     pictureDownscaled: "The picture is larger than this format allows: it will be scaled down.",
+    fewColors: "GIF pictures have at most 256 colors: photos and gradients lose quality.",
+    paddedToSquare: "Icons are square: the picture will be centered on a transparent background.",
     metadataDropped: "The photo's EXIF data (camera, date, location) will not be kept.",
   },
   actions: {

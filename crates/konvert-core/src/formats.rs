@@ -65,6 +65,11 @@ pub enum TargetFormat {
     Png,
     Webp,
     Avif,
+    Bmp,
+    Tiff,
+    StillGif,
+    /// Windows icon (16, 32, 48 and 256 px).
+    Ico,
 }
 
 impl TargetFormat {
@@ -176,22 +181,36 @@ pub enum ImageCodec {
     Webp,
     /// AVIF: an AV1 still picture (libaom)
     Avif,
+    /// Uncompressed 24-bit BMP (FFmpeg native encoder)
+    Bmp,
+    /// Deflate-compressed TIFF (FFmpeg native encoder)
+    Tiff,
+    /// Still GIF with an optimized 256-color palette
+    Gif,
+    /// Windows icon: PNG pictures of several sizes in one file
+    Ico,
 }
 
 impl ImageCodec {
     /// `true` for codecs that always keep every pixel.
     pub fn is_lossless(self) -> bool {
-        self == ImageCodec::Png
+        matches!(
+            self,
+            ImageCodec::Png | ImageCodec::Bmp | ImageCodec::Tiff | ImageCodec::Ico
+        )
     }
 
     /// The format can store transparency.
     pub fn supports_alpha(self) -> bool {
-        self != ImageCodec::Jpeg
+        !matches!(self, ImageCodec::Jpeg | ImageCodec::Bmp)
     }
 
     /// Largest width or height the format can store (`None`: no practical limit).
     pub fn max_dimension(self) -> Option<u32> {
         match self {
+            ImageCodec::Gif => Some(65_535),
+            ImageCodec::Ico => Some(256),
+            ImageCodec::Bmp | ImageCodec::Tiff => None,
             ImageCodec::Jpeg => Some(65_535),
             ImageCodec::Webp => Some(16_383),
             ImageCodec::Avif => Some(65_536),
@@ -809,6 +828,51 @@ pub static FORMATS: &[FormatSpec] = &[
         image_codec: Some(ImageCodec::Avif),
         ..SPEC
     },
+    FormatSpec {
+        format: TargetFormat::Bmp,
+        label: "BMP",
+        extension: "bmp",
+        input_extensions: &["bmp"],
+        muxer: "image2pipe",
+        kind: FormatKind::Image,
+        image_codec: Some(ImageCodec::Bmp),
+        secondary: true,
+        ..SPEC
+    },
+    FormatSpec {
+        format: TargetFormat::Tiff,
+        label: "TIFF",
+        extension: "tiff",
+        input_extensions: &["tif", "tiff"],
+        muxer: "image2pipe",
+        kind: FormatKind::Image,
+        image_codec: Some(ImageCodec::Tiff),
+        secondary: true,
+        ..SPEC
+    },
+    FormatSpec {
+        format: TargetFormat::StillGif,
+        label: "GIF",
+        extension: "gif",
+        // GIF files are always read as animations (see `probe.rs`).
+        input_extensions: &["gif"],
+        muxer: "gif",
+        kind: FormatKind::Image,
+        image_codec: Some(ImageCodec::Gif),
+        secondary: true,
+        ..SPEC
+    },
+    FormatSpec {
+        format: TargetFormat::Ico,
+        label: "ICO",
+        extension: "ico",
+        input_extensions: &["ico"],
+        muxer: "ico",
+        kind: FormatKind::Image,
+        image_codec: Some(ImageCodec::Ico),
+        secondary: true,
+        ..SPEC
+    },
 ];
 
 /// Catalog entry of a format.
@@ -857,6 +921,10 @@ const IMAGE_TARGETS: &[TargetFormat] = &[
     TargetFormat::Png,
     TargetFormat::Webp,
     TargetFormat::Avif,
+    TargetFormat::Bmp,
+    TargetFormat::Tiff,
+    TargetFormat::StillGif,
+    TargetFormat::Ico,
 ];
 
 /// What Konvert proposes for one kind of input.
@@ -1122,6 +1190,10 @@ mod tests {
         TargetFormat::Png,
         TargetFormat::Webp,
         TargetFormat::Avif,
+        TargetFormat::Bmp,
+        TargetFormat::Tiff,
+        TargetFormat::StillGif,
+        TargetFormat::Ico,
     ];
 
     fn media(json: &str) -> MediaInfo {
@@ -1219,18 +1291,24 @@ mod tests {
                 TargetFormat::Jpg,
                 TargetFormat::Png,
                 TargetFormat::Webp,
-                TargetFormat::Avif
+                TargetFormat::Avif,
+                TargetFormat::Bmp,
+                TargetFormat::Tiff,
+                TargetFormat::StillGif,
+                TargetFormat::Ico,
             ]
         );
         // JPG → JPG is offered (to make the file lighter), flagged as the same format.
         assert!(options[0].same_as_input && !options[0].lossless);
         assert!(options[1].lossless);
 
-        // PNG → PNG gains nothing; BMP/HEIC have no output format of their own.
+        // PNG → PNG and BMP → BMP gain nothing; HEIC has no output format of its own.
         let png = available_targets(&picture("png", "png_pipe"), Path::new("a.png"));
         assert!(!formats(&png).contains(&TargetFormat::Png));
         let bmp = available_targets(&picture("bmp", "bmp_pipe"), Path::new("a.bmp"));
-        assert_eq!(bmp.len(), IMAGE_TARGETS.len());
+        assert!(!formats(&bmp).contains(&TargetFormat::Bmp));
+        let heic = available_targets(&picture("hevc", "image2"), Path::new("a.heic"));
+        assert_eq!(heic.len(), IMAGE_TARGETS.len());
 
         // Pictures never reach audio or video formats, and vice versa.
         assert!(!is_offered(

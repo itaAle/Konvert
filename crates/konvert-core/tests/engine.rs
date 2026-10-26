@@ -726,10 +726,28 @@ fn size_of(info: &MediaInfo) -> (Option<u32>, Option<u32>) {
 fn picture_codec(target: TargetFormat) -> &'static str {
     match target {
         TargetFormat::Jpg => "mjpeg",
-        TargetFormat::Png => "png",
+        TargetFormat::Png | TargetFormat::Ico => "png",
         TargetFormat::Webp => "webp",
         TargetFormat::Avif => "av1",
+        TargetFormat::Bmp => "bmp",
+        TargetFormat::Tiff => "tiff",
+        TargetFormat::StillGif => "gif",
         other => panic!("{other:?} is not a picture format"),
+    }
+}
+
+/// Size of the converted picture: the same, except icons (largest standard
+/// size that fits, square).
+fn expected_size(target: TargetFormat, (width, height): (u32, u32)) -> (Option<u32>, Option<u32>) {
+    if target == TargetFormat::Ico {
+        let side = [16, 32, 48, 256]
+            .into_iter()
+            .filter(|s| *s <= width.max(height))
+            .max()
+            .unwrap();
+        (Some(side), Some(side))
+    } else {
+        (Some(width), Some(height))
     }
 }
 
@@ -805,17 +823,97 @@ async fn every_picture_format_from_every_picture_input() {
             let request = req(target.format, QualityPreset::Balanced);
             let (outcome, out) = convert(&bins, &tmp, input, request).await;
             let what = format!("{input:?} → {:?}", target.format);
-            assert_eq!(out.kind, MediaKind::Image, "{what}");
+            // GIF files are always read back as (one-frame) animations.
+            let kind = if target.format == TargetFormat::StillGif {
+                MediaKind::Video
+            } else {
+                MediaKind::Image
+            };
+            assert_eq!(out.kind, kind, "{what}");
             assert_eq!(
                 out.primary_video().unwrap().codec,
                 picture_codec(target.format),
                 "{what}"
             );
-            assert_eq!(size_of(&out), (Some(*width), Some(*height)), "{what}");
+            assert_eq!(
+                size_of(&out),
+                expected_size(target.format, (*width, *height)),
+                "{what}"
+            );
             assert!(outcome.size_bytes > 0, "{what}");
             std::fs::remove_file(&outcome.output).unwrap();
         }
     }
+}
+
+#[tokio::test]
+async fn icons_hold_every_size_and_can_be_converted_back() {
+    let bins = engine();
+    let tmp = TempDir::new("icons");
+    // 400×300 landscape picture: icons are centered on transparent squares.
+    let input = sample_picture(
+        &bins,
+        &tmp,
+        "Logo.png",
+        &["-vf", "scale=400:300", "-c:v", "png", "-f", "image2pipe"],
+    );
+    let (outcome, icon) = convert(
+        &bins,
+        &tmp,
+        &input,
+        req(TargetFormat::Ico, QualityPreset::Max),
+    )
+    .await;
+    assert_eq!(icon.container, "ico");
+    assert_eq!(icon.kind, MediaKind::Image);
+    assert_eq!(size_of(&icon), (Some(256), Some(256)));
+    let sizes = Command::new(&bins.ffprobe)
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=width",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(&outcome.output)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&sizes.stdout)
+            .split_whitespace()
+            .collect::<Vec<_>>(),
+        ["16", "32", "48", "256"]
+    );
+    // Above and below the 256×192 picture: transparent; inside: opaque.
+    let largest = |y| {
+        let out = Command::new(&bins.ffmpeg)
+            .args(["-v", "error", "-i"])
+            .arg(&outcome.output)
+            .args([
+                "-map",
+                "0:3",
+                "-vf",
+                &format!("format=rgba,crop=1:1:128:{y}"),
+                "-f",
+                "rawvideo",
+                "-",
+            ])
+            .output()
+            .unwrap();
+        out.stdout[3]
+    };
+    assert_eq!((largest(5), largest(128), largest(250)), (0, 255, 0));
+
+    // An icon file is read as a picture (its largest size) and converts back.
+    let (_, png) = convert(
+        &bins,
+        &tmp,
+        &outcome.output,
+        req(TargetFormat::Png, QualityPreset::Max),
+    )
+    .await;
+    assert_eq!(size_of(&png), (Some(256), Some(256)));
 }
 
 #[tokio::test]

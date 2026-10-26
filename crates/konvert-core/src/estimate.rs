@@ -153,8 +153,32 @@ fn video_kbps(media: &MediaInfo, video: &VideoPlan, audio_kbps: f64) -> Option<(
 /// (for a photo), corrected by how compressible the source looks. Always
 /// approximate: the size depends a lot on the content.
 fn estimate_picture(media: &MediaInfo, image: &ImagePlan) -> Option<SizeEstimate> {
+    if !image.icons.is_empty() {
+        // Small PNG pictures (about 2 bytes per pixel) plus the icon directory.
+        let pixels: f64 = image.icons.iter().map(|i| (i.size * i.size) as f64).sum();
+        return Some(SizeEstimate {
+            bytes: (pixels * 2.0) as u64 + 22 + 16 * image.icons.len() as u64,
+            approximate: true,
+        });
+    }
     let pixels = image.width? as f64 * image.height? as f64;
+    if image.codec == ImageCodec::Bmp {
+        // Uncompressed: 3 bytes per pixel, rows padded to 4 bytes, 54-byte header.
+        let row = (image.width? as u64 * 3).div_ceil(4) * 4;
+        return Some(SizeEstimate {
+            bytes: row * image.height? as u64 + 54,
+            approximate: false,
+        });
+    }
     let bits_per_pixel = match (image.codec, image.quality) {
+        (ImageCodec::Tiff, _) => {
+            if image.alpha {
+                18.0
+            } else {
+                14.0
+            }
+        }
+        (_, ImageQuality::Palette) => 6.0,
         (ImageCodec::Png, _) => {
             if image.alpha {
                 16.0

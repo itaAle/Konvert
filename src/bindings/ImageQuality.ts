@@ -3,4 +3,4 @@
 /**
  * Quality setting of a picture encoder.
  */
-export type ImageQuality = { "kind": "lossy", quality: number, } | { "kind": "lossless", effort: number, };
+export type ImageQuality = { "kind": "lossy", quality: number, } | { "kind": "lossless", effort: number, } | { "kind": "palette" };

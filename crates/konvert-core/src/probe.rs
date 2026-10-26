@@ -141,13 +141,15 @@ pub async fn probe(bins: &Binaries, input: &Path) -> Result<MediaInfo, CoreError
     let mut info = parse_ffprobe_json(&json)?;
     if info.kind == MediaKind::Image && !info.is_heif() {
         // EXIF orientation and data are only visible on the decoded picture
-        // (HEIF/AVIF files declare them in the container instead).
+        // (HEIF/AVIF files declare them in the container instead). Icons hold
+        // several pictures: look at the one chosen as the main picture.
+        let stream = info.video.first().map_or(0, |v| v.index).to_string();
         let json = run_ffprobe(
             bins,
             input,
             &[
                 "-select_streams",
-                "v:0",
+                &stream,
                 "-read_intervals",
                 "%+#1",
                 "-show_entries",
@@ -275,7 +277,7 @@ const PICTURE_BRANDS: &[&str] = &["avif", "heic", "heix", "heim", "heis", "mif1"
 /// A single picture: image demuxers (JPEG, PNG, WebP, BMP, TIFF, ...) and
 /// HEIF/AVIF files. Animated GIF, APNG and WebP stay videos.
 fn is_still_picture(container: &str, brand: &str, video: &[VideoStream]) -> bool {
-    let image_demuxer = container == "image2" || container.ends_with("_pipe");
+    let image_demuxer = matches!(container, "image2" | "ico") || container.ends_with("_pipe");
     let heif = container.starts_with("mov,") && PICTURE_BRANDS.contains(&brand);
     let animated = video
         .iter()
@@ -325,12 +327,23 @@ fn parse_picture(
             (first_tile, component.width, component.height, side_data)
         }
         None => {
-            let main = streams
-                .iter()
-                .copied()
-                .find(|s| s.is_default() && !s.is_dependent())
-                .or(streams.first().copied())
-                .ok_or(CoreError::NotMedia)?;
+            let largest = || {
+                streams
+                    .iter()
+                    .copied()
+                    .max_by_key(|s| s.width.unwrap_or(0) as u64 * s.height.unwrap_or(0) as u64)
+            };
+            let main = if container == "ico" {
+                // An icon holds the same picture in several sizes.
+                largest()
+            } else {
+                streams
+                    .iter()
+                    .copied()
+                    .find(|s| s.is_default() && !s.is_dependent())
+                    .or(streams.first().copied())
+            }
+            .ok_or(CoreError::NotMedia)?;
             // A grayscale twin of the picture is its transparency plane (AVIF).
             picture.alpha_stream = streams
                 .iter()

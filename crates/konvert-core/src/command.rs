@@ -146,6 +146,9 @@ fn picture_args(a: &mut Args, image: &ImagePlan, index: u32) {
         ),
         (None, None) => (format!("[0:{index}]"), Vec::new()),
     };
+    if !image.icons.is_empty() {
+        return icon_args(a, image, &inputs, steps);
+    }
     if let (true, Some(w), Some(h)) = (image.resize, image.width, image.height) {
         steps.push(format!("scale={w}:{h}:flags=lanczos"));
     }
@@ -166,6 +169,18 @@ fn picture_args(a: &mut Args, image: &ImagePlan, index: u32) {
         );
     } else if image.codec == ImageCodec::Avif {
         steps.push("format=yuv420p".to_owned());
+    }
+    if image.codec == ImageCodec::Gif {
+        // One palette for this picture; a transparent entry only if needed.
+        let (reserve, threshold) = if image.alpha {
+            (1, ":alpha_threshold=128")
+        } else {
+            (0, "")
+        };
+        steps.push(format!(
+            "split[g0][g1];[g0]palettegen=reserve_transparent={reserve}:stats_mode=single[p];\
+             [g1][p]paletteuse{threshold}"
+        ));
     }
     if steps.is_empty() {
         steps.push("null".to_owned());
@@ -234,8 +249,44 @@ fn picture_args(a: &mut Args, image: &ImagePlan, index: u32) {
                 "0",
             ]);
         }
+        (ImageCodec::Bmp, _) => a.push(&["-c:v", "bmp", "-pix_fmt", "bgr24"]),
+        (ImageCodec::Tiff, _) => {
+            let pix_fmt = if image.alpha { "rgba" } else { "rgb24" };
+            a.push(&[
+                "-c:v",
+                "tiff",
+                "-compression_algo",
+                "deflate",
+                "-pix_fmt",
+                pix_fmt,
+            ]);
+        }
+        (ImageCodec::Gif, _) => a.push(&["-c:v", "gif"]),
         (codec, quality) => unreachable!("invalid plan: {codec:?} with {quality:?}"),
     }
+}
+
+/// Windows icon: one PNG picture per size, each fitted into a transparent
+/// square, all in one `.ico` file.
+fn icon_args(a: &mut Args, image: &ImagePlan, inputs: &str, mut steps: Vec<String>) {
+    let count = image.icons.len();
+    steps.push("format=rgba".to_owned());
+    let branches: String = (0..count).map(|i| format!("[i{i}]")).collect();
+    let mut graph = format!("{inputs}{},split={count}{branches}", steps.join(","));
+    for (i, icon) in image.icons.iter().enumerate() {
+        let (x, y) = ((icon.size - icon.width) / 2, (icon.size - icon.height) / 2);
+        graph.push_str(&format!(
+            ";[i{i}]scale={}:{}:flags=lanczos,pad={s}:{s}:{x}:{y}:color=black@0[s{i}]",
+            icon.width,
+            icon.height,
+            s = icon.size
+        ));
+    }
+    a.push(&["-filter_complex", &graph]);
+    for i in 0..count {
+        a.push(&["-map", &format!("[s{i}]")]);
+    }
+    a.push(&["-frames:v", "1", "-c:v", "png", "-compression_level", "9"]);
 }
 
 /// FFmpeg's JPEG quantizer scale (2 = best … 31) for a quality from 1 to 100.
@@ -817,6 +868,36 @@ mod tests {
         );
         let (args, _) = picture_body(&avif, &req(TargetFormat::Png, QualityPreset::Balanced), "a.avif");
         assert_eq!(&args[..4], ["-filter_complex", "[0:0][0:1]alphamerge[img]", "-map", "[img]"]);
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn icons_bmp_tiff_and_still_gif() {
+        let (args, muxer) = picture_body(&jpeg(), &req(TargetFormat::Ico, QualityPreset::Balanced), "a.jpg");
+        assert_eq!(muxer, "ico");
+        assert_eq!(args, strings(&[
+            "-filter_complex",
+            "[0:0]format=rgba,split=4[i0][i1][i2][i3];\
+             [i0]scale=16:12:flags=lanczos,pad=16:16:0:2:color=black@0[s0];\
+             [i1]scale=32:24:flags=lanczos,pad=32:32:0:4:color=black@0[s1];\
+             [i2]scale=48:36:flags=lanczos,pad=48:48:0:6:color=black@0[s2];\
+             [i3]scale=256:192:flags=lanczos,pad=256:256:0:32:color=black@0[s3]",
+            "-map", "[s0]", "-map", "[s1]", "-map", "[s2]", "-map", "[s3]",
+            "-frames:v", "1", "-c:v", "png", "-compression_level", "9",
+        ]));
+
+        let (args, muxer) = picture_body(&transparent_png(), &req(TargetFormat::StillGif, QualityPreset::Max), "a.png");
+        assert_eq!(muxer, "gif");
+        assert_eq!(&args[..2], ["-filter_complex",
+            "[0:0]split[g0][g1];[g0]palettegen=reserve_transparent=1:stats_mode=single[p];\
+             [g1][p]paletteuse:alpha_threshold=128[img]"]);
+        assert!(args.ends_with(&strings(&["-c:v", "gif"])));
+
+        let (args, _) = picture_body(&transparent_png(), &req(TargetFormat::Bmp, QualityPreset::Max), "a.png");
+        assert!(args[1].contains("drawbox=c=white"));
+        assert!(args.ends_with(&strings(&["-c:v", "bmp", "-pix_fmt", "bgr24"])));
+        let (args, _) = picture_body(&transparent_png(), &req(TargetFormat::Tiff, QualityPreset::Max), "a.png");
+        assert!(args.ends_with(&strings(&["-c:v", "tiff", "-compression_algo", "deflate", "-pix_fmt", "rgba"])));
     }
 
     #[test]
