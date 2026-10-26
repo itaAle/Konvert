@@ -30,6 +30,7 @@ const DESKTOP_TARGETS = [
   "x86_64-pc-windows-msvc",
   "aarch64-pc-windows-msvc",
   "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
   "x86_64-apple-darwin",
   "aarch64-apple-darwin",
 ];
@@ -165,11 +166,14 @@ function checkTauriConfig() {
   if (!["skip", "offlineInstaller"].includes(webview)) {
     fail(`tauri.conf.json: webviewInstallMode "${webview}" downloads WebView2 during installation`);
   }
-  // Tauri's fileAssociations make Konvert the default app; "Open with" is done in the installer hooks.
+  // On Windows Tauri's fileAssociations make Konvert the default app; "Open with" is
+  // done in the installer hooks. macOS and Linux declare theirs in their own config.
   if (conf.bundle?.fileAssociations?.length) {
     fail("tauri.conf.json: fileAssociations would change the user's default apps");
   }
   if (failures.length === before) passed.push("Tauri config: strict CSP, no updater, hardened WebView, offline installer");
+
+  checkPlatformConfigs();
 
   const capDir = join(ROOT, "src-tauri", "capabilities");
   for (const file of readdirSync(capDir).filter((f) => f.endsWith(".json"))) {
@@ -181,6 +185,36 @@ function checkTauriConfig() {
   }
   if (!failures.some((f) => f.startsWith("capabilities/"))) {
     passed.push("Capabilities: only Konvert commands, events, window and dialogs");
+  }
+}
+
+/**
+ * Platform files (tauri.<platform>.conf.json) are merged over tauri.conf.json:
+ * they may change windows and bundles, never the security settings checked above.
+ */
+function checkPlatformConfigs() {
+  const dir = join(ROOT, "src-tauri");
+  const files = readdirSync(dir).filter((f) => /^tauri\.\w+\.conf\.json$/.test(f));
+  const before = failures.length;
+  for (const file of files) {
+    const conf = JSON.parse(readFileSync(join(dir, file), "utf8"));
+    const platform = file.split(".")[1];
+    if (conf.app?.security) fail(`${file}: security settings belong in tauri.conf.json only`);
+    if (conf.plugins?.updater || conf.bundle?.createUpdaterArtifacts) {
+      fail(`${file}: the updater must not be configured`);
+    }
+    if (conf.bundle?.windows) fail(`${file}: Windows bundle settings belong in tauri.conf.json`);
+    const associations = conf.bundle?.fileAssociations ?? [];
+    if (platform === "windows" && associations.length) {
+      fail(`${file}: fileAssociations would change the user's default apps`);
+    }
+    // macOS: "Alternate" lists Konvert in "Open With" without making it the default app.
+    for (const a of platform === "macos" ? associations : []) {
+      if (a.rank !== "Alternate") fail(`${file}: fileAssociations "${a.name}" must have rank "Alternate"`);
+    }
+  }
+  if (files.length && failures.length === before) {
+    passed.push(`Platform configs (${files.join(", ")}): no security override, no updater`);
   }
 }
 

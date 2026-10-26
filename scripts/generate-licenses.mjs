@@ -5,8 +5,8 @@
 //   node scripts/generate-licenses.mjs           write the file
 //   node scripts/generate-licenses.mjs --check   fail if the file is outdated
 //
-// Sources: the Rust runtime dependency graph of the app for Windows
-// (`cargo tree -e normal`), the npm production packages (package-lock.json),
+// Sources: the Rust runtime dependency graph of the app for every shipped
+// platform (`cargo tree -e normal`), the npm production packages (package-lock.json),
 // the npm build tools whose code ends up in the bundle, and FFmpeg (manifest).
 
 import { execFileSync } from "node:child_process";
@@ -16,7 +16,13 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const OUTPUT = join(ROOT, "THIRD_PARTY_LICENSES");
-const TARGET = "x86_64-pc-windows-msvc";
+/** Shipped platforms: Rust target → label shown for crates not used everywhere. */
+const TARGETS = {
+  "x86_64-pc-windows-msvc": "Windows",
+  "aarch64-apple-darwin": "macOS",
+  "x86_64-unknown-linux-gnu": "Linux",
+  "aarch64-unknown-linux-gnu": "Linux",
+};
 /** Build tools whose output is part of the shipped frontend bundle. */
 const BUNDLED_BUILD_TOOLS = ["tailwindcss", "vite"];
 const LICENSE_FILE = /^(licen[cs]e|copying|notice|unlicense)([-._].*)?$/i;
@@ -35,26 +41,32 @@ function licenseTexts(dir) {
 // --- Rust ------------------------------------------------------------------------
 function rustPackages() {
   const metadata = JSON.parse(
-    execFileSync("cargo", ["metadata", "--format-version", "1", "--filter-platform", TARGET], {
+    execFileSync("cargo", ["metadata", "--format-version", "1"], {
       cwd: ROOT,
       encoding: "utf8",
       maxBuffer: 256 * 1024 * 1024,
     }),
   );
   const byNameVersion = new Map(metadata.packages.map((p) => [`${p.name} ${p.version}`, p]));
-  const tree = execFileSync(
-    "cargo",
-    ["tree", "-q", "-p", "konvert", "-e", "normal,no-proc-macro", "--target", TARGET, "--prefix", "none", "--format", "{p}"],
-    { cwd: ROOT, encoding: "utf8" },
-  );
-  const seen = new Set();
+  /** "name version" → platforms whose build contains the crate. */
+  const platforms = new Map();
+  for (const [target, label] of Object.entries(TARGETS)) {
+    const tree = execFileSync(
+      "cargo",
+      ["tree", "-q", "-p", "konvert", "-e", "normal,no-proc-macro", "--target", target, "--prefix", "none", "--format", "{p}"],
+      { cwd: ROOT, encoding: "utf8" },
+    );
+    for (const line of tree.split(/\r?\n/)) {
+      const [name, v] = line.trim().split(" ");
+      if (!name || !v) continue;
+      const key = `${name} ${v.replace(/^v/, "")}`;
+      if (!platforms.has(key)) platforms.set(key, new Set());
+      platforms.get(key).add(label);
+    }
+  }
+  const platformCount = new Set(Object.values(TARGETS)).size;
   const packages = [];
-  for (const line of tree.split(/\r?\n/)) {
-    const [name, v] = line.trim().split(" ");
-    if (!name || !v) continue;
-    const key = `${name} ${v.replace(/^v/, "")}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+  for (const [key, labels] of platforms) {
     const meta = byNameVersion.get(key);
     // Konvert's own crates are covered by LICENSE.
     if (!meta || meta.source == null) continue;
@@ -64,9 +76,10 @@ function rustPackages() {
       license: meta.license ?? (meta.license_file ? "see license file" : "unknown"),
       repository: meta.repository ?? "",
       texts: licenseTexts(dirname(meta.manifest_path)),
+      note: labels.size < platformCount ? `${[...labels].sort().join(", ")} only` : "",
     });
   }
-  return packages.sort((a, b) => a.name.localeCompare(b.name));
+  return packages.sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
 }
 
 // --- npm -------------------------------------------------------------------------
@@ -131,19 +144,24 @@ scripts/monitor-network.ps1 shows that the running app opens no socket. See the
 1. FFmpeg
 ${rule}
 
-Files:      ffmpeg/ffmpeg.exe, ffmpeg/ffprobe.exe and the libav*/libsw* DLLs
+Files:      in the "ffmpeg" folder: ffmpeg and ffprobe (ffmpeg.exe,
+            ffprobe.exe and the libav*/libsw* DLLs on Windows)
 License:    GNU Lesser General Public License, version 3 or later
             (${ffmpeg.license}); full text in ffmpeg/LICENSE.txt
 Version:    ${ffmpeg.ffmpegVersion}
-Build:      BtbN FFmpeg-Builds, variant win64-lgpl-shared
+Builds:     Windows and Linux: BtbN FFmpeg-Builds, variants win64-lgpl-shared,
+            linux64-lgpl and linuxarm64-lgpl
             ${ffmpeg.source.release}
+            macOS (Apple Silicon): built by scripts/build-ffmpeg-macos.sh of the
+            Konvert repository, with the same library versions and without
+            any network protocol (--disable-network)
 Website:    https://ffmpeg.org/
 
 How Konvert uses FFmpeg
     FFmpeg runs as a separate program (child process); Konvert does not link
     to it. The files are installed unmodified in the "ffmpeg" folder of the
-    installation directory and can be replaced with any compatible build
-    (same file names), as the LGPL allows.
+    application and can be replaced with any compatible build (same file
+    names), as the LGPL allows.
 
 Build configuration
     Configured without --enable-gpl and without --enable-nonfree: no GPL-only
@@ -152,13 +170,15 @@ Build configuration
     \`ffmpeg -version\` prints the exact configuration. Libraries relevant to
     Konvert, each under its own LGPL-compatible license: LAME (MP3, LGPL),
     libopus (BSD), libvorbis (BSD), libvpx (BSD), SVT-AV1 (BSD-3-Clause-Clear),
-    OpenH264 (BSD-2-Clause), libaom (BSD-2-Clause), dav1d (BSD-2-Clause).
+    OpenH264 (BSD-2-Clause), libaom (BSD-2-Clause), dav1d (BSD-2-Clause),
+    libwebp (BSD-3-Clause), kvazaar (BSD-3-Clause).
 
 Corresponding source code
     - FFmpeg at the exact commit: ${ffmpeg.source.ffmpegCommit}
     - Build recipe pinning every library version and the configure flags:
-      ${ffmpeg.source.buildRecipe}
-    - Copy of the binaries and of both source archives in the Konvert
+      ${ffmpeg.source.buildRecipe} (Windows, Linux) and
+      scripts/build-ffmpeg-macos.sh (macOS)
+    - Copy of the binaries and of the source archives in the Konvert
       repository: ${ffmpeg.source.mirror}
     - The archive and its SHA-256 are pinned in scripts/ffmpeg-manifest.json
       of the Konvert repository (https://github.com/itaAle/Konvert).
@@ -181,12 +201,22 @@ Inter (font, bundled in the app)      SIL Open Font License 1.1
     https://rsms.me/inter/ - packaged as @fontsource-variable/inter (below).
 
 Microsoft Edge WebView2 Runtime       Microsoft Software License Terms
-    Part of Windows; used to display the interface, not distributed with
-    Konvert. Konvert starts it with background networking, component
-    updates and SmartScreen lookups disabled.
+    Windows. Part of the system; used to display the interface, not
+    distributed with Konvert. Konvert starts it with background networking,
+    component updates and SmartScreen lookups disabled.
+
+WKWebView (WebKit)                    Part of macOS
+    macOS. Used to display the interface, not distributed with Konvert.
+
+WebKitGTK, GTK, GLib and their dependencies   LGPL-2.1-or-later and others
+    Linux. The .deb and .rpm packages use the copies installed by the
+    distribution. The AppImage contains unmodified, dynamically linked copies
+    taken from Ubuntu 22.04 LTS; their source code is available from the
+    Ubuntu archive (https://packages.ubuntu.com/jammy/) and, on request,
+    through the Konvert repository's issue tracker.
 
 
-3. Rust libraries (${rust.length}, compiled into konvert.exe)
+3. Rust libraries (${rust.length}, compiled into the Konvert executable)
 ${rule}
 
 ${table(rust)}
