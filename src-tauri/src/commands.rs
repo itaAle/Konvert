@@ -359,7 +359,10 @@ mod tests {
                 match platform {
                     // Listed in "Open With", never the default app.
                     "macos" => assert_eq!(a["rank"], "Alternate", "{a}"),
-                    _ => assert!(a["mimeType"].as_str().is_some_and(|m| m.contains('/')), "{a}"),
+                    _ => assert!(
+                        a["mimeType"].as_str().is_some_and(|m| m.contains('/')),
+                        "{a}"
+                    ),
                 }
             }
         }
