@@ -317,3 +317,25 @@ pub async fn pick_files(
             .collect(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::MEDIA_EXTENSIONS;
+
+    #[test]
+    fn open_with_covers_every_file_picker_extension() {
+        let hooks = include_str!("../windows/installer-hooks.nsh");
+        let registered: BTreeSet<&str> = hooks
+            .lines()
+            .filter_map(|l| {
+                l.trim()
+                    .strip_prefix("!insertmacro ${OP} \"")?
+                    .strip_suffix('"')
+            })
+            .collect();
+        let picker: BTreeSet<&str> = MEDIA_EXTENSIONS.iter().copied().collect();
+        assert_eq!(registered, picker);
+    }
+}
