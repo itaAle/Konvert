@@ -160,7 +160,16 @@ function checkTauriConfig() {
       fail(`tauri.conf.json: window "${win.label}" lacks --disable-background-networking`);
     }
   }
-  if (failures.length === before) passed.push("Tauri config: strict CSP, no updater, hardened WebView");
+  // The installer must not download anything (WebView2 bootstrapper modes do).
+  const webview = conf.bundle?.windows?.webviewInstallMode?.type ?? "downloadBootstrapper";
+  if (!["skip", "offlineInstaller"].includes(webview)) {
+    fail(`tauri.conf.json: webviewInstallMode "${webview}" downloads WebView2 during installation`);
+  }
+  // Tauri's fileAssociations make Konvert the default app; "Open with" is done in the installer hooks.
+  if (conf.bundle?.fileAssociations?.length) {
+    fail("tauri.conf.json: fileAssociations would change the user's default apps");
+  }
+  if (failures.length === before) passed.push("Tauri config: strict CSP, no updater, hardened WebView, offline installer");
 
   const capDir = join(ROOT, "src-tauri", "capabilities");
   for (const file of readdirSync(capDir).filter((f) => f.endsWith(".json"))) {

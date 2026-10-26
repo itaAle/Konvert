@@ -1,0 +1,6 @@
+# Pinned Rust toolchain: every developer and every release build uses the same
+# compiler (rustup installs it automatically on the first `cargo` command).
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

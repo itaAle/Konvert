@@ -4,10 +4,15 @@
     Watches the network activity of Konvert and of all its child processes.
 
 .DESCRIPTION
-    Polls the TCP connections and UDP endpoints owned by konvert.exe and by every
-    descendant process (the WebView2 runtime runs in msedgewebview2.exe children),
-    then prints a summary. Konvert is expected to show nothing: its UI talks to the
-    Rust core through in-process IPC, and FFmpeg only reads/writes local files.
+    Polls the TCP connections and UDP endpoints owned by konvert.exe and by the
+    processes that are part of Konvert (WebView2 runs in msedgewebview2.exe
+    children, conversions in ffmpeg.exe/ffprobe.exe), then prints a summary.
+    Konvert is expected to show nothing: its UI talks to the Rust core through
+    in-process IPC, and FFmpeg only reads/writes local files.
+
+    Programs that Konvert opens at the user's request ("Open file", "Show in
+    folder", "Releases page", "Third-party licenses") are not part of Konvert:
+    they are listed separately and their own traffic is not counted.
 
     Exit code: 0 if no socket was seen, 1 otherwise.
 
@@ -44,6 +49,11 @@ if ($Launch) {
     if ($rootIds.Count -eq 0) { throw 'Konvert is not running. Start it or use -Launch.' }
 }
 
+# Executables that make up Konvert. Any other child is an external program the
+# user asked Konvert to open (text editor, media player, browser, Explorer).
+$KonvertImages = @('konvert.exe', 'msedgewebview2.exe', 'ffmpeg.exe', 'ffprobe.exe')
+$external = @{}
+
 function Get-ProcessTree([int[]]$roots) {
     $all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name)
     $ids = [System.Collections.Generic.HashSet[int]]::new()
@@ -52,6 +62,10 @@ function Get-ProcessTree([int[]]$roots) {
     while ($queue.Count -gt 0) {
         $parent = $queue.Dequeue()
         foreach ($child in $all | Where-Object { $_.ParentProcessId -eq $parent }) {
+            if ($KonvertImages -notcontains $child.Name.ToLowerInvariant()) {
+                $external[$child.Name] = $true
+                continue
+            }
             if ($ids.Add([int]$child.ProcessId)) { $queue.Enqueue([int]$child.ProcessId) }
         }
     }
@@ -83,7 +97,10 @@ while ((Get-Date) -lt $deadline) {
 
 if ($started -and -not $started.HasExited) { Stop-Process -Id $started.Id }
 
-Write-Host "Processes observed in the tree (max): $maxProcesses"
+Write-Host "Konvert processes observed (max): $maxProcesses"
+if ($external.Count -gt 0) {
+    Write-Host "External programs opened by the user from Konvert (not monitored): $(($external.Keys | Sort-Object) -join ', ')"
+}
 if ($seen.Count -eq 0) {
     Write-Host 'OK: no TCP connection or UDP endpoint was opened by Konvert or its children.'
     exit 0
