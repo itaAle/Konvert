@@ -1,132 +1,133 @@
-# Konvert: contesto per continuare lo sviluppo
+# Konvert: context for continuing development
 
-> Contesto per gli agenti (Claude Code) e per chi riprende il lavoro da un altro PC. È versionato nella repo pubblica:
-> **mai** scriverci segreti, nomi, email personali, percorsi della macchina o altri dati privati.
+> Context for coding agents (Claude Code) and for anyone resuming the work from another computer.
+> This file is versioned in the public repository: **never** put secrets, names, personal emails,
+> machine paths or other private data in it.
 
-## Cos'è
-Konvert è un convertitore audio/video/immagini per Windows 10/11 a 64 bit, in stile Apple.
-Usa Tauri 2.11, React 19 con TypeScript e FFmpeg/FFprobe inclusi.
-Lavora **interamente in locale**.
-Repo **pubblica**: https://github.com/itaAle/Konvert (branch `main`).
-Release con installer NSIS e file `.sha256`: `v0.1.0` pubblicata; `v0.2.0` (foto) la pubblica il proprietario.
-La pre-release `ffmpeg-n9.0.2-36` è il mirror della build FFmpeg e dei suoi sorgenti (richiesto dalla LGPL).
+## What it is
+Konvert is an Apple-style audio/video/image converter for 64-bit Windows 10/11.
+It uses Tauri 2.11, React 19 with TypeScript, and bundles FFmpeg/FFprobe.
+It works **entirely offline, on the user's computer**.
+**Public** repository: https://github.com/itaAle/Konvert (branch `main`).
+Releases ship an NSIS installer plus a `.sha256` file: `v0.1.0` is published; the owner publishes `v0.2.0` (pictures).
+The `ffmpeg-n9.0.2-36` pre-release mirrors the FFmpeg build and its sources (required by the LGPL).
 
-## Regole vincolanti (dal proprietario)
-- **Privacy assoluta: zero connessioni di rete a runtime.** Niente telemetria, updater, CDN, crash reporting, fetch o plugin di rete. In caso di dubbio scegli sempre l'opzione che non tocca la rete.
-  `npm run check:privacy` fallisce se nel grafo delle dipendenze desktop compaiono crate o pacchetti HTTP/TLS/WebSocket/telemetria, se la CSP viene allentata, se l'installer scaricherebbe qualcosa o se nel codice compaiono URL esterni non autorizzati.
-- **Repo pubblica:**
-  - mai segreti, percorsi assoluti della macchina, dati personali o file pesanti nella cronologia;
-  - **mai committare i binari di FFmpeg/FFprobe**: sono ignorati da Git e si scaricano con `npm run setup:ffmpeg`.
-- **Identità Git:** la config locale della repo è già impostata su `Ale <118929447+itaAle@users.noreply.github.com>`. Non usare email personali.
-- **Commit** piccoli in stile Conventional Commits (`feat(core): …`, `feat(ui): …`, `docs: …`), in inglese, con il trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-- **Mai fare push senza che il proprietario lo chieda.** I force push li esegue lui (la modalità automatica li blocca).
-- **Testi visibili su GitHub** (README, commit, note delle release) **in inglese**. L'interfaccia è bilingue it/en.
-- Il proprietario parla italiano e vuole:
-  - un piano prima di implementare;
-  - un riassunto a ogni milestone;
-  - build e test verdi prima di ogni commit.
-- **Non cancellare le preferenze reali dell'utente** (`%APPDATA%\app.konvert.desktop\preferences.json`): `outputDir` può puntare a una sua cartella reale, quindi le conversioni di prova dall'app finirebbero lì. Nei test usa una destinazione esplicita (CLI `--out-dir`, test d'integrazione).
+## Binding rules (from the owner)
+- **Absolute privacy: zero network connections at runtime.** No telemetry, updater, CDN, crash reporting, fetch or network plugins. When in doubt, always pick the option that does not touch the network.
+  `npm run check:privacy` fails if HTTP/TLS/WebSocket/telemetry crates or packages appear in the desktop dependency graph, if the CSP is loosened, if the installer would download anything, or if unauthorized external URLs appear in the code.
+- **Public repository:**
+  - never secrets, absolute machine paths, personal data or heavy files in the history;
+  - **never commit the FFmpeg/FFprobe binaries**: they are ignored by Git and downloaded with `npm run setup:ffmpeg`.
+- **Git identity:** the repository's local config uses `Ale <118929447+itaAle@users.noreply.github.com>`. Never use personal emails.
+- **Commits:** small, Conventional Commits style (`feat(core): …`, `feat(ui): …`, `docs: …`), in English, with the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- **Never push unless the owner asks.** Force pushes are run by the owner (auto mode blocks them).
+- **Text visible on GitHub** (README, this file, commits, release notes) is **in English**. The app UI is bilingual (it/en).
+- The owner speaks Italian (answer in Italian) and wants:
+  - a plan before implementing;
+  - a summary at every milestone;
+  - green build and tests before every commit.
+- **Do not delete the user's real preferences** (`%APPDATA%\app.konvert.desktop\preferences.json`): `outputDir` may point to a real folder of theirs, so test conversions from the app would end up there. In tests use an explicit destination (CLI `--out-dir`, integration tests).
 
-## Architettura
-Workspace Cargo (`Cargo.toml`, resolver 3, toolchain fissata a 1.99.1 in `rust-toolchain.toml`):
+## Architecture
+Cargo workspace (`Cargo.toml`, resolver 3, toolchain pinned to 1.99.1 in `rust-toolchain.toml`):
 
-- `crates/konvert-core/`: dominio puro, senza Tauri.
-  - `formats.rs`: catalogo dichiarativo con `TargetFormat`, `FORMATS` (FormatSpec), `RULES`, `available_targets`, `is_offered`. Le immagini sono `FormatKind::Image` con un solo `ImageCodec` (JPG, PNG, WebP, AVIF).
-  - `probe.rs`: ffprobe (`-show_stream_groups` incluso) → `MediaInfo`.
-    - Le immagini statiche (demuxer `image2`/`*_pipe`, marchi HEIF/AVIF) sono `MediaKind::Image` con `PictureInfo` (alfa, piano alfa AVIF, griglia HEIC, EXIF); GIF/APNG/WebP animati restano video.
-    - Per le immagini non HEIF un secondo ffprobe legge il primo fotogramma (`apply_first_frame_json`): orientamento EXIF e presenza degli EXIF. Le dimensioni salvate sono quelle visualizzate (già ruotate).
-    - FFmpeg applica da solo la rotazione (EXIF o `irot`) prima dei filtri; `[0:g:N]` in un filter graph restituisce la griglia HEIC ricomposta.
-  - `request.rs` → `plan.rs` (`plan_conversion`, puro) → `command.rs` (`build_from_plan`, argomenti FFmpeg puri) → `convert.rs` (esecuzione).
-  - `estimate.rs`: stima della dimensione e avvisi.
-  - Altri moduli: `naming.rs` (`nome (n).ext`, mai sovrascrivere), `workspace.rs` (`%TEMP%\Konvert\run-…` con lock e pulizia dopo crash), `process.rs` (Job Object kill-on-close e `CREATE_NO_WINDOW`), `progress.rs`, `disk.rs`, `binaries.rs`, `error.rs`.
-  - Codici di errore stabili in `error.rs`: `engine_missing`, `input_not_found`, `output_unavailable`, `not_media`, `corrupt_input`, `unsupported_conversion`, `disk_full`, `permission_denied`, `cancelled`, `engine_failed`, `io`. Ognuno ha un messaggio i18n.
-  - FFmpeg gira sempre con `-protocol_whitelist file` e input passati come URL `file:`.
-  - Immagini: `plan.rs::plan_picture` → `ImagePlan` (sempre ricodifica); `command.rs::picture_args` (un filter graph: griglia/alphamerge, scale, sfondo bianco per JPG, piano alfa per AVIF; encoder mjpeg, png, libwebp, libaom-av1 still-picture; muxer `image2pipe`/`webp`/`avif`).
-  - EXIF: FFmpeg li conserva solo verso PNG (da JPEG/PNG/WebP, non da HEIF); negli altri casi c'è l'avviso `MetadataDropped`.
-  - Test: unit test nei moduli e `tests/engine.rs` (16 test di integrazione con FFmpeg reale). `tests/fixtures/mod.rs` crea in memoria JPEG con EXIF e HEIC a griglia (tasselli HEVC fatti con libkvazaar).
-- `crates/konvert-cli/`: CLI di sviluppo (`npm run cli -- targets|plan|convert …`), non distribuita.
-- `src-tauri/`: strato IPC sottile.
-  - `commands.rs` contiene 20 comandi, elencati anche in `build.rs::COMMANDS` e `capabilities/default.json`: **un comando nuovo va aggiunto in tutti e tre i posti**.
-  - Altri file: `jobs.rs` (coda sequenziale, evento `job-update`), `prefs.rs`, `debug_log.rs` (log redatto, spento di default), `launch.rs` (file passati via argv e "Apri con"), `lib.rs` (single-instance, Mica, conferma alla chiusura).
-  - `tauri.conf.json`: CSP restrittiva, `freezePrototype`, flag di WebView2 senza rete, NSIS per utente con `windows/installer-hooks.nsh` ("Apri con" via `OpenWithProgids`; NON usare le `fileAssociations` di Tauri, che sottraggono il programma predefinito).
-- `src/`: React, Tailwind v4 (token via `data-scheme`/`data-vibrancy`), Motion, font Inter incluso, icone lucide.
-  - `lib/api.ts` (IPC) e `lib/mock.ts` (backend finto, solo per `npm run dev` nel browser).
-  - `state/queue.ts`: reducer puro della coda, con test.
-  - `i18n/it.ts` e `en.ts`: tipizzati, un test verifica che le chiavi coincidano.
+- `crates/konvert-core/`: pure domain logic, no Tauri.
+  - `formats.rs`: declarative catalog with `TargetFormat`, `FORMATS` (FormatSpec), `RULES`, `available_targets`, `is_offered`. Pictures are `FormatKind::Image` with a single `ImageCodec` (JPG, PNG, WebP, AVIF).
+  - `probe.rs`: ffprobe (including `-show_stream_groups`) → `MediaInfo`.
+    - Still pictures (`image2`/`*_pipe` demuxers, HEIF/AVIF brands) are `MediaKind::Image` with `PictureInfo` (alpha, AVIF alpha plane, HEIC grid, EXIF); animated GIF/APNG/WebP stay videos.
+    - For non-HEIF pictures a second ffprobe reads the first frame (`apply_first_frame_json`): EXIF orientation and EXIF presence. Stored dimensions are the displayed (already rotated) ones.
+    - FFmpeg applies the rotation (EXIF or `irot`) by itself before the filters; `[0:g:N]` in a filter graph returns the reassembled HEIC grid.
+  - `request.rs` → `plan.rs` (`plan_conversion`, pure) → `command.rs` (`build_from_plan`, pure FFmpeg arguments) → `convert.rs` (execution).
+  - `estimate.rs`: size estimate and warnings.
+  - Other modules: `naming.rs` (`name (n).ext`, never overwrite), `workspace.rs` (`%TEMP%\Konvert\run-…` with a lock and cleanup after crashes), `process.rs` (kill-on-close Job Object and `CREATE_NO_WINDOW`), `progress.rs`, `disk.rs`, `binaries.rs`, `error.rs`.
+  - Stable error codes in `error.rs`: `engine_missing`, `input_not_found`, `output_unavailable`, `not_media`, `corrupt_input`, `unsupported_conversion`, `disk_full`, `permission_denied`, `cancelled`, `engine_failed`, `io`. Each has an i18n message.
+  - FFmpeg always runs with `-protocol_whitelist file`, and inputs are passed as `file:` URLs.
+  - Pictures: `plan.rs::plan_picture` → `ImagePlan` (always re-encoded); `command.rs::picture_args` (one filter graph: grid/alphamerge, scale, white background for JPG, alpha plane for AVIF; encoders mjpeg, png, libwebp, libaom-av1 still-picture; muxers `image2pipe`/`webp`/`avif`).
+  - EXIF: FFmpeg keeps it only when converting to PNG (from JPEG/PNG/WebP, not from HEIF); otherwise the `MetadataDropped` warning is shown.
+  - Tests: unit tests in the modules and `tests/engine.rs` (16 integration tests with real FFmpeg). `tests/fixtures/mod.rs` builds JPEGs with EXIF and grid HEIC files in memory (HEVC tiles made with libkvazaar).
+- `crates/konvert-cli/`: development CLI (`npm run cli -- targets|plan|convert …`), not shipped.
+- `src-tauri/`: thin IPC layer.
+  - `commands.rs` holds 20 commands, also listed in `build.rs::COMMANDS` and `capabilities/default.json`: **a new command must be added in all three places**.
+  - Other files: `jobs.rs` (sequential queue, `job-update` event), `prefs.rs`, `debug_log.rs` (redacted log, off by default), `launch.rs` (files passed via argv and "Open with"), `lib.rs` (single instance, Mica, close confirmation).
+  - `tauri.conf.json`: strict CSP, `freezePrototype`, WebView2 flags without networking, per-user NSIS with `windows/installer-hooks.nsh` ("Open with" via `OpenWithProgids`; do NOT use Tauri's `fileAssociations`, which take over the default program). A test keeps the installer's extensions identical to the file picker's `MEDIA_EXTENSIONS`.
+- `src/`: React, Tailwind v4 (tokens via `data-scheme`/`data-vibrancy`), Motion, bundled Inter font, lucide icons.
+  - `lib/api.ts` (IPC) and `lib/mock.ts` (fake backend, only for `npm run dev` in the browser).
+  - `state/queue.ts`: pure queue reducer, with tests.
+  - `i18n/it.ts` and `en.ts`: typed; a test checks that the keys match.
   - `components/`: DropScreen, FormatGrid, QualityPicker, AdvancedPanel, PlanSummary, ConvertingScreen, DoneScreen, SettingsSheet, …
-- `src/bindings/`: tipi TypeScript **generati** da ts-rs durante `cargo test`. Se cambi un tipo Rust esportato, rigenerali e committali.
+- `src/bindings/`: TypeScript types **generated** by ts-rs during `cargo test`. If you change an exported Rust type, regenerate and commit them.
 - `scripts/`:
-  - `ffmpeg-manifest.json`: build BtbN `win64-lgpl-shared` n9.0.2-36, SHA-256 fissato, URL upstream più il mirror.
+  - `ffmpeg-manifest.json`: BtbN `win64-lgpl-shared` n9.0.2-36 build, pinned SHA-256, upstream URL plus the mirror.
   - `setup-ffmpeg.ps1` / `.sh`.
   - `check-privacy.mjs`.
-  - `generate-licenses.mjs` (rigenera `THIRD_PARTY_LICENSES`; va rilanciato se cambiano le dipendenze).
+  - `generate-licenses.mjs` (regenerates `THIRD_PARTY_LICENSES`; rerun it when dependencies or the version change).
   - `monitor-network.ps1`.
-  - `build-release.ps1` (7 passi: versione, npm ci, FFmpeg, controlli e test, build con `--remap-path-prefix`, verifica che l'exe non contenga percorsi locali, copia in `release/` con SHA-256).
+  - `build-release.ps1` (7 steps: version, npm ci, FFmpeg, checks and tests, build with `--remap-path-prefix`, check that the exe contains no local paths, copy to `release/` with SHA-256).
 
-## FFmpeg e licenze
-- Build LGPL-3.0-or-later, senza GPL né nonfree: **niente libx264/libx265/fdk-aac**.
-- Encoder disponibili: libopenh264 (H.264), libvpx/libvpx-vp9, libsvtav1, mpeg4, gif, libmp3lame, aac, libopus, libvorbis, flac, wmav2.
-- Nella build ci sono anche decoder e encoder di immagini (mjpeg, png, libwebp, ecc.): verificali con `ffmpeg -encoders`.
-- I brevetti H.264 non sono coperti dalla licenza BSD di OpenH264: il README lo dice già.
-- Una nuova libreria Rust o npm deve avere una licenza compatibile e passare il controllo privacy. Poi esegui `npm run licenses`.
+## FFmpeg and licenses
+- LGPL-3.0-or-later build, no GPL or nonfree parts: **no libx264/libx265/fdk-aac**.
+- Available encoders: libopenh264 (H.264), libvpx/libvpx-vp9, libsvtav1, mpeg4, gif, libmp3lame, aac, libopus, libvorbis, flac, wmav2.
+- The build also has picture decoders and encoders (mjpeg, png, libwebp, libaom-av1, libkvazaar, …): check them with `ffmpeg -encoders`.
+- H.264 patents are not covered by OpenH264's BSD license: the README already says so.
+- A new Rust or npm library must have a compatible license and pass the privacy check. Then run `npm run licenses`.
 
-## Comandi
+## Commands
 ```
-npm install && npm run setup:ffmpeg   # prima volta
-npm run tauri dev                      # app in sviluppo
-npm run dev                            # solo UI nel browser, con mock
-npm test                               # privacy + licenze + Vitest + cargo test (tutto deve passare)
+npm install && npm run setup:ffmpeg   # first time
+npm run tauri dev                      # app in development mode
+npm run dev                            # UI only, in the browser, with the mock backend
+npm test                               # privacy + licenses + Vitest + cargo test (everything must pass)
 npm run release                        # installer + .sha256 in release/
 ```
-Nota per la shell degli agenti: `cargo` potrebbe non essere nel PATH, quindi anteponi `$env:USERPROFILE\.cargo\bin`.
+Note for agent shells: `cargo` may not be on the PATH, so prepend `$env:USERPROFILE\.cargo\bin`.
 
-## Riprendere da un altro PC
-1. Prerequisiti (Windows): Node.js 20+, rustup (la toolchain si installa da sola da `rust-toolchain.toml`), Visual Studio Build Tools con "Desktop development with C++", WebView2.
-2. `git clone https://github.com/itaAle/Konvert`, poi `npm install` e `npm run setup:ffmpeg`.
-3. Imposta l'identità Git **solo per la repo**: `git config user.name "Ale"` e `git config user.email "118929447+itaAle@users.noreply.github.com"`.
-4. `npm test` deve essere tutto verde prima di iniziare.
+## Resuming from another computer
+1. Prerequisites (Windows): Node.js 20+, rustup (the toolchain installs itself from `rust-toolchain.toml`), Visual Studio Build Tools with "Desktop development with C++", WebView2.
+2. `git clone https://github.com/itaAle/Konvert`, then `npm install` and `npm run setup:ffmpeg`.
+3. Set the Git identity **for the repository only**: `git config user.name "Ale"` and `git config user.email "118929447+itaAle@users.noreply.github.com"`.
+4. `npm test` must be fully green before you start.
 
-## Note pratiche per gli agenti
-- La modalità automatica blocca `powershell -ExecutionPolicy Bypass -File …` lanciato dall'agente: esegui il codice PowerShell (per esempio UI Automation) inline. `npm run release` invece funziona.
-- Prova dell'app reale senza file picker: `npx tauri build --debug --no-bundle`, poi avvia `target/debug/konvert.exe` passando il file come argomento (stesso percorso di "Apri con") e leggi la finestra con UI Automation (interroga due volte per svegliare l'albero di accessibilità di WebView2).
-- Interfaccia nel browser: `npm run dev` (porta 1420) con il backend finto; per l'anteprima degli agenti crea `.claude/launch.json` (ignorato da Git) con una configurazione `konvert-ui` che lancia `npm run dev` sulla porta 1420; `?files=a.jpg|b.mp4` sceglie cosa restituisce il file picker.
-- Drag & drop non automatizzabile: chiedi al proprietario di provarlo a mano.
-- `target/release/konvert.pdb` contiene il percorso utente: mai caricare `target/` o i `.pdb`.
-- FFmpeg 9: il ritaglio 1×1 di YUV 4:2:0 fallisce (converti prima in rgba); `-map 0:g:0` su un HEIC dà un solo tassello, `[0:g:0]` in un filter graph dà la foto intera.
+## Practical notes for agents
+- Auto mode blocks `powershell -ExecutionPolicy Bypass -File …` launched by the agent: run PowerShell code (e.g. UI Automation) inline instead. `npm run release` works.
+- Real-app check without the file picker: `npx tauri build --debug --no-bundle`, then start `target/debug/konvert.exe` with the file as argument (same path as "Open with") and read the window with UI Automation (query twice to wake up WebView2's accessibility tree).
+- UI in the browser: `npm run dev` (port 1420) with the fake backend; for the agents' preview, create `.claude/launch.json` (ignored by Git) with a `konvert-ui` configuration running `npm run dev` on port 1420; `?files=a.jpg|b.mp4` sets what the file picker returns.
+- Drag & drop cannot be automated: ask the owner to try it by hand.
+- `target/release/konvert.pdb` contains the user's path: never upload `target/` or `.pdb` files.
+- FFmpeg 9: a 1×1 crop of 4:2:0 YUV fails (convert to rgba first); `-map 0:g:0` on a HEIC gives a single tile, `[0:g:0]` in a filter graph gives the whole photo.
 
-## Stato attuale
-- 2026-10-26: **v0.2.0** su `main` (commit da `c437948` a `0e52cd9`, pushati): foto in core, app, ui e docs; fix "Apri con" per .aifc/.alac/.qt/.wave con un test che tiene allineate le estensioni dell'installer e del file picker; versione 0.2.0.
-  Installer `Konvert_0.2.0_x64-setup.exe`, SHA-256 `5cce9fe6ebf043392bc54c41cb4dac2cb56352b298ae9b578b69cebe7e614b67` (`release/` è ignorata da Git: si rigenera con `npm run release`). Tag e release GitHub li fa il proprietario.
-- Supporto immagini:
-  Ingresso JPG/PNG/WebP/AVIF/HEIC/HEIF/BMP/TIFF, uscita JPG/PNG/WebP/AVIF (HEIC in uscita impossibile: FFmpeg non ha un muxer HEIF).
-  Decisioni del proprietario: EXIF lasciati come fa FFmpeg (solo PNG), BMP/TIFF inclusi, HEIC incluso.
-- Test verdi: 26 Vitest, 118 unit test del core, 16 di integrazione, 16 dell'app.
-- Rete verificata a zero: nessun socket con il build release e con l'app installata.
-- Verificati: installer, "Apri con", istanza singola, preferenze mantenute alla reinstallazione.
-- Non ancora verificati a mano:
-  - casella "Delete the application data" nella disinstallazione;
-  - avviso con WebView2 mancante;
-  - SmartScreen su un altro PC;
-  - avviso di spazio su disco insufficiente;
-  - installer 0.2.0: aggiornamento sopra la 0.1.0, "Apri con" sulle foto, foto HEIC vere da iPhone (i test usano HEIC sintetici).
+## Current status
+- 2026-10-26: **v0.2.0** on `main` (commits `c437948` to `0e52cd9`, pushed): pictures in core, app, ui and docs; "Open with" fix for .aifc/.alac/.qt/.wave with a test keeping the installer and file picker extensions aligned; version 0.2.0.
+  Installer `Konvert_0.2.0_x64-setup.exe`, SHA-256 `5cce9fe6ebf043392bc54c41cb4dac2cb56352b298ae9b578b69cebe7e614b67` (`release/` is ignored by Git: rebuild it with `npm run release`). The owner creates the tag and the GitHub release.
+- Picture support:
+  Input JPG/PNG/WebP/AVIF/HEIC/HEIF/BMP/TIFF, output JPG/PNG/WebP/AVIF (HEIC output is impossible: FFmpeg has no HEIF muxer).
+  Owner's decisions: EXIF handled as FFmpeg does (kept only in PNG), BMP/TIFF included, HEIC included.
+- Green tests: 26 Vitest, 118 core unit tests, 16 integration tests, 16 app tests.
+- Network verified at zero: no sockets with the release build and with the installed app.
+- Verified: installer, "Open with", single instance, preferences kept on reinstall.
+- Not yet verified by hand:
+  - the "Delete the application data" checkbox on uninstall;
+  - the warning when WebView2 is missing;
+  - SmartScreen on another computer;
+  - the low disk space warning;
+  - 0.2.0 installer: upgrade over 0.1.0, "Open with" on pictures, real iPhone HEIC photos (tests use synthetic HEIC files).
 
-## Backlog (prossime funzionalità, in ordine di priorità)
-1. **Bug fix: video verticali deformati** (scritto nel README come futuro bug fix, su richiesta del proprietario).
-   - Un video del telefono con rotazione 90° (display matrix) e ridimensionato (GIF o "Risoluzione massima") esce deformato: `plan.rs::output_size` usa le dimensioni codificate, mentre FFmpeg ruota prima dello `scale`.
-   - Riprodotto: 320×240 con rotazione 90 e `--height 120` → 160×120 invece di 90×120.
-   - Correzione: leggere la rotazione dal `side_data_list` dello stream in `probe.rs` (come già per le immagini) e scambiare larghezza e altezza.
-2. Versioni Linux e macOS (il manifest ha già una voce linux non testata).
-3. Encoder hardware NVENC/QSV/AMF/h264_mf, con rilevamento automatico.
-4. FFmpeg compilato senza alcun supporto di rete.
-5. Firma del codice dell'installer.
-6. Possibile: conservare gli EXIF anche in JPG/WebP/AVIF (FFmpeg non li scrive: andrebbero copiati a mano, con orientamento azzerato).
+## Backlog (next work, by priority)
+1. **Bug fix: stretched portrait videos** (listed in the README as an upcoming fix, at the owner's request).
+   - A phone video with a 90° rotation (display matrix) that gets resized (GIF or "Maximum resolution") comes out stretched: `plan.rs::output_size` uses the coded dimensions, while FFmpeg rotates before `scale`.
+   - Reproduced: 320×240 with rotation 90 and `--height 120` → 160×120 instead of 90×120.
+   - Fix: read the rotation from the stream's `side_data_list` in `probe.rs` (as already done for pictures) and swap width and height.
+2. Linux and macOS versions (the manifest already has an untested linux entry).
+3. Hardware encoders NVENC/QSV/AMF/h264_mf, with automatic detection.
+4. FFmpeg built without any network support.
+5. Code signing of the installer.
+6. Maybe: keep EXIF in JPG/WebP/AVIF too (FFmpeg does not write it: it would have to be copied by hand, with the orientation reset).
 
-## Flusso per ogni feature
-1. Piano breve al proprietario.
-2. Implementazione: prima il core con i test, poi l'IPC, poi la UI con i18n.
-3. `npm test` verde.
-4. Aggiornare il README (in inglese) e, se cambiano le dipendenze, `THIRD_PARTY_LICENSES`.
-5. Commit piccoli.
-6. Riassunto al proprietario.
-7. Push solo su richiesta.
-8. Per una nuova release: alzare la versione in `package.json`, `Cargo.toml` e `src-tauri/tauri.conf.json` (devono coincidere), poi `npm run release`.
+## Workflow for every feature
+1. Short plan for the owner.
+2. Implementation: core with tests first, then IPC, then the UI with i18n.
+3. Green `npm test`.
+4. Update the README (in English) and, if dependencies change, `THIRD_PARTY_LICENSES`.
+5. Small commits.
+6. Summary for the owner.
+7. Push only on request.
+8. For a new release: bump the version in `package.json`, `Cargo.toml` and `src-tauri/tauri.conf.json` (they must match), then `npm run release`.
