@@ -2353,7 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "konvert"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "konvert-core",
  "serde",
@@ -2372,7 +2372,7 @@ dependencies = [
 
 [[package]]
 name = "konvert-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "konvert-core",
  "serde",
@@ -2383,7 +2383,7 @@ dependencies = [
 
 [[package]]
 name = "konvert-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "hayro",
  "libc",

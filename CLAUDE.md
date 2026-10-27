@@ -10,7 +10,7 @@ Apple Silicon and Linux (x86_64 and arm64).
 It uses Tauri 2.11, React 19 with TypeScript, and bundles FFmpeg/FFprobe.
 It works **entirely offline, on the user's computer**.
 **Public** repository: https://github.com/itaAle/Konvert (branch `main`).
-Releases ship an NSIS installer plus a `.sha256` file: `v0.1.0` is published; the owner publishes `v0.2.0` (pictures).
+Releases ship a Windows NSIS installer, macOS/Linux packages and a `.sha256` file for each: `v0.1.0` to `v0.3.0` are published; `v0.4.0` (more formats, EXIF, SVG, PDF) is next.
 The `ffmpeg-n9.0.2-36` pre-release mirrors the FFmpeg build and its sources (required by the LGPL).
 
 ## Binding rules (from the owner)
@@ -158,6 +158,10 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
 - 2026-10-26: **more formats, phase C (PDF)** on `main` (pushed 2026-10-27): pictures → PDF (A4/Letter/fit, orientation, margins, one PDF or one each), PDF → PNG/JPG/WebP pictures (dpi, page range), PDFs and pictures combined into one PDF in the list order; `.pdf` in the picker and "Open with". New dependencies hayro and lopdf (licenses regenerated). Spike: hayro drew multilingual text, emoji, gradients, transparency and images correctly, about 10 ms per page.
   - Green tests (Windows): 32 Vitest, 173 core unit tests, 31 integration tests, 17 app tests; `cargo clippy -p konvert-core` is clean for `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`.
   - Not verified by hand yet: a conversion started from the app (agents checked analysis, plans and the UI there, but never convert into the owner's destination folder), real-world PDFs (scans, forms, large files), "Open with" on `.pdf`.
+
+- 2026-10-27: **v0.4.0** (phases A, B and C): version bumped in `package.json`, `Cargo.toml` and `tauri.conf.json`; `npm run release` green (all checks and tests, no local paths in the binaries).
+  Installer `Konvert_0.4.0_x64-setup.exe` (52 MB), SHA-256 `b7b2e6c60037f225b2f15af4b31c599bb67e6c1f77e3e578c69c0636a157352a` (rebuild with `npm run release`). The macOS/Linux packages come from the **Release packages** workflow run on the pushed version commit; the owner creates the `v0.4.0` tag and the GitHub release.
+  - Not verified by hand yet: installing 0.4.0 over 0.3.0.
 
 ## Backlog (next work, by priority)
 1. **More formats and PDF**: phases A, B and C done (see Current status). Proposed next, only after the owner's OK: PDF page tools (split a PDF, extract, rotate and reorder pages).
