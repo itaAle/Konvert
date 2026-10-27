@@ -2,6 +2,7 @@
 // empty → setup (analysis, choices) → converting → finished (and back).
 // Pure reducer and selectors; side effects live in `useQueue`.
 import type { AdvancedOptions } from "../bindings/AdvancedOptions";
+import type { CompressOptions } from "../bindings/CompressOptions";
 import type { ConversionOutcome } from "../bindings/ConversionOutcome";
 import type { ConversionPlan } from "../bindings/ConversionPlan";
 import type { ConversionRequest } from "../bindings/ConversionRequest";
@@ -48,6 +49,10 @@ export interface QueueState {
   phase: "empty" | "setup" | "converting" | "finished";
   items: QueueItem[];
   target: TargetFormat | null;
+  /** A smaller copy of every file, each in its own format (instead of a target format). */
+  compress: boolean;
+  /** Level, size limit and PDF pages as pictures, for smaller copies. */
+  compression: CompressOptions;
   preset: QualityPreset;
   advanced: AdvancedOptions;
   /** Pictures taken from videos (frame targets only). */
@@ -76,6 +81,8 @@ export type QueueAction =
   | { type: "remove"; key: number }
   | { type: "move"; key: number; delta: -1 | 1 }
   | { type: "selectTarget"; target: TargetFormat }
+  | { type: "selectCompress" }
+  | { type: "setCompression"; compression: CompressOptions }
   | { type: "selectPreset"; preset: QualityPreset }
   | { type: "setAdvanced"; advanced: AdvancedOptions }
   | { type: "setFrames"; frames: FrameOptions }
@@ -117,11 +124,16 @@ export const DEFAULT_PDF: PdfOptions = {
   splitAfter: [],
 };
 
+/** Strong compression, no size limit, text kept as text. */
+export const DEFAULT_COMPRESSION: CompressOptions = { level: "strong", maxBytes: null, pagesAsPictures: false, label: null };
+
 export function initialQueue(preset: QualityPreset = "balanced"): QueueState {
   return {
     phase: "empty",
     items: [],
     target: null,
+    compress: false,
+    compression: DEFAULT_COMPRESSION,
     preset,
     advanced: {},
     frames: DEFAULT_FRAMES,
@@ -174,6 +186,12 @@ export function commonTargets(items: QueueItem[]): TargetOption[] {
     }));
 }
 
+/** Every analysed file can be made smaller in its own format. */
+export function canCompress(items: QueueItem[]): boolean {
+  const files = items.filter((i) => i.file && i.status !== "invalid");
+  return files.length > 0 && files.every((i) => i.file!.compress != null);
+}
+
 /** The only file is a PDF: as a PDF target, its pages can be edited and split. */
 export function lonePdf(items: QueueItem[]): QueueItem | null {
   const files = items.filter((i) => i.file && i.status !== "invalid");
@@ -199,6 +217,22 @@ export function requestOf(state: QueueState): ConversionRequest | null {
     pdf: edit
       ? { ...state.pdf, layout: layoutOf(state.pages), splitAfter: cutPositions(state.pages, state.cuts, count) }
       : { ...state.pdf, layout: null, split: "none", splitAfter: [] },
+  };
+}
+
+/** The request for one file: the shared choices, or a smaller copy in the file's own format. */
+export function requestFor(state: QueueState, item: QueueItem): ConversionRequest | null {
+  if (!state.compress) return requestOf(state);
+  const target = item.file?.compress;
+  if (!target) return null;
+  return {
+    target,
+    preset: state.preset,
+    advanced: {},
+    frames: null,
+    removeLocation: state.removeLocation,
+    pdf: null,
+    compress: state.compression,
   };
 }
 
@@ -236,7 +270,7 @@ export function canStart(state: QueueState): boolean {
   const ready = readyItems(state);
   return (
     state.phase === "setup" &&
-    state.target != null &&
+    (state.target != null || (state.compress && canCompress(ready))) &&
     ready.length > 0 &&
     !state.items.some((i) => i.status === "analyzing") &&
     ready.every((i) => i.plan && !i.planError) &&
@@ -308,6 +342,9 @@ function invalidate(state: QueueState): QueueState {
 function revalidateTarget(state: QueueState): QueueState {
   if (state.target && !commonTargets(state.items).some((o) => o.format === state.target)) {
     return invalidate({ ...state, target: null, advanced: {} });
+  }
+  if (state.compress && !canCompress(state.items)) {
+    return invalidate({ ...state, compress: false });
   }
   return state;
 }
@@ -401,9 +438,17 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
     }
 
     case "selectTarget":
-      if (state.phase !== "setup" || state.target === action.target) return state;
+      if (state.phase !== "setup" || (state.target === action.target && !state.compress)) return state;
       // Codec choices of another format may not apply: start from automatic.
-      return invalidate({ ...state, target: action.target, advanced: {}, notice: null });
+      return invalidate({ ...state, target: action.target, compress: false, advanced: {}, notice: null });
+
+    case "selectCompress":
+      if (state.phase !== "setup" || state.compress || !canCompress(state.items)) return state;
+      return invalidate({ ...state, compress: true, target: null, advanced: {}, notice: null });
+
+    case "setCompression":
+      if (state.phase !== "setup") return state;
+      return invalidate({ ...state, compression: action.compression, notice: null });
 
     case "selectPreset":
       if (state.phase !== "setup" || state.preset === action.preset) return state;

@@ -18,6 +18,7 @@ const STRONG: ConversionWarning[] = [
   "pictureDownscaled",
   "largeFile",
   "manyFiles",
+  "pdfPagesAsPictures",
 ];
 
 export function hasStrongWarning(warnings: ConversionWarning[]): boolean {

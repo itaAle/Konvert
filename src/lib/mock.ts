@@ -219,6 +219,7 @@ function analysis(path: string): FileAnalysis {
         document: { pages: MOCK_PAGES, widthPt: 595.3, heightPt: 841.9, extras: true },
       },
       targets: [...PAGES, PDF],
+      compress: "pdf",
     };
   }
   if (/\.svgz?$/i.test(name)) {
@@ -242,6 +243,7 @@ function analysis(path: string): FileAnalysis {
         document: null,
       },
       targets: [...IMAGES, PDF],
+      compress: null,
     };
   }
   if (/\.(jpe?g|png|webp|avif|heic|heif|bmp|tiff?)$/i.test(name)) {
@@ -267,6 +269,8 @@ function analysis(path: string): FileAnalysis {
         document: null,
       },
       targets: [...IMAGES.map((o) => ({ ...o, sameAsInput: !heic && o.format === "jpg" })), PDF],
+      // Like the core: pictures keep their format (no HEIC encoder, BMP and TIFF are not compressed).
+      compress: /\.png$/i.test(name) ? "png" : /\.webp$/i.test(name) ? "webp" : /\.avif$/i.test(name) ? "avif" : /\.jpe?g$/i.test(name) ? "jpg" : null,
     };
   }
   const isVideo = /\.(mp4|mov|mkv|webm|avi)$/i.test(name);
@@ -295,6 +299,7 @@ function analysis(path: string): FileAnalysis {
         option("wav", "WAV", "audioOnly", true),
         ...FRAMES,
       ],
+      compress: (name.split(".").pop()?.toLowerCase() ?? "mp4") as TargetFormat,
     };
   }
   return {
@@ -316,6 +321,7 @@ function analysis(path: string): FileAnalysis {
       picture: null,
     },
     targets: AUDIO,
+    compress: "wav",
   };
 }
 
@@ -364,6 +370,29 @@ export const mockBackend: Backend = {
       });
   },
   async planConversion(_path, media, request) {
+    if (request.compress) {
+      await sleep(80);
+      const level = { light: 0.75, strong: 0.45, max: 0.25 }[request.compress.level];
+      const bytes = Math.round((media.sizeBytes ?? 0) * level);
+      const capped = request.compress.maxBytes != null ? Math.min(bytes, request.compress.maxBytes) : bytes;
+      const plan: ConversionPlan = {
+        target: request.target,
+        videoStream: null,
+        video: null,
+        audioStream: null,
+        audio: null,
+        coverArtStream: null,
+        image: null,
+        frames: null,
+        document: null,
+        removeLocation: request.removeLocation && media.hasLocation,
+        compress: request.compress,
+        warnings: media.kind === "document" && request.compress.pagesAsPictures ? ["pdfPagesAsPictures"] : [],
+        // Like the core: a PDF's gain is only known once compressed.
+        estimate: media.kind === "document" ? null : { bytes: capped, approximate: true },
+      };
+      return plan;
+    }
     if (request.target === "pdf" || media.kind === "document") {
       const toPdf = request.target === "pdf";
       const edited = toPdf && media.kind === "document";
@@ -527,6 +556,19 @@ export const mockBackend: Backend = {
     // Pages of a PDF: one picture next to it, or a folder of pictures.
     const pages = /\.pdf$/i.test(path) && request.target !== "pdf" ? parsePages(request.pdf?.pages, MOCK_PAGES) : null;
     const label = request.pdf?.pageLabel ?? "page";
+    // A smaller copy: `?mock=nogain` simulates a file that cannot shrink.
+    const compressed = request.compress
+      ? params.get("mock") === "nogain"
+        ? "nogain"
+        : {
+            output: `C:\\Documenti\\${name}-${request.compress.label ?? "compressed"}.${request.target}`,
+            sizeBytes: Math.round(
+              (analysis(path).media.sizeBytes ?? 0) * { light: 0.75, strong: 0.45, max: 0.25 }[request.compress.level],
+            ),
+            files: 1,
+            elapsed: 1.2,
+          }
+      : null;
     // A split PDF: a folder of PDFs.
     const parts = /\.pdf$/i.test(path) && request.target === "pdf" ? splitSizes(request.pdf, request.pdf?.layout?.length ?? MOCK_PAGES) : [];
     let fraction = 0;
@@ -544,6 +586,14 @@ export const mockBackend: Backend = {
         });
         if (fraction >= 1) {
           clearInterval(timer);
+          if (compressed === "nogain") {
+            emit({ jobId, update: { state: "failed", error: { code: "no_gain", details: null } } });
+            return;
+          }
+          if (compressed) {
+            emit({ jobId, update: { state: "done", outcome: compressed } });
+            return;
+          }
           // A series of frames is saved in a folder named after the video.
           const series = request.frames?.mode === "sequence" && ["jpg", "png", "webp"].includes(request.target);
           emit({

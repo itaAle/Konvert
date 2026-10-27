@@ -18,6 +18,9 @@ const STATUS_LABELS: Partial<Record<QueueItem["status"], MessageKey>> = {
   cancelled: "status.cancelled",
 };
 
+/** "Converting", or "Compressing" for smaller copies. */
+const working = (item: QueueItem) => t(item.plan?.compress ? "progress.compressing" : "progress.converting");
+
 /** One-line status of a running/queued item. */
 function detailFor(item: QueueItem, cancelling: boolean): string {
   const fraction = item.progress?.fraction ?? null;
@@ -29,7 +32,7 @@ function detailFor(item: QueueItem, cancelling: boolean): string {
   if (eta != null && fraction > 0.02) {
     return eta < 3 ? t("progress.almostDone") : t("progress.remaining", { time: formatRemaining(eta) });
   }
-  return t("progress.converting");
+  return working(item);
 }
 
 function Bar({ fraction, label, size = "lg" }: { fraction: number | null; label: string; size?: "lg" | "sm" }) {
@@ -69,7 +72,10 @@ function speedText(progress: Progress | null): string | null {
 function SingleProgress({ q, item, name = item.name }: { q: QueueController; item: QueueItem; name?: string }) {
   const fraction = item.progress?.fraction ?? null;
   const percent = fraction != null ? Math.round(fraction * 100) : null;
-  const targetLabel = item.file?.targets.find((o) => o.format === q.state.target)?.label ?? "";
+  // A smaller copy keeps the format of its file.
+  const targetLabel = item.plan?.compress
+    ? t("compress.cardFormat", { format: item.name.split(".").pop()?.toUpperCase() ?? "" })
+    : (item.file?.targets.find((o) => o.format === q.state.target)?.label ?? "");
   const speed = item.status === "running" && fraction != null && fraction < 1 ? speedText(item.progress) : null;
   const cancelling = q.state.cancelling;
 
@@ -84,7 +90,7 @@ function SingleProgress({ q, item, name = item.name }: { q: QueueController; ite
         {percent != null ? `${percent}%` : " "}
       </p>
       <div className="mx-auto mt-7 max-w-md">
-        <Bar fraction={fraction} label={t("progress.converting")} />
+        <Bar fraction={fraction} label={working(item)} />
       </div>
       <p className="mt-4 text-[14px] text-label-secondary" aria-live="polite">
         {detailFor(item, cancelling)}

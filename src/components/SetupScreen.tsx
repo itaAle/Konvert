@@ -7,6 +7,7 @@ import { t } from "../i18n";
 import { revealVariants } from "../lib/motion";
 import {
   allWarnings,
+  canCompress,
   canStart,
   combines,
   commonTargets,
@@ -19,6 +20,8 @@ import {
 } from "../state/queue";
 import type { QueueController } from "../state/useQueue";
 import { AdvancedPanel } from "./AdvancedPanel";
+import { CompressCard } from "./CompressCard";
+import { CompressPanel } from "./CompressPanel";
 import { DestinationRow } from "./DestinationRow";
 import { FileCard } from "./FileCard";
 import { FileList } from "./FileList";
@@ -74,6 +77,13 @@ export function SetupScreen({ q }: { q: QueueController }) {
   const editing = editsPdf(state) && lone != null;
   const documentCount = editing ? editedDocuments(state) : null;
   const unchanged = editing && !pdfChanged(state);
+  // Smaller copies, each file in its own format.
+  const compressible = canCompress(state.items);
+  const compressing = state.compress && compressible;
+  const files = state.items.filter((i) => i.file && i.status !== "invalid");
+  const formats = new Set(files.map((i) => i.file!.compress));
+  const sharedFormat = formats.size === 1 ? (files[0]?.name.split(".").pop()?.toUpperCase() ?? null) : null;
+  const largest = Math.max(0, ...files.map((i) => i.file!.media.sizeBytes ?? 0));
 
   // Bring quality and warnings into view once the options have appeared, and
   // whenever an important warning shows up, so it never stays below the fold.
@@ -97,7 +107,11 @@ export function SetupScreen({ q }: { q: QueueController }) {
         )}
       </div>
       <Button variant="primary" size="lg" disabled={!canStart(state)} onClick={() => void q.start()} className="min-w-44">
-        {editing
+        {compressing
+          ? ready.length > 1
+            ? t("actions.compressAll", { n: ready.length })
+            : t("actions.compress")
+          : editing
           ? documentCount != null && documentCount > 1
             ? t("actions.splitPdf")
             : t("actions.savePdf")
@@ -148,26 +162,36 @@ export function SetupScreen({ q }: { q: QueueController }) {
           )}
         </AnimatePresence>
 
-        <section>
-          <SectionTitle>{t("formats.title")}</SectionTitle>
-          {targets.length > 0 ? (
-            <>
-              {!single && <p className="-mt-2 mb-3 px-1 text-[13px] text-label-secondary">{t("formats.common")}</p>}
-              <FormatGrid
-                options={targets}
-                selected={state.target}
-                onSelect={q.selectTarget}
-                groupTitles={lone ? { document: "formats.groupEditPdf" } : undefined}
-                notes={lone ? { pdf: "formats.editPdf" } : undefined}
-              />
-            </>
-          ) : (
-            !analyzing && <p className="px-1 text-[14px] text-label-secondary">{t("formats.none")}</p>
-          )}
-        </section>
+        {compressible && (
+          <section>
+            <SectionTitle>{t("compress.title")}</SectionTitle>
+            <CompressCard selected={compressing} onSelect={q.selectCompress} format={sharedFormat} />
+          </section>
+        )}
+
+        {/* Files with nothing in common can still be compressed, each in its own format. */}
+        {(targets.length > 0 || !compressible) && (
+          <section>
+            <SectionTitle>{t("formats.title")}</SectionTitle>
+            {targets.length > 0 ? (
+              <>
+                {!single && <p className="-mt-2 mb-3 px-1 text-[13px] text-label-secondary">{t("formats.common")}</p>}
+                <FormatGrid
+                  options={targets}
+                  selected={compressing ? null : state.target}
+                  onSelect={q.selectTarget}
+                  groupTitles={lone ? { document: "formats.groupEditPdf" } : undefined}
+                  notes={lone ? { pdf: "formats.editPdf" } : undefined}
+                />
+              </>
+            ) : (
+              !analyzing && <p className="px-1 text-[14px] text-label-secondary">{t("formats.none")}</p>
+            )}
+          </section>
+        )}
 
         <AnimatePresence initial={false}>
-          {option && (
+          {(option || compressing) && (
             <motion.div
               variants={revealVariants}
               initial="initial"
@@ -180,13 +204,24 @@ export function SetupScreen({ q }: { q: QueueController }) {
               }}
               className="flex flex-col gap-6"
             >
-              {option.group === "frames" && (
+              {compressing && (
+                <section>
+                  <SectionTitle>{t("compress.level")}</SectionTitle>
+                  <CompressPanel
+                    value={state.compression}
+                    onChange={q.setCompression}
+                    largestBytes={largest}
+                    documents={documents.length > 0}
+                  />
+                </section>
+              )}
+              {option?.group === "frames" && (
                 <section>
                   <SectionTitle>{t("frames.title")}</SectionTitle>
                   <FramesPanel value={state.frames} onChange={q.setFrames} duration={shortest} count={pictures} />
                 </section>
               )}
-              {option.group === "pages" && (
+              {option?.group === "pages" && (
                 <section>
                   <SectionTitle>{t("pdf.pagesTitle")}</SectionTitle>
                   <PagesPanel
@@ -198,7 +233,7 @@ export function SetupScreen({ q }: { q: QueueController }) {
                   />
                 </section>
               )}
-              {option.group === "document" && !allDocuments && (
+              {option?.group === "document" && !allDocuments && (
                 <section>
                   <SectionTitle>{t("pdf.pageTitle")}</SectionTitle>
                   <PdfPanel value={state.pdf} onChange={q.setPdf} canCombine={ready.length > 1 && documents.length === 0} />
@@ -226,22 +261,22 @@ export function SetupScreen({ q }: { q: QueueController }) {
                   </section>
                 </>
               )}
-              {option.group === "document" && documents.length > 0 && !editing && (
+              {option?.group === "document" && documents.length > 0 && !editing && (
                 <p className="-mt-2 flex items-start gap-2 px-1 text-[13px] text-label-secondary">
                   <Info size={15} className="mt-0.5 shrink-0" aria-hidden />
                   {t("pdf.mergeHint")}
                 </p>
               )}
               {/* Merged PDFs keep their pages as they are. */}
-              {!FIXED_QUALITY.includes(option.format) && !(option.group === "document" && allDocuments) && (
+              {option && !FIXED_QUALITY.includes(option.format) && !(option.group === "document" && allDocuments) && (
                 <section>
                   <SectionTitle>{t("quality.title")}</SectionTitle>
                   <QualityPicker value={state.preset} onChange={q.selectPreset} />
                 </section>
               )}
-              <AdvancedPanel option={option} value={state.advanced} onChange={q.setAdvanced} />
+              {option && <AdvancedPanel option={option} value={state.advanced} onChange={q.setAdvanced} />}
               {/* Frames and PDF pages never keep the location. */}
-              {hasLocation && option.group !== "frames" && option.group !== "document" && (
+              {hasLocation && (compressing || (option?.group !== "frames" && option?.group !== "document")) && (
                 <LocationRow checked={state.removeLocation} onChange={q.setRemoveLocation} />
               )}
               {/* Margin keeps the content clear of the faded edge above the footer. */}

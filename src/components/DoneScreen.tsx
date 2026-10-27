@@ -1,7 +1,7 @@
 import { motion } from "motion/react";
-import { CircleX, ExternalLink, FolderOpen } from "lucide-react";
+import { CircleX, ExternalLink, FolderOpen, Info } from "lucide-react";
 
-import { errorMessage, t } from "../i18n";
+import { errorMessage, intlLocale, t } from "../i18n";
 import { formatBytes } from "../lib/format";
 import { counts, type QueueItem } from "../state/queue";
 import type { QueueController } from "../state/useQueue";
@@ -39,19 +39,47 @@ const outputName = (item: QueueItem) => item.outcome?.output.split(/[\\/]/).pop(
 /** Number of files when a series of pictures was saved in a new folder. */
 const folderFiles = (item: QueueItem) => ((item.outcome?.files ?? 1) > 1 ? item.outcome!.files : null);
 
+/** How much smaller a compressed copy is than its file (`null`: not a smaller copy). */
+function saving(item: QueueItem): { percent: string; from: string; to: string } | null {
+  const before = item.file?.media.sizeBytes;
+  const after = item.outcome?.sizeBytes;
+  if (!item.plan?.compress || before == null || after == null || before <= 0) return null;
+  const percent = new Intl.NumberFormat(intlLocale(), { style: "percent", maximumFractionDigits: 0 }).format(
+    Math.max(0, 1 - after / before),
+  );
+  return { percent, from: formatBytes(before), to: formatBytes(after) };
+}
+
+/** The compressed copy is still above the size limit the user asked for. */
+const overLimit = (item: QueueItem) => {
+  const limit = item.plan?.compress?.maxBytes;
+  return limit != null && (item.outcome?.sizeBytes ?? 0) > limit ? limit : null;
+};
+
 /** Single file (or one folder of pictures) converted successfully. */
 export function DoneScreen({ q, item }: { q: QueueController; item: QueueItem }) {
   const files = folderFiles(item);
+  const smaller = saving(item);
+  const limit = overLimit(item);
   return (
     <div className="flex flex-col items-center justify-center text-center">
       <Checkmark />
-      <h1 className="mt-6 text-[26px] font-semibold tracking-[-0.02em]">{t("done.title")}</h1>
+      <h1 className="mt-6 text-[26px] font-semibold tracking-[-0.02em]">
+        {t(item.plan?.compress ? "done.compressedTitle" : "done.title")}
+      </h1>
       <p className="mt-2 max-w-lg truncate text-[15px] text-label-secondary" title={item.outcome?.output}>
         {files != null
           ? t(item.plan?.target === "pdf" ? "done.savedDocuments" : "done.savedFolder", { n: files, name: outputName(item) })
-          : t("done.saved", { name: outputName(item) })}{" "}
-        · {formatBytes(item.outcome?.sizeBytes ?? 0)}
+          : t("done.saved", { name: outputName(item) })}
+        {!smaller && ` · ${formatBytes(item.outcome?.sizeBytes ?? 0)}`}
       </p>
+      {smaller && <p className="mt-1 text-[15px] font-medium text-label">{t("done.smaller", smaller)}</p>}
+      {limit != null && (
+        <p className="mt-3 flex max-w-md items-start gap-2 text-left text-[13px] text-warning">
+          <Info size={15} className="mt-0.5 shrink-0" aria-hidden />
+          {t("done.overLimit", { limit: formatBytes(limit) })}
+        </p>
+      )}
       <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
         <Button
           variant="primary"
@@ -102,7 +130,11 @@ export function BatchDoneScreen({ q }: { q: QueueController }) {
               </p>
               <p className={`truncate text-[12px] ${item.status === "done" ? "text-label-secondary" : "text-danger"}`}>
                 {item.status === "done"
-                  ? [folderFiles(item) != null && t("done.pictures", { n: folderFiles(item)! }), formatBytes(item.outcome?.sizeBytes ?? 0)]
+                  ? [
+                      folderFiles(item) != null && t("done.pictures", { n: folderFiles(item)! }),
+                      saving(item) ? t("done.smaller", saving(item)!) : formatBytes(item.outcome?.sizeBytes ?? 0),
+                      overLimit(item) != null && t("done.overLimit", { limit: formatBytes(overLimit(item)!) }),
+                    ]
                       .filter(Boolean)
                       .join(" · ")
                   : item.status === "cancelled"

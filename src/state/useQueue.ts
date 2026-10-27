@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import type { AdvancedOptions } from "../bindings/AdvancedOptions";
+import type { CompressOptions } from "../bindings/CompressOptions";
+import type { ConversionRequest } from "../bindings/ConversionRequest";
 import type { FrameOptions } from "../bindings/FrameOptions";
 import type { JobEvent } from "../bindings/JobEvent";
 import type { PdfOptions } from "../bindings/PdfOptions";
@@ -18,7 +20,7 @@ import {
   initialQueue,
   queueReducer,
   readyItems,
-  requestOf,
+  requestFor,
   totalEstimate,
   type QueueItem,
 } from "./queue";
@@ -72,12 +74,12 @@ export function useQueue() {
   // --- Planning: one plan per file for the current request -----------------------
   const planRequested = useRef(new Set<string>());
   useEffect(() => {
-    const request = requestOf(state);
-    if (state.phase !== "setup" || !request) return;
+    if (state.phase !== "setup") return;
     const version = state.planVersion;
     for (const item of readyItems(state)) {
+      const request = requestFor(state, item);
       const id = `${version}:${item.key}`;
-      if (item.plan || item.planError || planRequested.current.has(id)) continue;
+      if (!request || item.plan || item.planError || planRequested.current.has(id)) continue;
       planRequested.current.add(id);
       backend.planConversion(item.path, item.file!.media, request).then(
         (plan) => dispatch({ type: "planned", key: item.key, version, plan }),
@@ -145,10 +147,14 @@ export function useQueue() {
 
   const start = useCallback(async () => {
     const s = stateRef.current;
-    const base = requestOf(s);
-    if (!canStart(s) || !base) return;
-    // Pictures of PDF pages and split PDFs are named "name-pagina-01" in the interface language.
-    const request = { ...base, pdf: { ...base.pdf!, pageLabel: t("pdf.pageLabel"), pagesLabel: t("pdf.pagesLabel") } };
+    if (!canStart(s)) return;
+    // Pictures of PDF pages, split PDFs and smaller copies are named
+    // "name-pagina-01", "name-compresso" in the interface language.
+    const labelled = (request: ConversionRequest): ConversionRequest => ({
+      ...request,
+      pdf: request.pdf ? { ...request.pdf, pageLabel: t("pdf.pageLabel"), pagesLabel: t("pdf.pagesLabel") } : request.pdf,
+      compress: request.compress ? { ...request.compress, label: t("compress.fileLabel") } : request.compress,
+    });
     const items = readyItems(s);
     cancelling.current = false;
     dispatch({ type: "start" });
@@ -157,6 +163,9 @@ export function useQueue() {
     // The backend runs one job at a time; queue them all now, in order.
     for (const group of groups) {
       if (cancelling.current) break;
+      const base = requestFor(s, group[0]);
+      if (!base) continue;
+      const request = labelled(base);
       try {
         const jobId =
           group.length > 1
@@ -206,6 +215,8 @@ export function useQueue() {
     remove: (key: number) => dispatch({ type: "remove", key }),
     move: (key: number, delta: -1 | 1) => dispatch({ type: "move", key, delta }),
     selectTarget: (target: TargetFormat) => dispatch({ type: "selectTarget", target }),
+    selectCompress: () => dispatch({ type: "selectCompress" }),
+    setCompression: (compression: CompressOptions) => dispatch({ type: "setCompression", compression }),
     selectPreset: (preset: QualityPreset) => dispatch({ type: "selectPreset", preset }),
     setAdvanced: (advanced: AdvancedOptions) => dispatch({ type: "setAdvanced", advanced }),
     setFrames: (frames: FrameOptions) => dispatch({ type: "setFrames", frames }),

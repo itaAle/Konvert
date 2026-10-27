@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   allWarnings,
+  canCompress,
   canStart,
   combines,
   commonTargets,
@@ -12,6 +13,7 @@ import {
   initialQueue,
   overallProgress,
   queueReducer as reduce,
+  requestFor,
   requestOf,
   resultItems,
   totalEstimate,
@@ -79,6 +81,8 @@ function file(name: string, kind: "audio" | "videoWithAudio" | "image" | "docume
       document: kind === "document" ? { pages: 4, widthPt: 595, heightPt: 842, extras: false } : null,
     },
     targets,
+    // Like the core: every file keeps its own format, except HEIC photos.
+    compress: kind === "document" ? "pdf" : name.endsWith(".heic") ? null : (name.split(".").pop() as TargetFormat),
   };
 }
 
@@ -428,5 +432,51 @@ describe("queue state machine", () => {
     // Another format: nothing to combine.
     s = run(s, { type: "setPdf", pdf: DEFAULT_PDF }, { type: "selectTarget", target: "png" });
     expect(combines(s)).toBe(false);
+  });
+
+  it("compresses every file in its own format", () => {
+    let s = run(initialQueue(), { type: "add", paths: ["a.pdf", "b.jpg", "c.mp4"] });
+    s = run(
+      s,
+      { type: "analyzed", key: 1, file: file("a.pdf", "document", null) },
+      { type: "analyzed", key: 2, file: file("b.jpg", "image", null) },
+      { type: "analyzed", key: 3, file: file("c.mp4", "videoWithAudio", 60) },
+    );
+    expect(canCompress(s.items)).toBe(true);
+    // No format is common to the three, yet each can be made smaller.
+    expect(commonTargets(s.items)).toEqual([]);
+    const version = s.planVersion;
+    s = reduce(s, { type: "selectCompress" });
+    expect(s).toMatchObject({ compress: true, target: null, planVersion: version + 1 });
+    expect(requestOf(s)).toBeNull();
+    expect(s.items.map((i) => requestFor(s, i)?.target)).toEqual(["pdf", "jpg", "mp4"]);
+    expect(requestFor(s, s.items[0])?.compress).toEqual({ level: "strong", maxBytes: null, pagesAsPictures: false, label: null });
+    expect(canStart(s)).toBe(false);
+    s = run(
+      s,
+      ...s.items.map((item): QueueAction => ({ type: "planned", key: item.key, version: s.planVersion, plan: plan(item.file!.compress!, 50) })),
+    );
+    expect(canStart(s)).toBe(true);
+    s = reduce(s, { type: "setCompression", compression: { ...s.compression, level: "max", maxBytes: 2_000_000 } });
+    expect(canStart(s)).toBe(false);
+    expect(requestFor(s, s.items[2])?.compress).toMatchObject({ level: "max", maxBytes: 2_000_000 });
+    // Choosing a format leaves compression.
+    s = reduce(s, { type: "remove", key: 3 });
+    s = reduce(s, { type: "selectTarget", target: "pdf" });
+    expect(s.compress).toBe(false);
+    expect(requestFor(s, s.items[0])?.compress).toBeUndefined();
+  });
+
+  it("offers compression only when every file can be compressed", () => {
+    let s = run(initialQueue(), { type: "add", paths: ["a.jpg", "b.heic"] });
+    s = run(s, { type: "analyzed", key: 1, file: file("a.jpg", "image", null) }, { type: "selectCompress" });
+    expect(s.compress).toBe(true);
+    // A HEIC photo cannot be made smaller as HEIC: compression is turned off.
+    s = reduce(s, { type: "analyzed", key: 2, file: file("b.heic", "image", null) });
+    expect(canCompress(s.items)).toBe(false);
+    expect(s.compress).toBe(false);
+    expect(reduce(s, { type: "selectCompress" }).compress).toBe(false);
+    s = reduce(s, { type: "remove", key: 2 });
+    expect(reduce(s, { type: "selectCompress" }).compress).toBe(true);
   });
 });
