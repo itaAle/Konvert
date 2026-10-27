@@ -1,10 +1,12 @@
 # Konvert
-Convert audio, video, images and PDFs entirely on your computer, with a modern interface.
+Convert audio, video, images, PDFs and Word documents entirely on your computer, with a
+modern interface.
 
 Konvert converts between many audio, video and image formats, takes frames from videos,
 turns photos into PDFs and PDF pages into pictures, splits, turns and rearranges the pages
-of a PDF, **compresses** files in their own format (down to a size you choose) and lets you
-keep or remove EXIF data and locations. Everything happens **on your computer**: no network
+of a PDF, turns **Word documents into PDFs and PDFs into Word documents**, **compresses**
+files in their own format (down to a size you choose) and lets you keep or remove EXIF data
+and locations. Everything happens **on your computer**: no network
 connections, no telemetry, no account.
 
 Platforms: Windows 10/11 (64-bit), macOS 11 or later on Apple Silicon (M1 and later),
@@ -44,7 +46,8 @@ Konvert only offers the conversions that make sense for the file you give it:
 | Video with audio | MP4, MKV, MOV, WebM, AVI, GIF, animated WebP; more formats: TS, MPG (MPEG-2), 3GP, FLV, APNG. Also **audio only** in every audio format and **frames** as JPG, PNG or WebP |
 | Video without audio | The same, without the audio formats |
 | Picture (JPG/JPEG, PNG, WebP, AVIF, HEIC/HEIF, BMP, TIFF, ICO, SVG, JPEG XL¹) | JPG, PNG, WebP, AVIF, **PDF**; more formats: BMP, TIFF, GIF, ICO, JPEG XL¹ |
-| PDF document | Its **pages as pictures** (PNG, JPG, WebP); a **new PDF** with pages taken out, turned or moved, or **split** into several PDFs; together with other PDFs or pictures, **one PDF** |
+| PDF document | Its **pages as pictures** (PNG, JPG, WebP); a **new PDF** with pages taken out, turned or moved, or **split** into several PDFs; together with other PDFs or pictures, **one PDF**; a **Word document** (DOCX) to edit |
+| Word document (DOCX) | **PDF**; together with PDFs or pictures, **one PDF** |
 
 ¹ JPEG XL needs FFmpeg's libjxl, which the Windows and Linux builds have and the macOS
 build does not: Konvert checks the engine and offers JPEG XL only where it works.
@@ -134,6 +137,25 @@ PDF documents:
 - Pages are drawn by hayro, a PDF renderer written in Rust: very unusual PDFs may look
   slightly different than in other readers.
 
+Word documents (no Word or other program needed):
+
+- **DOCX → PDF**: Konvert reads the document (text and its formatting, styles, numbered and
+  bulleted lists, tables with merged cells and shading, pictures, headers and footers with
+  page numbers, footnotes, sections with their page size, margins and columns) and lays it
+  out with the [Typst](https://typst.app) typesetting engine, built into Konvert, using the
+  fonts installed on the computer (or metrically compatible ones, such as Carlito for
+  Calibri). The PDF has selectable text and embedded fonts.
+  Line and page breaks may differ slightly from Word's; text boxes, charts, SmartArt,
+  equations and embedded objects are left out (Konvert says so); pictures linked from
+  outside the file are never fetched.
+- **PDF → DOCX**: the text and pictures of each page become paragraphs to edit in Word:
+  fonts, sizes, bold and italic, colors, superscripts and subscripts, headings (from the
+  text size, so they appear in Word's navigation pane), list items, rows of tables (as tab
+  stops), colored title bars, two-column pages read in order, page breaks. Drawings and
+  exact positions are not kept: the result is a document to edit, not a copy of the page.
+  Scanned pages without text stay pictures (Konvert does no OCR); scans that were already
+  read by OCR give their text.
+
 The format table is declarative: `crates/konvert-core/src/formats.rs`.
 
 ## Compress
@@ -157,6 +179,7 @@ is too large for an upload form. It works on several files at once, even of diff
 | Video | Lower bit rate; Strong limits the picture to 1080p, Maximum to 720p at 30 frames per second with mono sound. With a size limit, the bit rate comes from the duration. |
 | Animated GIF, WebP, APNG | Narrower, fewer frames per second. |
 | Audio | Lower bit rate (mono at Maximum); WAV, FLAC, AIFF and ALAC stay lossless: 16 bits, then a lower sample rate and mono. |
+| Word document (DOCX) | Pictures scaled to the size they are shown at and stored again (JPEG stays JPEG, PNG stays PNG, with 256 colors from Strong); the page thumbnail goes; every part is compressed at the strongest level. Text and layout are untouched. |
 
 HEIC, BMP, TIFF, ICO and SVG files cannot be compressed in their own format: convert them
 instead (for example HEIC → JPG).
@@ -280,6 +303,11 @@ Konvert works entirely on your computer. No data leaves your device.
   read other files: pictures it names are ignored, only pictures embedded in it are drawn.
 - PDF files are read and written by Rust libraries without network code (hayro, lopdf):
   links, scripts, forms and embedded files in a PDF are never opened or run.
+- Word documents are read and written by Konvert itself and laid out by the Typst library,
+  which only sees the document and its own pictures: no Typst packages, no downloads, no
+  other files. Fields, macros and pictures linked from outside the file are never run or
+  fetched. The documents Konvert writes carry no author, dates or paths (the XML namespace
+  names a DOCX must contain are identifiers of the format, never opened).
 - The only web address the app knows is the releases page, which opens in your browser
   only if you click it.
 
