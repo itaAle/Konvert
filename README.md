@@ -1,8 +1,10 @@
 # Konvert
-Audio, video, image and PDF file converter with a modern interface.
+Convert audio, video, images and PDFs entirely on your computer, with a modern interface.
 
-Konvert converts audio, video, image and PDF files from one format to another **entirely on
-your computer**: no network connections, no telemetry, no account.
+Konvert converts between many audio, video and image formats, takes frames from videos,
+turns photos into PDFs and PDF pages into pictures, and lets you keep or remove EXIF data
+and locations. Everything happens **on your computer**: no network connections, no
+telemetry, no account.
 
 Platforms: Windows 10/11 (64-bit), macOS 11 or later on Apple Silicon (M1 and later),
 Linux x86_64 and arm64.
