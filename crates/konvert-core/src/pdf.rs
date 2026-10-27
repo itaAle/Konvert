@@ -7,13 +7,17 @@
 //!   documents ([`build`]) with lopdf. Bookmarks and fillable forms come along
 //!   with their pages.
 //!
-//! Konvert never asks for passwords: a PDF that needs one gives
-//! [`CoreError::PdfEncrypted`]. PDFs protected only against editing (empty
-//! user password) open normally. The PDFs Konvert writes carry no path, user
-//! name or date: their only metadata is `Producer: Konvert`.
+//! A PDF that needs a password gives [`CoreError::PdfEncrypted`] until the
+//! user types it: [`unlock`] then decrypts the file in memory (never on
+//! disk), with the password that opens it or the owner's; a wrong one gives
+//! [`CoreError::PdfWrongPassword`]. PDFs protected only against editing
+//! (empty user password) open normally. New PDFs can be protected with a
+//! password (AES-256, see [`Finishing`]). The PDFs Konvert writes carry no
+//! path, user name or date: their only metadata is `Producer: Konvert`.
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use hayro::hayro_interpret::InterpreterSettings;
@@ -30,7 +34,10 @@ use ts_rs::TS;
 use crate::error::CoreError;
 use crate::metadata::base64;
 use crate::probe::{MediaInfo, MediaKind};
-use crate::request::{PageMargin, PageOrientation, PageSize, PdfOptions, PdfPage, PdfSplit};
+use crate::request::{
+    PageMargin, PageOrientation, PageSize, PdfOptions, PdfPage, PdfProtection, PdfSplit,
+};
+use crate::secret::{Secret, random_bytes, wipe};
 
 /// A4 in points (1/72 inch).
 pub const A4: (f32, f32) = (595.276, 841.89);
@@ -55,6 +62,10 @@ pub struct DocumentInfo {
     pub bookmark_pages: Vec<u32>,
     #[serde(default)]
     pub form: PdfForm,
+    /// Opened with a password: what Konvert makes of it has none, unless
+    /// protected again.
+    #[serde(default)]
+    pub locked: bool,
 }
 
 /// The fillable form of a PDF, as the PDFs made from it keep it.
@@ -106,10 +117,68 @@ fn damaged(details: &str) -> CoreError {
     }
 }
 
+fn written(error: impl std::fmt::Display) -> CoreError {
+    CoreError::Io(std::io::Error::other(error.to_string()))
+}
+
+/// The bytes of a PDF that needs a password, decrypted in memory with
+/// `password` (the one that opens it, or the owner's): the same document,
+/// without encryption. `None` when the file needs no password.
+pub fn unlock(data: &[u8], password: &Secret) -> Result<Option<Vec<u8>>, CoreError> {
+    // A protected PDF names its encryption dictionary; hayro tells whether
+    // it opens without a password.
+    let locked = data.windows(8).any(|w| w == b"/Encrypt")
+        && matches!(
+            Pdf::new(data.to_vec()),
+            Err(LoadPdfError::Decryption(
+                hayro::hayro_syntax::DecryptionError::PasswordProtected
+            ))
+        );
+    if !locked {
+        return Ok(None);
+    }
+    let refused = |e: lopdf::Error| match e {
+        lopdf::Error::InvalidPassword
+        | lopdf::Error::Decryption(lopdf::encryption::DecryptionError::IncorrectPassword) => {
+            CoreError::PdfWrongPassword
+        }
+        lopdf::Error::Decryption(other) => damaged(&format!("encryption: {other}")),
+        other => damaged(&other.to_string()),
+    };
+    let options = lopdf::LoadOptions::with_password(password.expose());
+    let mut doc = Document::load_mem_with_options(data, options).map_err(refused)?;
+    if doc.is_encrypted() {
+        doc.decrypt(password.expose()).map_err(refused)?;
+    }
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).map_err(written)?;
+    Ok(Some(bytes))
+}
+
+/// A PDF file read into memory, decrypted with `password` when it needs one.
+pub fn load(path: &Path, password: Option<&Secret>) -> Result<Vec<u8>, CoreError> {
+    let data = std::fs::read(path)?;
+    match password {
+        Some(password) => Ok(unlock(&data, password)?.unwrap_or(data)),
+        None => Ok(data),
+    }
+}
+
 /// Analyses a PDF file: a document with its page count and first page size.
 pub fn probe(path: &Path) -> Result<MediaInfo, CoreError> {
+    probe_with(path, None)
+}
+
+/// Analyses a PDF file that may need `password` to be opened.
+pub fn probe_with(path: &Path, password: Option<&Secret>) -> Result<MediaInfo, CoreError> {
     let data = std::fs::read(path)?;
     let size = data.len() as u64;
+    let unlocked = match password {
+        Some(password) => unlock(&data, password)?,
+        None => None,
+    };
+    let locked = unlocked.is_some();
+    let data = unlocked.unwrap_or(data);
     let pdf =
         std::panic::catch_unwind(|| open(data)).map_err(|_| damaged("the reader failed"))??;
     let pages = pdf.pages();
@@ -137,6 +206,7 @@ pub fn probe(path: &Path) -> Result<MediaInfo, CoreError> {
             height_pt,
             bookmark_pages,
             form,
+            locked,
         }),
         text: None,
     })
@@ -662,14 +732,28 @@ pub enum Part {
     Document(Vec<u8>),
 }
 
+/// What is added to every document made by [`build`].
+#[derive(Debug, Clone, Default)]
+pub struct Finishing {
+    /// A password that opens the documents.
+    pub protection: Option<PdfProtection>,
+}
+
 /// Builds one PDF from pictures and documents, every page in order. Gives
 /// the document and its number of pages.
 pub fn assemble(parts: Vec<Part>) -> Result<(Vec<u8>, u32), CoreError> {
     let mut document = Vec::new();
-    let pages = build(parts, None, &[], &AtomicBool::new(false), |_, bytes| {
-        document = bytes;
-        true
-    })?;
+    let pages = build(
+        parts,
+        None,
+        &[],
+        &Finishing::default(),
+        &AtomicBool::new(false),
+        |_, bytes| {
+            document = bytes;
+            true
+        },
+    )?;
     Ok((document, pages))
 }
 
@@ -686,6 +770,7 @@ pub fn edit(
         vec![Part::Document(data)],
         Some(pages),
         parts,
+        &Finishing::default(),
         cancel,
         on_document,
     )
@@ -695,7 +780,8 @@ pub fn edit(
 /// Makes new PDFs out of the pages of `files`: `layout` lists them in order,
 /// each with its turn (`None`: every page of every file), and `parts` is the
 /// number of pages of each new document (empty: a single one). Bookmarks and
-/// fillable forms come along with their pages. Each document is handed to
+/// fillable forms come along with their pages; `finishing` is added to every
+/// document. Each document is handed to
 /// `on_document` as soon as it is ready; stops when `cancel` is set or
 /// `on_document` returns `false`. Gives the number of pages.
 /// Blocking: run it on a worker thread.
@@ -703,6 +789,7 @@ pub fn build(
     files: Vec<Part>,
     layout: Option<&[PdfPage]>,
     parts: &[u32],
+    finishing: &Finishing,
     cancel: &AtomicBool,
     mut on_document: impl FnMut(usize, Vec<u8>) -> bool,
 ) -> Result<u32, CoreError> {
@@ -740,7 +827,7 @@ pub fn build(
         let mut writer = Writer::new();
         writer.add(&inputs, &pages[start..start + size as usize])?;
         start += size as usize;
-        if !on_document(i, writer.finish(&inputs)?) {
+        if !on_document(i, writer.finish(&inputs, finishing)?) {
             return Err(CoreError::Cancelled);
         }
     }
@@ -1683,7 +1770,7 @@ impl Writer {
         }
     }
 
-    fn finish(mut self, inputs: &[Input]) -> Result<Vec<u8>, CoreError> {
+    fn finish(mut self, inputs: &[Input], finishing: &Finishing) -> Result<Vec<u8>, CoreError> {
         let count = self.kids.len() as i64;
         let kids = std::mem::take(&mut self.kids);
         self.out.objects.insert(
@@ -1727,12 +1814,71 @@ impl Writer {
         self.out.trailer.set("Root", catalog_id);
         self.out.trailer.set("Info", info_id);
         self.out.compress();
+        if let Some(protection) = &finishing.protection {
+            encrypt(&mut self.out, protection)?;
+        }
         let mut bytes = Vec::new();
-        self.out
-            .save_to(&mut bytes)
-            .map_err(|e| CoreError::Io(std::io::Error::other(e.to_string())))?;
+        self.out.save_to(&mut bytes).map_err(written)?;
         Ok(bytes)
     }
+}
+
+/// A PDF made by Konvert, protected with a password.
+pub fn protect(data: &[u8], protection: &PdfProtection) -> Result<Vec<u8>, CoreError> {
+    let mut doc = Document::load_mem(data).map_err(|e| damaged(&e.to_string()))?;
+    encrypt(&mut doc, protection)?;
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).map_err(written)?;
+    Ok(bytes)
+}
+
+/// Protects `doc` with a password (AES-256, revision 6, readable by every
+/// current reader). When printing or copying is not allowed, the owner's
+/// password (which lifts those limits) is a random one nobody knows;
+/// otherwise both passwords are the same.
+fn encrypt(doc: &mut Document, protection: &PdfProtection) -> Result<(), CoreError> {
+    use lopdf::encryption::crypt_filters::{Aes256CryptFilter, CryptFilter};
+    use lopdf::{EncryptionState, EncryptionVersion, Permissions};
+    if protection.password.is_empty() {
+        return Err(CoreError::UnsupportedConversion {
+            details: "an empty password protects nothing".into(),
+        });
+    }
+    let owner = if protection.allow_print && protection.allow_copy {
+        protection.password.clone()
+    } else {
+        Secret::random(32)?
+    };
+    let mut permissions = Permissions::all();
+    if !protection.allow_print {
+        permissions.remove(Permissions::PRINTABLE | Permissions::PRINTABLE_IN_HIGH_QUALITY);
+    }
+    if !protection.allow_copy {
+        permissions.remove(Permissions::COPYABLE);
+    }
+    let id = random_bytes(16)?;
+    doc.trailer.set(
+        "ID",
+        vec![
+            Object::String(id.clone(), lopdf::StringFormat::Hexadecimal),
+            Object::String(id, lopdf::StringFormat::Hexadecimal),
+        ],
+    );
+    let mut key = random_bytes(32)?;
+    let filter: Arc<dyn CryptFilter> = Arc::new(Aes256CryptFilter);
+    let state = EncryptionState::try_from(EncryptionVersion::V5 {
+        encrypt_metadata: true,
+        crypt_filters: BTreeMap::from([(b"StdCF".to_vec(), filter)]),
+        file_encryption_key: &key,
+        stream_filter: b"StdCF".to_vec(),
+        string_filter: b"StdCF".to_vec(),
+        owner_password: owner.expose(),
+        user_password: protection.password.expose(),
+        permissions,
+    });
+    wipe(&mut key);
+    let state = state.map_err(|e| CoreError::Io(std::io::Error::other(e.to_string())))?;
+    doc.encrypt(&state).map_err(written)
 }
 
 /// `name` followed by `_n`, in the encoding of the name (PDFDocEncoding or
@@ -2111,6 +2257,7 @@ mod tests {
             files,
             Some(layout),
             parts,
+            &Finishing::default(),
             &AtomicBool::new(false),
             |_, bytes| {
                 result.push(bytes);
@@ -2937,6 +3084,7 @@ mod tests {
                 files(),
                 Some(&wrong),
                 &[],
+                &Finishing::default(),
                 &AtomicBool::new(false),
                 |_, _| true,
             );
@@ -2957,5 +3105,176 @@ mod tests {
         assert!(check_pages(Some(&[page_of(1, 1, 0), page(1, 0)]), &[1, 1]).is_ok());
         let err = check_layout(Some(&[page_of(1, 1, 0)]), 3).unwrap_err();
         assert_eq!(err.code(), "invalid_pages");
+    }
+
+    /// `data` protected by lopdf with the given scheme: RC4 128 bits (V2),
+    /// AES-128 (V4) or AES-256 (V5), owner password "proprietario".
+    fn locked(data: &[u8], scheme: u8, user: &str) -> Vec<u8> {
+        use lopdf::encryption::crypt_filters::{Aes128CryptFilter, Aes256CryptFilter, CryptFilter};
+        use lopdf::{EncryptionState, EncryptionVersion, Permissions};
+        use std::collections::BTreeMap;
+        let mut doc = Document::load_mem(data).unwrap();
+        doc.trailer.set(
+            "ID",
+            vec![
+                Object::string_literal("0123456789abcdef"),
+                Object::string_literal("0123456789abcdef"),
+            ],
+        );
+        let key = [7u8; 32];
+        let state = match scheme {
+            2 => EncryptionState::try_from(EncryptionVersion::V2 {
+                document: &doc,
+                owner_password: "proprietario",
+                user_password: user,
+                key_length: 128,
+                permissions: Permissions::all(),
+            }),
+            4 => {
+                let filter: Arc<dyn CryptFilter> = Arc::new(Aes128CryptFilter);
+                EncryptionState::try_from(EncryptionVersion::V4 {
+                    document: &doc,
+                    encrypt_metadata: true,
+                    crypt_filters: BTreeMap::from([(b"StdCF".to_vec(), filter)]),
+                    stream_filter: b"StdCF".to_vec(),
+                    string_filter: b"StdCF".to_vec(),
+                    owner_password: "proprietario",
+                    user_password: user,
+                    permissions: Permissions::all(),
+                })
+            }
+            _ => {
+                let filter: Arc<dyn CryptFilter> = Arc::new(Aes256CryptFilter);
+                EncryptionState::try_from(EncryptionVersion::V5 {
+                    encrypt_metadata: true,
+                    crypt_filters: BTreeMap::from([(b"StdCF".to_vec(), filter)]),
+                    file_encryption_key: &key,
+                    stream_filter: b"StdCF".to_vec(),
+                    string_filter: b"StdCF".to_vec(),
+                    owner_password: "proprietario",
+                    user_password: user,
+                    permissions: Permissions::all(),
+                })
+            }
+        };
+        doc.encrypt(&state.unwrap()).unwrap();
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn protected_pdfs_open_with_their_password_or_the_owners() {
+        let plain = structured_pdf(false);
+        for scheme in [2, 4, 5] {
+            let data = locked(&plain, scheme, "segreta è");
+            assert_eq!(open(data.clone()).err().unwrap().code(), "pdf_encrypted");
+            for password in ["segreta è", "proprietario"] {
+                let unlocked = unlock(&data, &Secret::from(password))
+                    .unwrap()
+                    .unwrap_or_else(|| panic!("scheme {scheme}: {password}"));
+                // The whole document, readable without a password.
+                assert_eq!(page_count(&unlocked).unwrap(), 4);
+                assert!(!Document::load_mem(&unlocked).unwrap().is_encrypted());
+                assert_eq!(outline_of(&unlocked).len(), 5, "scheme {scheme}");
+                assert!(String::from_utf8_lossy(&unlocked).contains("(Ada)"));
+            }
+            let wrong = unlock(&data, &Secret::from("sbagliata")).unwrap_err();
+            assert_eq!(wrong.code(), "pdf_wrong_password", "scheme {scheme}");
+        }
+        // Files that open without a password come back as they are.
+        assert!(unlock(&plain, &Secret::from("x")).unwrap().is_none());
+        let restricted = locked(&plain, 4, "");
+        assert!(unlock(&restricted, &Secret::from("x")).unwrap().is_none());
+    }
+
+    #[test]
+    fn new_pdfs_can_be_protected_with_a_password() {
+        use lopdf::Permissions;
+        let protection = |allow_print, allow_copy| PdfProtection {
+            password: Secret::from("chiave segreta"),
+            allow_print,
+            allow_copy,
+        };
+        let finishing = Finishing {
+            protection: Some(protection(false, true)),
+        };
+        let mut result = Vec::new();
+        build(
+            vec![Part::Document(structured_pdf(false))],
+            None,
+            &[],
+            &finishing,
+            &AtomicBool::new(false),
+            |_, bytes| {
+                result = bytes;
+                true
+            },
+        )
+        .unwrap();
+        // Nothing can be read without the password, not even the producer.
+        assert_eq!(open(result.clone()).err().unwrap().code(), "pdf_encrypted");
+        assert!(!String::from_utf8_lossy(&result).contains("Konvert"));
+        // AES-256, read back by hayro (written by lopdf: two implementations).
+        let pdf = Pdf::new_with_password(result.clone(), "chiave segreta").unwrap();
+        assert_eq!(pdf.pages().len(), 4);
+        let doc = Document::load_mem_with_options(
+            &result,
+            lopdf::LoadOptions::with_password("chiave segreta"),
+        )
+        .unwrap();
+        let encrypt = doc.encryption_state.as_ref().unwrap();
+        assert_eq!((encrypt.version(), encrypt.revision()), (5, 6));
+        let permissions = encrypt.permissions();
+        assert!(!permissions.contains(Permissions::PRINTABLE));
+        assert!(permissions.contains(Permissions::COPYABLE));
+        // Bookmarks and form survive the encryption.
+        let unlocked = unlock(&result, &Secret::from("chiave segreta"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(outline_of(&unlocked).len(), 5);
+        assert_eq!(fields_of(&unlocked).len(), 3);
+        // Without limits, the password is also the owner's.
+        let open_to_all = protect(&sample_pdf(&[(A4.0, A4.1)]), &protection(true, true)).unwrap();
+        assert_eq!(
+            page_count(
+                &unlock(&open_to_all, &Secret::from("chiave segreta"))
+                    .unwrap()
+                    .unwrap()
+            )
+            .unwrap(),
+            1
+        );
+        // An empty password protects nothing.
+        let empty = PdfProtection {
+            password: Secret::default(),
+            ..protection(true, true)
+        };
+        assert!(protect(&sample_pdf(&[(A4.0, A4.1)]), &empty).is_err());
+    }
+
+    #[test]
+    fn a_protected_pdf_is_analysed_with_its_password() {
+        let dir = std::env::temp_dir().join(format!("konvert-pdf-locked-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Riservato.pdf");
+        std::fs::write(&path, locked(&structured_pdf(false), 5, "segreta")).unwrap();
+        assert_eq!(probe(&path).unwrap_err().code(), "pdf_encrypted");
+        let media = probe_with(&path, Some(&Secret::from("segreta"))).unwrap();
+        let info = media.document.unwrap();
+        assert_eq!(
+            (info.pages, info.locked, info.form),
+            (4, true, PdfForm::Fillable)
+        );
+        assert_eq!(info.bookmark_pages, [1, 2, 3, 4]);
+        let wrong = probe_with(&path, Some(&Secret::from("no"))).unwrap_err();
+        assert_eq!(wrong.code(), "pdf_wrong_password");
+        assert_eq!(
+            load(&path, Some(&Secret::from("segreta")))
+                .map(|d| page_count(&d).unwrap())
+                .unwrap(),
+            4
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

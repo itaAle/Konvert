@@ -152,6 +152,7 @@ async fn convert(
         media,
         request: request.clone(),
         output_dir: out_dir,
+        passwords: Default::default(),
     };
     let outcome = run_conversion(bins, &ws, &job, &CancellationToken::new(), |_| {})
         .await
@@ -192,6 +193,7 @@ async fn wav_to_mp3_end_to_end() {
         media,
         request: req(TargetFormat::Mp3, QualityPreset::Balanced),
         output_dir: out_dir.clone(),
+        passwords: Default::default(),
     };
 
     let mut fractions = Vec::new();
@@ -1439,6 +1441,7 @@ async fn convert_series(
         media: media.clone(),
         request,
         output_dir: out_dir,
+        passwords: Default::default(),
     };
     let outcome = run_conversion(bins, &ws, &job, &CancellationToken::new(), |_| {})
         .await
@@ -1482,6 +1485,7 @@ async fn cancelling_a_series_leaves_nothing_behind() {
         media,
         request,
         output_dir: out_dir.clone(),
+        passwords: Default::default(),
     };
     let cancel = CancellationToken::new();
     let trigger = cancel.clone();
@@ -1599,6 +1603,7 @@ async fn pdfs_are_merged_in_order_without_personal_metadata() {
         inputs,
         request: req(TargetFormat::Pdf, QualityPreset::Balanced),
         output_dir: out_dir.clone(),
+        passwords: Default::default(),
     };
     let outcome = konvert_core::run_combined(&bins, &ws, &job, &CancellationToken::new(), |_| {})
         .await
@@ -1660,6 +1665,7 @@ async fn pages_of_several_files_are_arranged_and_split() {
         inputs,
         request,
         output_dir: out_dir.clone(),
+        passwords: Default::default(),
     };
     let outcome = konvert_core::run_combined(&bins, &ws, &job, &CancellationToken::new(), |_| {})
         .await
@@ -1807,6 +1813,7 @@ async fn cancelling_a_split_leaves_nothing_behind() {
         media,
         request,
         output_dir: out_dir.clone(),
+        passwords: Default::default(),
     };
     let cancel = CancellationToken::new();
     let trigger = cancel.clone();
@@ -1874,6 +1881,100 @@ async fn protected_and_damaged_pdfs_are_reported_clearly() {
 }
 
 #[tokio::test]
+async fn protected_pdfs_open_with_their_password_and_can_be_protected_again() {
+    use konvert_core::{Passwords, Secret};
+    let bins = engine();
+    let tmp = TempDir::new("pdf-passwords");
+    let locked = tmp.path("Protetto.pdf");
+    std::fs::write(&locked, fixtures::encrypted_pdf("segreta")).unwrap();
+    let password = Secret::from("segreta");
+    let media = konvert_core::pdf::probe_with(&locked, Some(&password)).unwrap();
+    assert!(media.document.as_ref().unwrap().locked);
+    let mut passwords = Passwords::default();
+    passwords.insert(locked.clone(), password);
+    let out_dir = tmp.path("out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ws = Workspace::create(&tmp.path("ws")).unwrap();
+    let run = |id: u64, request: ConversionRequest, passwords: Passwords| {
+        let job = ConversionJob {
+            id,
+            input: locked.clone(),
+            media: media.clone(),
+            request,
+            output_dir: out_dir.clone(),
+            passwords,
+        };
+        let ws = &ws;
+        let bins = &bins;
+        async move { run_conversion(bins, ws, &job, &CancellationToken::new(), |_| {}).await }
+    };
+
+    // Without its password nothing opens.
+    let no_password = run(
+        1,
+        req(TargetFormat::Png, QualityPreset::Balanced),
+        Passwords::default(),
+    );
+    assert_eq!(no_password.await.unwrap_err().code(), "pdf_encrypted");
+
+    // With it: pictures of the pages, a smaller copy, a copy without password.
+    let picture = run(
+        2,
+        req(TargetFormat::Png, QualityPreset::Balanced),
+        passwords.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        probe(&bins, &picture.output).await.unwrap().kind,
+        MediaKind::Image
+    );
+    let mut smaller = req(TargetFormat::Pdf, QualityPreset::Balanced);
+    smaller.compress = Some(konvert_core::CompressOptions::default());
+    match run(3, smaller, passwords.clone()).await {
+        Ok(outcome) => {
+            assert!(konvert_core::pdf::page_count(&std::fs::read(outcome.output).unwrap()).is_ok())
+        }
+        Err(e) => assert_eq!(e.code(), "no_gain"),
+    }
+    let request = req(TargetFormat::Pdf, QualityPreset::Balanced);
+    let plan = plan_conversion(&media, &request, &locked).unwrap();
+    assert_eq!(
+        plan.warnings,
+        [konvert_core::ConversionWarning::PdfUnlocked]
+    );
+    let open = run(4, request, passwords.clone()).await.unwrap();
+    let unlocked = probe(&bins, &open.output).await.unwrap();
+    assert!(!unlocked.document.unwrap().locked);
+
+    // Protected again with another password, printing not allowed.
+    let mut request = req(TargetFormat::Pdf, QualityPreset::Balanced);
+    request.pdf = Some(konvert_core::PdfOptions {
+        protection: Some(konvert_core::request::PdfProtection {
+            password: Secret::from("nuova"),
+            allow_print: false,
+            allow_copy: true,
+        }),
+        ..Default::default()
+    });
+    let protected = run(5, request, passwords).await.unwrap();
+    assert_eq!(
+        probe(&bins, &protected.output).await.unwrap_err().code(),
+        "pdf_encrypted"
+    );
+    let again =
+        konvert_core::pdf::probe_with(&protected.output, Some(&Secret::from("nuova"))).unwrap();
+    assert_eq!(again.document.unwrap().pages, 1);
+    assert_eq!(
+        konvert_core::pdf::probe_with(&protected.output, Some(&Secret::from("segreta")))
+            .unwrap_err()
+            .code(),
+        "pdf_wrong_password"
+    );
+    assert_eq!(files_in(ws.dir()), [".lock"]);
+}
+
+#[tokio::test]
 async fn cancelling_a_long_pdf_leaves_nothing_behind() {
     let bins = engine();
     let tmp = TempDir::new("pdf-cancel");
@@ -1894,6 +1995,7 @@ async fn cancelling_a_long_pdf_leaves_nothing_behind() {
         media,
         request,
         output_dir: out_dir.clone(),
+        passwords: Default::default(),
     };
     let cancel = CancellationToken::new();
     let trigger = cancel.clone();
@@ -1934,6 +2036,7 @@ async fn cancellation_removes_the_partial_output() {
         media,
         request: req(TargetFormat::Mp3, QualityPreset::Max),
         output_dir: out_dir.clone(),
+        passwords: Default::default(),
     };
 
     let cancel = CancellationToken::new();
@@ -2200,6 +2303,7 @@ async fn files_that_cannot_shrink_are_left_alone() {
         input: photo,
         media,
         output_dir: out_dir.clone(),
+        passwords: Default::default(),
     };
     let err = run_conversion(&bins, &ws, &job, &CancellationToken::new(), |_| {})
         .await
@@ -2468,6 +2572,7 @@ async fn word_documents_get_smaller_and_join_other_files_in_one_pdf() {
         inputs: probed,
         request: req(TargetFormat::Pdf, QualityPreset::Balanced),
         output_dir: out_dir,
+        passwords: Default::default(),
     };
     let outcome = konvert_core::run_combined(&bins, &ws, &job, &CancellationToken::new(), |_| {})
         .await

@@ -3,4 +3,4 @@
 /**
  * Things the user should know before converting. Ordered by importance.
  */
-export type ConversionWarning = "lossyToLossless" | "lossyReencode" | "losslessToLossy" | "gifLimitations" | "largeFile" | "transparencyLost" | "pictureDownscaled" | "fewColors" | "paddedToSquare" | "manyFiles" | "audioDropped" | "coverArtDropped" | "tagsDropped" | "subtitlesDropped" | "extraAudioTracksDropped" | "channelsDownmixed" | "metadataDropped" | "pdfBookmarksDropped" | "pdfFormFixed" | "pdfPagesAsPictures" | "docxLayout" | "docxSimplified" | "pdfToDocx";
+export type ConversionWarning = "lossyToLossless" | "lossyReencode" | "losslessToLossy" | "gifLimitations" | "largeFile" | "transparencyLost" | "pictureDownscaled" | "fewColors" | "paddedToSquare" | "manyFiles" | "audioDropped" | "coverArtDropped" | "tagsDropped" | "subtitlesDropped" | "extraAudioTracksDropped" | "channelsDownmixed" | "metadataDropped" | "pdfBookmarksDropped" | "pdfFormFixed" | "pdfUnlocked" | "pdfPagesAsPictures" | "docxLayout" | "docxSimplified" | "pdfToDocx";

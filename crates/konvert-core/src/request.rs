@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::formats::{AudioCodec, TargetFormat, VideoCodec};
+use crate::secret::Secret;
 
 /// Plain-language quality choices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
@@ -173,6 +174,26 @@ pub enum PdfSplit {
     After,
 }
 
+/// A password that protects a PDF made by Konvert (AES-256), and what readers
+/// may do with it once opened.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PdfProtection {
+    /// Opens the document. Never printed or written out (see [`Secret`]).
+    #[ts(type = "string")]
+    pub password: Secret,
+    #[serde(default = "yes")]
+    pub allow_print: bool,
+    /// Copying its text (always allowed to accessibility tools).
+    #[serde(default = "yes")]
+    pub allow_copy: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
 /// Choices for PDF documents: pictures to PDF, PDF to pictures, and edited
 /// or split PDFs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -204,6 +225,8 @@ pub struct PdfOptions {
     pub split_every: u32,
     /// Positions (1-based, in the new order) after which a new document starts.
     pub split_after: Vec<u32>,
+    /// The new PDFs open only with a password.
+    pub protection: Option<PdfProtection>,
 }
 
 impl Default for PdfOptions {
@@ -221,6 +244,7 @@ impl Default for PdfOptions {
             split: PdfSplit::default(),
             split_every: 1,
             split_after: Vec::new(),
+            protection: None,
         }
     }
 }

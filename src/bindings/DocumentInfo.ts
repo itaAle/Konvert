@@ -12,4 +12,9 @@ widthPt: number, heightPt: number,
 /**
  * Pages the bookmarks lead to (1-based, in order, without repeats).
  */
-bookmarkPages: Array<number>, form: PdfForm, };
+bookmarkPages: Array<number>, form: PdfForm, 
+/**
+ * Opened with a password: what Konvert makes of it has none, unless
+ * protected again.
+ */
+locked: boolean, };

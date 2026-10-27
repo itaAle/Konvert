@@ -3,6 +3,7 @@ import type { PageMargin } from "./PageMargin";
 import type { PageOrientation } from "./PageOrientation";
 import type { PageSize } from "./PageSize";
 import type { PdfPage } from "./PdfPage";
+import type { PdfProtection } from "./PdfProtection";
 import type { PdfSplit } from "./PdfSplit";
 
 /**
@@ -49,4 +50,8 @@ splitEvery: number,
 /**
  * Positions (1-based, in the new order) after which a new document starts.
  */
-splitAfter: Array<number>, };
+splitAfter: Array<number>, 
+/**
+ * The new PDFs open only with a password.
+ */
+protection?: PdfProtection | null, };

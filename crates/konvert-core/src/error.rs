@@ -38,9 +38,13 @@ pub enum CoreError {
     #[error("invalid page range")]
     InvalidPages { details: String },
 
-    /// The PDF needs a password to be opened (Konvert does not ask for passwords).
+    /// The PDF needs a password to be opened, and none was given.
     #[error("the PDF is protected by a password")]
     PdfEncrypted,
+
+    /// The password given does not open the PDF.
+    #[error("the password does not open the PDF")]
+    PdfWrongPassword,
 
     /// The destination volume ran out of space.
     #[error("not enough disk space")]
@@ -79,6 +83,7 @@ impl CoreError {
             CoreError::UnsupportedConversion { .. } => "unsupported_conversion",
             CoreError::InvalidPages { .. } => "invalid_pages",
             CoreError::PdfEncrypted => "pdf_encrypted",
+            CoreError::PdfWrongPassword => "pdf_wrong_password",
             CoreError::DiskFull { .. } => "disk_full",
             CoreError::PermissionDenied { .. } => "permission_denied",
             CoreError::Cancelled => "cancelled",

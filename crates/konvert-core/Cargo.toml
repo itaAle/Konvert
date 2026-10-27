@@ -24,6 +24,8 @@ lopdf = { workspace = true }
 # Smaller PDFs: pictures stored again as JPEG, streams recompressed.
 jpeg-encoder = { workspace = true }
 flate2 = { workspace = true }
+# Password-protected PDFs: random encryption keys.
+getrandom = { workspace = true }
 # Word documents: DOCX read and written, typeset into PDF by Typst.
 zip = { workspace = true }
 roxmltree = { workspace = true }

@@ -34,6 +34,7 @@ use crate::progress::{Progress, ProgressParser};
 use crate::request::{
     CompressOptions, ConversionRequest, FrameMode, PdfOptions, PdfPage, QualityPreset,
 };
+use crate::secret::Passwords;
 use crate::svg;
 use crate::workspace::Workspace;
 
@@ -52,6 +53,8 @@ pub struct ConversionJob {
     pub request: ConversionRequest,
     /// Folder where the finished file is placed.
     pub output_dir: PathBuf,
+    /// Passwords that open the input PDFs (in memory only, never logged).
+    pub passwords: Passwords,
 }
 
 /// Result of a successful conversion.
@@ -100,6 +103,7 @@ pub async fn picture_thumbnail(
         media: media.clone(),
         request,
         output_dir: workspace.dir().to_path_buf(),
+        passwords: Passwords::default(),
     };
     let mut plan = plan_conversion(media, &job.request, input)?;
     if let Some(image) = plan.image.as_mut() {
@@ -377,9 +381,13 @@ async fn compress_document(
     cancel: &CancellationToken,
     on_progress: &mut (impl FnMut(Progress) + Send),
 ) -> Result<u64, CoreError> {
-    let data = std::fs::read(&job.input)?;
-    let options = options.clone();
     let word = job.media.kind == MediaKind::Text;
+    let data = if word {
+        std::fs::read(&job.input)?
+    } else {
+        pdf::load(&job.input, job.passwords.get(&job.input))?
+    };
+    let options = options.clone();
     let bytes = on_worker(
         move |stop, progress| {
             if word {
@@ -419,8 +427,13 @@ async fn run_document_conversion(
     mut on_progress: impl FnMut(Progress) + Send,
     started: Instant,
 ) -> Result<ConversionOutcome, CoreError> {
-    let data = std::fs::read(&job.input)?;
     let to_word = job.request.target == TargetFormat::Docx;
+    let data = if to_word {
+        pdf::load(&job.input, job.passwords.get(&job.input))?
+    } else {
+        std::fs::read(&job.input)?
+    };
+    let protection = job.request.pdf.as_ref().and_then(|p| p.protection.clone());
     let bytes = on_worker(
         move |stop, progress| {
             if to_word {
@@ -428,6 +441,11 @@ async fn run_document_conversion(
             } else {
                 progress(0.1);
                 let pdf = typeset(&data)?;
+                progress(0.9);
+                let pdf = match &protection {
+                    Some(protection) => pdf::protect(&pdf, protection)?,
+                    None => pdf,
+                };
                 progress(1.0);
                 Ok(pdf)
             }
@@ -586,6 +604,8 @@ pub struct CombinedJob {
     pub inputs: Vec<(PathBuf, MediaInfo)>,
     pub request: ConversionRequest,
     pub output_dir: PathBuf,
+    /// Passwords that open some of the input PDFs (in memory only).
+    pub passwords: Passwords,
 }
 
 /// Runs a [`CombinedJob`]: one PDF named after the first file (or a folder
@@ -621,6 +641,7 @@ pub async fn run_combined(
         media,
         request,
         output_dir: job.output_dir.clone(),
+        passwords: job.passwords.clone(),
     };
     run_build(
         bins,
@@ -696,7 +717,10 @@ async fn run_build(
                             .map_err(|e| CoreError::Io(std::io::Error::other(e)))??;
                         files.push(pdf::Part::Document(laid_out));
                     }
-                    MediaKind::Document => files.push(pdf::Part::Document(std::fs::read(input)?)),
+                    MediaKind::Document => files.push(pdf::Part::Document(pdf::load(
+                        input,
+                        job.passwords.get(input),
+                    )?)),
                     _ => {
                         let request = ConversionRequest {
                             pdf: Some(PdfOptions {
@@ -790,10 +814,18 @@ async fn run_build(
     let builder = {
         let stop = stop.clone();
         let parts = parts.clone();
+        let finishing = pdf::Finishing {
+            protection: options.protection.clone(),
+        };
         tokio::task::spawn_blocking(move || {
-            pdf::build(files, layout.as_deref(), &parts, &stop, |i, bytes| {
-                sender.blocking_send((i, bytes)).is_ok()
-            })
+            pdf::build(
+                files,
+                layout.as_deref(),
+                &parts,
+                &finishing,
+                &stop,
+                |i, bytes| sender.blocking_send((i, bytes)).is_ok(),
+            )
         })
     };
 
@@ -927,7 +959,7 @@ async fn run_pages(
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(&temp_dir)?;
 
-    let data = std::fs::read(&job.input)?;
+    let data = pdf::load(&job.input, job.passwords.get(&job.input))?;
     let pages = document.pages.clone();
     let total = pages.len();
     let stop = Arc::new(AtomicBool::new(false));

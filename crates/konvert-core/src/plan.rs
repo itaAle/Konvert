@@ -215,6 +215,8 @@ pub enum ConversionWarning {
     PdfBookmarksDropped,
     /// An XFA or signed form keeps its look but can no longer be filled in.
     PdfFormFixed,
+    /// A PDF opened with a password becomes a PDF without one.
+    PdfUnlocked,
     /// Compressed PDF: its pages may become pictures (text, links and forms lost).
     PdfPagesAsPictures,
     /// Word document laid out by Konvert: page breaks may differ from Word's.
@@ -312,16 +314,24 @@ pub fn plan_conversion(
     request: &ConversionRequest,
     input: &Path,
 ) -> Result<ConversionPlan, CoreError> {
-    if let Some(options) = &request.compress {
-        return compress::plan(media, request, options, input);
-    }
-    if !formats::is_offered(media, input, request.target) {
+    let mut plan = if let Some(options) = &request.compress {
+        compress::plan(media, request, options, input)?
+    } else if !formats::is_offered(media, input, request.target) {
         return Err(unsupported(format!(
             "{} is not offered for this input",
             formats::spec(request.target).label
         )));
+    } else {
+        plan_offered(media, request, input)?
+    };
+    // A PDF opened with a password gives PDFs without one, unless protected again.
+    let locked = media.document.as_ref().is_some_and(|d| d.locked);
+    let protected =
+        request.pdf.as_ref().is_some_and(|p| p.protection.is_some()) && request.compress.is_none();
+    if locked && plan.target == TargetFormat::Pdf && !protected {
+        plan.warnings.push(ConversionWarning::PdfUnlocked);
     }
-    plan_offered(media, request, input)
+    Ok(plan)
 }
 
 /// Plans a conversion into a format that makes sense for this input (or into
@@ -2237,6 +2247,7 @@ mod tests {
                 height_pt: 842.0,
                 bookmark_pages,
                 form,
+                locked: false,
             }),
             text: None,
         }
@@ -2312,6 +2323,26 @@ mod tests {
             ..PdfOptions::default()
         };
         assert_eq!(edit(other, false).unwrap_err().code(), "invalid_pages");
+
+        // Opened with a password: the new PDF has none, unless protected again.
+        let mut locked = pdf_document(10, Vec::new(), PdfForm::None);
+        locked.document.as_mut().unwrap().locked = true;
+        let request = |protection: Option<crate::request::PdfProtection>| ConversionRequest {
+            pdf: Some(PdfOptions {
+                protection,
+                ..PdfOptions::default()
+            }),
+            ..req(TargetFormat::Pdf, QualityPreset::Balanced)
+        };
+        let p = plan_conversion(&locked, &request(None), Path::new("a.pdf")).unwrap();
+        assert_eq!(p.warnings, [W::PdfUnlocked]);
+        let protection = crate::request::PdfProtection {
+            password: "x".into(),
+            allow_print: true,
+            allow_copy: true,
+        };
+        let p = plan_conversion(&locked, &request(Some(protection)), Path::new("a.pdf")).unwrap();
+        assert!(p.warnings.is_empty());
 
         let p = edit(
             PdfOptions {

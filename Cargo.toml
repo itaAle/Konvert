@@ -29,6 +29,9 @@ lopdf = { version = "0.46", default-features = false }
 # recompressed with Deflate (already used by lopdf; pure Rust backend, MIT OR Apache-2.0).
 jpeg-encoder = "0.7"
 flate2 = "1"
+# Random keys for password-protected PDFs, from the operating system (MIT OR Apache-2.0;
+# already used by lopdf).
+getrandom = "0.4"
 # Word documents (DOCX): read and written as ZIP archives of XML parts (MIT; Deflate only,
 # through flate2), parsed with roxmltree (MIT OR Apache-2.0, already used by the SVG renderer).
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }

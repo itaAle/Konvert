@@ -14,6 +14,7 @@ use ts_rs::TS;
 use crate::binaries::Binaries;
 use crate::error::CoreError;
 use crate::process;
+use crate::secret::Secret;
 
 /// What kind of content a file holds, which drives the proposed targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -153,15 +154,27 @@ impl MediaInfo {
 
 /// Runs FFprobe on a local file. Network protocols are not allowed.
 pub async fn probe(bins: &Binaries, input: &Path) -> Result<MediaInfo, CoreError> {
+    probe_with(bins, input, None).await
+}
+
+/// Like [`probe`], for a file that may be a PDF opened with `password`.
+pub async fn probe_with(
+    bins: &Binaries,
+    input: &Path,
+    password: Option<&Secret>,
+) -> Result<MediaInfo, CoreError> {
     if !input.is_file() {
         return Err(CoreError::InputNotFound);
     }
     if crate::pdf::is_pdf(input) {
         // Read by Konvert, not by FFmpeg (see `pdf.rs`).
         let path = input.to_path_buf();
-        return tokio::task::spawn_blocking(move || crate::pdf::probe(&path))
-            .await
-            .map_err(|e| CoreError::Io(std::io::Error::other(e)))?;
+        let password = password.cloned();
+        return tokio::task::spawn_blocking(move || {
+            crate::pdf::probe_with(&path, password.as_ref())
+        })
+        .await
+        .map_err(|e| CoreError::Io(std::io::Error::other(e)))?;
     }
     if crate::docx::is_docx(input) {
         // Read by Konvert, not by FFmpeg (see `docx/`).

@@ -32,6 +32,7 @@ pub mod plan;
 pub mod probe;
 pub mod progress;
 pub mod request;
+pub mod secret;
 pub mod svg;
 pub mod workspace;
 
@@ -46,13 +47,14 @@ pub use error::{CoreError, ErrorPayload};
 pub use estimate::SizeEstimate;
 pub use formats::{TargetFormat, TargetOption, available_targets};
 pub use plan::{ConversionPlan, ConversionWarning, plan_conversion};
-pub use probe::{MediaInfo, MediaKind, probe};
+pub use probe::{MediaInfo, MediaKind, probe, probe_with};
 pub use progress::Progress;
 pub use request::{
     AdvancedOptions, ChannelLayout, CompressLevel, CompressOptions, ConversionRequest, FrameMode,
     FrameOptions, PageMargin, PageOrientation, PageSize, PdfOptions, PdfPage, PdfSplit,
     QualityPreset,
 };
+pub use secret::{Passwords, Secret};
 pub use workspace::Workspace;
 
 /// First line of `ffmpeg -version` (e.g. `ffmpeg version n9.0.2 ...`).

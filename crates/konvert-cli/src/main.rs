@@ -424,6 +424,7 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
                 media,
                 request,
                 output_dir,
+                passwords: Default::default(),
             };
             let ws = Workspace::create(&workspace::default_base_dir())?;
             let cancel = cancel_on_ctrl_c();
@@ -461,6 +462,7 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
                 inputs: probed,
                 request,
                 output_dir,
+                passwords: Default::default(),
             };
             let ws = Workspace::create(&workspace::default_base_dir())?;
             let cancel = cancel_on_ctrl_c();
