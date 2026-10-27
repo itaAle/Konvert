@@ -19,6 +19,8 @@
     "allow-clear-log",
     "allow-confirm-close",
     "allow-analyze-file",
+    "allow-unlock-pdf",
+    "allow-forget-pdf-password",
     "allow-plan-conversion",
     "allow-pdf-thumbnails",
     "allow-picture-thumbnail",

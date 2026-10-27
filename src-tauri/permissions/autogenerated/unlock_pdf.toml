@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-unlock-pdf"
+description = "Enables the unlock_pdf command without any pre-configured scope."
+commands.allow = ["unlock_pdf"]
+
+[[permission]]
+identifier = "deny-unlock-pdf"
+description = "Denies the unlock_pdf command without any pre-configured scope."
+commands.deny = ["unlock_pdf"]

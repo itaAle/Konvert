@@ -15,6 +15,8 @@ const COMMANDS: &[&str] = &[
     "clear_log",
     "confirm_close",
     "analyze_file",
+    "unlock_pdf",
+    "forget_pdf_password",
     "plan_conversion",
     "pdf_thumbnails",
     "picture_thumbnail",

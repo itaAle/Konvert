@@ -6,11 +6,12 @@
 //! `details` only on request.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use konvert_core::pdf::Thumbnail;
 use konvert_core::{
-    ConversionPlan, ConversionRequest, CoreError, ErrorPayload, MediaInfo, TargetFormat,
+    ConversionPlan, ConversionRequest, CoreError, ErrorPayload, MediaInfo, Secret, TargetFormat,
     TargetOption, available_targets, compress::compress_format, formats::supported_targets,
     plan_conversion as plan,
 };
@@ -203,8 +204,46 @@ pub async fn analyze_file(
     state: State<'_, AppState>,
     path: PathBuf,
 ) -> Result<FileAnalysis, ErrorPayload> {
+    let password = state.password(&path);
+    analysis(&state, path, password.as_ref()).await
+}
+
+/// Opens a PDF protected by a password: the password is checked and kept in
+/// memory, for this file only, while it is in the list (see
+/// `forget_pdf_password`). Never logged nor saved. Gives the analysis.
+#[tauri::command]
+pub async fn unlock_pdf(
+    state: State<'_, AppState>,
+    path: PathBuf,
+    password: Secret,
+) -> Result<FileAnalysis, ErrorPayload> {
+    if password.is_empty() || !konvert_core::pdf::is_pdf(&path) {
+        return Err(payload(CoreError::PdfWrongPassword));
+    }
+    let found = analysis(&state, path.clone(), Some(&password)).await?;
+    if found.media.document.as_ref().is_some_and(|d| d.locked)
+        && let Ok(mut passwords) = state.passwords.lock()
+    {
+        passwords.insert(path, password);
+    }
+    Ok(found)
+}
+
+/// Forgets the password of a PDF that left the list.
+#[tauri::command]
+pub fn forget_pdf_password(state: State<'_, AppState>, path: PathBuf) {
+    state.forget(&path);
+}
+
+async fn analysis(
+    state: &AppState,
+    path: PathBuf,
+    password: Option<&Secret>,
+) -> Result<FileAnalysis, ErrorPayload> {
     let bins = state.binaries().map_err(payload)?;
-    let media = konvert_core::probe(bins, &path).await.map_err(payload)?;
+    let media = konvert_core::probe_with(bins, &path, password)
+        .await
+        .map_err(payload)?;
     // If the engine cannot be asked, formats needing an optional encoder are left out.
     let encoders = state
         .encoders
@@ -247,15 +286,40 @@ pub fn plan_conversion(
 /// pages. Drawn by Konvert itself on a worker thread; nothing leaves the computer.
 #[tauri::command]
 pub async fn pdf_thumbnails(
+    state: State<'_, AppState>,
     path: PathBuf,
     pages: Vec<u32>,
     size: u32,
 ) -> Result<Vec<Thumbnail>, ErrorPayload> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let password = state.password(&path);
+    let cached = state
+        .unlocked
+        .lock()
+        .ok()
+        .and_then(|u| u.get(&path).cloned());
+    let (data, decrypted) = tauri::async_runtime::spawn_blocking(move || {
         if !konvert_core::pdf::is_pdf(&path) {
             return Err(CoreError::NotMedia);
         }
-        konvert_core::pdf::thumbnails(std::fs::read(&path)?, &pages, size)
+        // A PDF opened with a password is decrypted once, in memory.
+        let data = match (cached, &password) {
+            (Some(data), _) => return Ok((data, None)),
+            (None, Some(password)) => Arc::new(konvert_core::pdf::load(&path, Some(password))?),
+            (None, None) => Arc::new(std::fs::read(&path)?),
+        };
+        Ok((data.clone(), password.is_some().then_some((path, data))))
+    })
+    .await
+    .map_err(io_payload)?
+    .map_err(payload)?;
+    if let Some((path, data)) = decrypted
+        && state.password(&path).is_some()
+        && let Ok(mut unlocked) = state.unlocked.lock()
+    {
+        unlocked.insert(path, data);
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        konvert_core::pdf::thumbnails(data.as_ref().clone(), &pages, size)
     })
     .await
     .map_err(io_payload)?
@@ -293,6 +357,7 @@ pub fn start_conversion(
         return Err(payload(CoreError::InputNotFound));
     }
     let output_dir = output_dir(&state, &path)?;
+    let passwords = state.passwords_of([path.as_path()]);
     Ok(state.jobs.enqueue(
         app,
         bins,
@@ -300,6 +365,7 @@ pub fn start_conversion(
         path,
         request,
         output_dir,
+        passwords,
     ))
 }
 
@@ -325,6 +391,7 @@ pub fn start_combined(
         }));
     }
     let output_dir = output_dir(&state, first)?;
+    let passwords = state.passwords_of(paths.iter().map(PathBuf::as_path));
     Ok(state.jobs.enqueue_combined(
         app,
         bins,
@@ -332,6 +399,7 @@ pub fn start_combined(
         paths,
         request,
         output_dir,
+        passwords,
     ))
 }
 

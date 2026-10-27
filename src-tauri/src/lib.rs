@@ -78,6 +78,8 @@ pub fn run() {
             commands::clear_log,
             commands::confirm_close,
             commands::analyze_file,
+            commands::unlock_pdf,
+            commands::forget_pdf_password,
             commands::plan_conversion,
             commands::pdf_thumbnails,
             commands::picture_thumbnail,

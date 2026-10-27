@@ -1,10 +1,11 @@
 //! Application state shared by the IPC commands.
 
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::{Arc, Mutex};
 
-use konvert_core::{Binaries, CoreError, Workspace, workspace};
+use konvert_core::{Binaries, CoreError, Passwords, Secret, Workspace, workspace};
 use tauri::{AppHandle, Manager};
 
 use crate::debug_log::DebugLog;
@@ -32,6 +33,11 @@ pub struct AppState {
     pub encoders: tokio::sync::OnceCell<HashSet<String>>,
     /// Numbers of the private files of picture thumbnails (apart from jobs).
     pub thumbnails: AtomicU64,
+    /// Passwords typed to open PDFs, kept in memory only while their file is
+    /// in the list (never logged or saved; wiped when forgotten).
+    pub passwords: Mutex<Passwords>,
+    /// Those PDFs decrypted in memory, for their page thumbnails.
+    pub unlocked: Mutex<HashMap<PathBuf, Arc<Vec<u8>>>>,
 }
 
 impl AppState {
@@ -64,7 +70,32 @@ impl AppState {
             close_confirmed: AtomicBool::new(false),
             encoders: tokio::sync::OnceCell::new(),
             thumbnails: AtomicU64::new(THUMBNAIL_IDS),
+            passwords: Mutex::default(),
+            unlocked: Mutex::default(),
         })
+    }
+
+    /// The password typed for `path`, if any.
+    pub fn password(&self, path: &Path) -> Option<Secret> {
+        self.passwords.lock().ok()?.get(path).cloned()
+    }
+
+    /// The passwords of `paths` only, for a job.
+    pub fn passwords_of<'a>(&self, paths: impl IntoIterator<Item = &'a Path>) -> Passwords {
+        self.passwords
+            .lock()
+            .map(|p| p.of(paths))
+            .unwrap_or_default()
+    }
+
+    /// Forgets the password of `path` and its decrypted copy.
+    pub fn forget(&self, path: &Path) {
+        if let Ok(mut passwords) = self.passwords.lock() {
+            passwords.remove(path);
+        }
+        if let Ok(mut unlocked) = self.unlocked.lock() {
+            unlocked.remove(path);
+        }
     }
 
     pub fn binaries(&self) -> Result<&Binaries, CoreError> {
@@ -73,6 +104,9 @@ impl AppState {
 
     /// Stops conversions and removes temporary files (application exit).
     pub fn shutdown(&self) {
+        if let Ok(mut passwords) = self.passwords.lock() {
+            *passwords = Passwords::default();
+        }
         self.jobs.cancel_all();
         self.workspace.close();
     }

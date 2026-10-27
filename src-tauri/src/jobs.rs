@@ -15,8 +15,8 @@ use konvert_core::formats;
 use konvert_core::plan::{AudioPlan, VideoPlan};
 use konvert_core::{
     Binaries, CombinedJob, ConversionJob, ConversionOutcome, ConversionRequest, CoreError,
-    ErrorPayload, MediaInfo, Progress, Workspace, plan_conversion, probe, run_combined,
-    run_conversion,
+    ErrorPayload, MediaInfo, Passwords, Progress, Workspace, plan_conversion, probe_with,
+    run_combined, run_conversion,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -75,7 +75,9 @@ impl JobQueue {
         }
     }
 
-    /// Queues a conversion and returns its id immediately.
+    /// Queues a conversion and returns its id immediately. `passwords` open
+    /// the input PDF (kept in memory only).
+    #[allow(clippy::too_many_arguments)]
     pub fn enqueue(
         self: &Arc<Self>,
         app: AppHandle,
@@ -84,6 +86,7 @@ impl JobQueue {
         input: PathBuf,
         request: ConversionRequest,
         output_dir: PathBuf,
+        passwords: Passwords,
     ) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let token = CancellationToken::new();
@@ -101,6 +104,7 @@ impl JobQueue {
                 input,
                 request,
                 output_dir,
+                passwords,
             };
             let redactor = Redactor::new()
                 .path(&job.input, "input")
@@ -120,6 +124,7 @@ impl JobQueue {
 
     /// Queues several files (pictures and PDFs, in order) that become one PDF,
     /// and returns the id of that single job.
+    #[allow(clippy::too_many_arguments)]
     pub fn enqueue_combined(
         self: &Arc<Self>,
         app: AppHandle,
@@ -128,6 +133,7 @@ impl JobQueue {
         inputs: Vec<PathBuf>,
         request: ConversionRequest,
         output_dir: PathBuf,
+        passwords: Passwords,
     ) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let token = CancellationToken::new();
@@ -152,7 +158,7 @@ impl JobQueue {
                 .path(workspace.dir(), "temp-dir");
             let update = queue
                 .run_combined_job(
-                    &app, &bins, &workspace, id, inputs, request, output_dir, &token,
+                    &app, &bins, &workspace, id, inputs, request, output_dir, passwords, &token,
                 )
                 .await;
             lock(&queue.cancels).remove(&id);
@@ -172,6 +178,7 @@ impl JobQueue {
         inputs: Vec<PathBuf>,
         request: ConversionRequest,
         output_dir: PathBuf,
+        passwords: Passwords,
         token: &CancellationToken,
     ) -> JobUpdate {
         let _turn = tokio::select! {
@@ -182,7 +189,7 @@ impl JobQueue {
         // Analyse again from disk: the UI only sends paths and a request.
         let mut probed = Vec::with_capacity(inputs.len());
         for input in inputs {
-            match probe(bins, &input).await {
+            match probe_with(bins, &input, passwords.get(&input)).await {
                 Ok(media) => probed.push((input, media)),
                 Err(e) => return failed(e),
             }
@@ -192,6 +199,7 @@ impl JobQueue {
             inputs: probed,
             request,
             output_dir,
+            passwords,
         };
         let on_progress = |progress| emit(app, id, JobUpdate::Progress { progress });
         match run_combined(bins, workspace, &job, token, on_progress).await {
@@ -219,7 +227,7 @@ impl JobQueue {
         emit(app, job.id, JobUpdate::Running);
 
         // Analyse again from disk: the UI only sends a path and a request.
-        let media = match probe(bins, &job.input).await {
+        let media = match probe_with(bins, &job.input, job.passwords.get(&job.input)).await {
             Ok(media) => media,
             Err(e) => return failed(e),
         };
@@ -230,6 +238,7 @@ impl JobQueue {
             media,
             request: job.request,
             output_dir: job.output_dir,
+            passwords: job.passwords,
         };
         let on_progress = |progress| emit(app, job.id, JobUpdate::Progress { progress });
         match run_conversion(bins, workspace, &conversion, token, on_progress).await {
@@ -339,6 +348,7 @@ struct Job {
     input: PathBuf,
     request: ConversionRequest,
     output_dir: PathBuf,
+    passwords: Passwords,
 }
 
 fn failed(e: CoreError) -> JobUpdate {
