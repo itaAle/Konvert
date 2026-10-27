@@ -161,7 +161,7 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
 
 - 2026-10-27: **v0.4.0** (phases A, B and C): version bumped in `package.json`, `Cargo.toml` and `tauri.conf.json`; `npm run release` green (all checks and tests, no local paths in the binaries).
   Installer `Konvert_0.4.0_x64-setup.exe` (52 MB), SHA-256 `b7b2e6c60037f225b2f15af4b31c599bb67e6c1f77e3e578c69c0636a157352a` (rebuild with `npm run release`). The macOS/Linux packages come from the **Release packages** workflow run on the pushed version commit; the owner creates the `v0.4.0` tag and the GitHub release.
-  - Not verified by hand yet: installing 0.4.0 over 0.3.0.
+  - The owner installed and tried the Windows 0.4.0 installer: it works.
 
 ## Backlog (next work, by priority)
 1. **More formats and PDF**: phases A, B and C done (see Current status). Proposed next, only after the owner's OK: PDF page tools (split a PDF, extract, rotate and reorder pages).
