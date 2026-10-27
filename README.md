@@ -190,7 +190,7 @@ is too large for an upload form. It works on several files at once, even of diff
 
 | File | How it gets smaller |
 |------|---------------------|
-| PDF | Pictures are scaled to the resolution they have on paper (about 200, 144 or 96 dpi) and stored again: photos as JPEG, screenshots and charts without loss or with 256 colors, gray pictures without color channels. Unused objects, duplicates, metadata and page thumbnails go; the rest is recompressed and packed into object streams. **Text, drawings, links, bookmarks and forms stay as they are.** |
+| PDF | Pictures are scaled to the resolution they have on paper (about 200, 144 or 96 dpi) and stored again: photos as JPEG, screenshots and charts without loss or with 256 colors, gray pictures without color channels. Embedded TrueType fonts keep only the glyphs the document shows (the text stays selectable and looks the same). Unused objects, duplicates, metadata and page thumbnails go; the rest is recompressed and packed into object streams. **Text, drawings, links, bookmarks and forms stay as they are.** |
 | PDF, only if you allow it | When nothing else is small enough, pages become pictures: the text can no longer be selected or searched, links and forms are lost. Off by default. |
 | JPG, WebP, AVIF, JPEG XL¹ | Lower quality; Strong limits the long side to 2560 px, Maximum to 1600 px (and leaves out the EXIF data). |
 | PNG | Every pixel kept, then 256 colors (Strong, unless the picture has soft transparency; Maximum). |
