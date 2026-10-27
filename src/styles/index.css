@@ -30,6 +30,8 @@
   --k-danger-soft: rgb(255 59 48 / 0.1);
   --k-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px rgb(0 0 0 / 0.06);
   --k-shadow-lg: 0 2px 6px rgb(0 0 0 / 0.04), 0 24px 48px rgb(0 0 0 / 0.1);
+  /* Opaque background of drop-down lists (never translucent, even over Mica). */
+  --k-menu: #ffffff;
 }
 
 :root[data-scheme="dark"] {
@@ -54,6 +56,7 @@
     --k-danger-soft: rgb(255 69 58 / 0.16);
     --k-shadow: 0 1px 2px rgb(0 0 0 / 0.25), 0 6px 18px rgb(0 0 0 / 0.18);
     --k-shadow-lg: 0 2px 6px rgb(0 0 0 / 0.25), 0 16px 36px rgb(0 0 0 / 0.22);
+    --k-menu: #2c2c2e;
 }
 
 /* Translucent surfaces over Mica. */
@@ -125,6 +128,15 @@ html[data-vibrancy="true"][data-scheme="dark"] {
   pre,
   code {
     user-select: text;
+  }
+
+  /* The list of a <select> is drawn by the system: in WebView2 it keeps a light
+     background in the dark theme while inheriting the light text, which makes
+     the choices unreadable. Its colors are set explicitly for both themes. */
+  option,
+  optgroup {
+    background-color: var(--k-menu);
+    color: var(--k-label);
   }
 
   /* Thin, unobtrusive scrollbars (macOS-like) instead of the classic Windows ones. */
