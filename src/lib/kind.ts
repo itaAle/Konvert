@@ -17,6 +17,8 @@ export function kindStyle(kind: MediaKind | undefined): KindStyle {
       return { Icon: ImageIcon, gradient: "from-[#40c8e0] to-[#1a9bb5]" };
     case "document":
       return { Icon: FileText, gradient: "from-[#ff9f0a] to-[#e67700]" };
+    case "text":
+      return { Icon: FileText, gradient: "from-[#409cff] to-[#0a5fd6]" };
     default:
       return { Icon: Clapperboard, gradient: "from-[#bf5af2] to-[#8e44d6]" };
   }

@@ -7,11 +7,11 @@ export const it = {
   },
   drop: {
     title: "Trascina qui un file",
-    subtitle: "Audio, video, foto o PDF, anche più file insieme: MP3, MP4, MOV, JPG, PNG, HEIC, PDF e molti altri",
+    subtitle: "Audio, video, foto, PDF o documenti Word, anche più file insieme: MP3, MP4, MOV, JPG, PNG, HEIC, PDF, DOCX e molti altri",
     release: "Rilascia per aprire",
     choose: "Scegli file…",
     pickerTitle: "Scegli i file da convertire",
-    pickerFilter: "File audio, video, immagini e PDF",
+    pickerFilter: "File audio, video, immagini, PDF e Word",
     privacy: "Tutto avviene sul tuo computer. Nessun file viene caricato online.",
   },
   analyzing: "Analisi del file…",
@@ -29,6 +29,9 @@ export const it = {
     coverArt: "copertina",
     onePage: "1 pagina",
     pages: "{n} pagine",
+    word: "Documento Word",
+    onePicture: "1 immagine",
+    pictures: "{n} immagini",
   },
   files: {
     title: "File da convertire",
@@ -53,6 +56,7 @@ export const it = {
     groupFrames: "Fotogrammi",
     groupPages: "Pagine come immagini",
     groupDocument: "Documento PDF",
+    groupText: "Documento Word",
     groupEditPdf: "Modifica il PDF",
     editPdf: "Dividi, ruota, riordina",
     lossless: "Senza perdita",
@@ -236,6 +240,11 @@ export const it = {
     pdfExtrasDropped: "I segnalibri e i campi compilabili del PDF non verranno conservati.",
     pdfPagesAsPictures:
       "Se serve a ridurre il peso, le pagine diventeranno immagini: il testo non sarà più selezionabile, link e moduli andranno persi.",
+    docxLayout:
+      "Konvert impagina il documento da sé, con i font installati: interruzioni di pagina e spaziature possono differire leggermente da Word.",
+    docxSimplified: "Caselle di testo, grafici, equazioni e oggetti incorporati del documento non verranno riprodotti.",
+    pdfToDocx:
+      "Testo e immagini diventano modificabili; impaginazione, tabelle e disegni vengono semplificati. Le pagine scansionate senza testo restano immagini.",
   },
   actions: {
     convert: "Converti",

@@ -103,6 +103,15 @@ export function describeMedia(media: MediaInfo): string {
   const parts: string[] = [];
   const video = media.video[0];
   const audio = media.audio[0];
+  if (media.kind === "text") {
+    const pictures = media.text?.pictures ?? 0;
+    return [
+      t("file.word"),
+      pictures === 1 ? t("file.onePicture") : pictures > 1 ? t("file.pictures", { n: number(pictures, 0) }) : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
   if (media.kind === "document") {
     return ["PDF", media.document ? formatPages(media.document.pages) : null].filter(Boolean).join(" · ");
   }

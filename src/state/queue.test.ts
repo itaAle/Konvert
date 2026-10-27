@@ -46,14 +46,16 @@ const option = (format: TargetFormat, group: TargetOption["group"]): TargetOptio
   audioCodecs: [],
 });
 
-function file(name: string, kind: "audio" | "videoWithAudio" | "image" | "document", duration: number | null): FileAnalysis {
+function file(name: string, kind: "audio" | "videoWithAudio" | "image" | "document" | "text", duration: number | null): FileAnalysis {
   const targets =
     kind === "audio"
       ? [option("mp3", "audio"), option("flac", "audio")]
       : kind === "image"
         ? [option("jpg", "image"), option("png", "image"), option("webp", "image"), option("pdf", "document")]
         : kind === "document"
-          ? [option("png", "pages"), option("jpg", "pages"), option("pdf", "document")]
+          ? [option("png", "pages"), option("jpg", "pages"), option("pdf", "document"), option("docx", "text")]
+          : kind === "text"
+          ? [option("pdf", "document")]
           : [
             option("mp4", "video"),
             option("mkv", "video"),
@@ -82,7 +84,7 @@ function file(name: string, kind: "audio" | "videoWithAudio" | "image" | "docume
     },
     targets,
     // Like the core: every file keeps its own format, except HEIC photos.
-    compress: kind === "document" ? "pdf" : name.endsWith(".heic") ? null : (name.split(".").pop() as TargetFormat),
+    compress: kind === "document" ? "pdf" : kind === "text" ? "docx" : name.endsWith(".heic") ? null : (name.split(".").pop() as TargetFormat),
   };
 }
 
@@ -328,6 +330,7 @@ describe("queue state machine", () => {
       ["png", "pages"],
       ["jpg", "pages"],
       ["pdf", "document"],
+      ["docx", "text"],
     ]);
     s = reduce(s, { type: "selectTarget", target: "pdf" });
     expect(editsPdf(s)).toBe(true);
@@ -478,5 +481,23 @@ describe("queue state machine", () => {
     expect(reduce(s, { type: "selectCompress" }).compress).toBe(false);
     s = reduce(s, { type: "remove", key: 2 });
     expect(reduce(s, { type: "selectCompress" }).compress).toBe(true);
+  });
+
+  it("makes one PDF of each Word document, one PDF with other PDFs", () => {
+    let s = run(initialQueue(), { type: "add", paths: ["a.docx", "b.docx"] });
+    s = run(
+      s,
+      { type: "analyzed", key: 1, file: file("a.docx", "text", null) },
+      { type: "analyzed", key: 2, file: file("b.docx", "text", null) },
+      { type: "selectTarget", target: "pdf" },
+    );
+    expect(combines(s)).toBe(false);
+    s = run(s, { type: "add", paths: ["c.pdf"] }, { type: "analyzed", key: 3, file: file("c.pdf", "document", null) });
+    expect(s.target).toBe("pdf");
+    expect(combines(s)).toBe(true);
+    // A PDF alone can become a Word document.
+    s = run(s, { type: "remove", key: 1 }, { type: "remove", key: 2 }, { type: "selectTarget", target: "docx" });
+    expect(requestOf(s)?.target).toBe("docx");
+    expect(editsPdf(s)).toBe(false);
   });
 });

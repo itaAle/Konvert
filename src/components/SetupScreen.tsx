@@ -67,6 +67,8 @@ export function SetupScreen({ q }: { q: QueueController }) {
   // PDF documents: pictures of their pages, or PDFs merged together.
   const documents = ready.filter((i) => i.file?.media.kind === "document");
   const allDocuments = ready.length > 0 && documents.length === ready.length;
+  // Paper, orientation and margins only matter for pictures made into pages.
+  const photos = ready.filter((i) => i.file?.media.kind === "image");
   const pageCount = allDocuments ? Math.min(...documents.map((i) => i.file!.media.document?.pages ?? 1)) : 0;
   const pageCounts = ready.map((i) => i.plan?.document?.pages.length ?? null);
   const pagePictures = allPlanned && pageCounts.every((n) => n != null) ? (pageCounts as number[]).reduce((a, b) => a + b, 0) : null;
@@ -233,7 +235,7 @@ export function SetupScreen({ q }: { q: QueueController }) {
                   />
                 </section>
               )}
-              {option?.group === "document" && !allDocuments && (
+              {option?.group === "document" && photos.length > 0 && (
                 <section>
                   <SectionTitle>{t("pdf.pageTitle")}</SectionTitle>
                   <PdfPanel value={state.pdf} onChange={q.setPdf} canCombine={ready.length > 1 && documents.length === 0} />
@@ -268,7 +270,8 @@ export function SetupScreen({ q }: { q: QueueController }) {
                 </p>
               )}
               {/* Merged PDFs keep their pages as they are. */}
-              {option && !FIXED_QUALITY.includes(option.format) && !(option.group === "document" && allDocuments) && (
+              {/* Merged PDFs and Word documents keep their pages as they are. */}
+              {option && !FIXED_QUALITY.includes(option.format) && !(option.group === "document" && photos.length === 0) && option.group !== "text" && (
                 <section>
                   <SectionTitle>{t("quality.title")}</SectionTitle>
                   <QualityPicker value={state.preset} onChange={q.selectPreset} />

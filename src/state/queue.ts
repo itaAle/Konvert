@@ -250,13 +250,17 @@ export function pdfChanged(state: QueueState): boolean {
   return isEdited(state.pages) || editedDocuments(state) > 1;
 }
 
-/** Every file goes into one PDF: always for PDFs, for pictures unless turned off. */
+/**
+ * Every file goes into one PDF: always with PDFs among them, with pictures
+ * unless turned off; Word documents alone become one PDF each.
+ */
 export function combines(state: QueueState): boolean {
   const ready = readyItems(state);
+  const kinds = new Set(ready.map((i) => i.file!.media.kind));
   return (
     state.target === "pdf" &&
     ready.length > 1 &&
-    (state.pdf.combine || ready.some((i) => i.file!.media.kind === "document"))
+    (kinds.has("document") || (state.pdf.combine && kinds.has("image")))
   );
 }
 

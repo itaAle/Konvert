@@ -56,7 +56,7 @@ const option = (
   kind:
     group === "video"
       ? "video"
-      : group === "document"
+      : group === "document" || group === "text"
         ? "document"
         : ["image", "frames", "pages"].includes(group)
           ? "image"
@@ -77,7 +77,7 @@ const option = (
                 ? ["mpeg2"]
                 : ["h264", "av1"],
   audioCodecs:
-    ANIMATIONS.includes(format) || ["image", "frames", "pages", "document"].includes(group)
+    ANIMATIONS.includes(format) || ["image", "frames", "pages", "document", "text"].includes(group)
       ? []
       : [audioCodec(lossless ? "flac" : format === "webm" || format === "opus" ? "opus" : "aac")],
 });
@@ -133,6 +133,7 @@ const FRAMES: TargetOption[] = [
 ];
 
 const PDF = option("pdf", "PDF", "document");
+const DOCX = option("docx", "DOCX (Word)", "text");
 
 const PAGES: TargetOption[] = [
   option("png", "PNG", "pages", true),
@@ -218,8 +219,32 @@ function analysis(path: string): FileAnalysis {
         hasLocation: false,
         document: { pages: MOCK_PAGES, widthPt: 595.3, heightPt: 841.9, extras: true },
       },
-      targets: [...PAGES, PDF],
+      targets: [...PAGES, PDF, DOCX],
       compress: "pdf",
+    };
+  }
+  if (/\.docx$/i.test(name)) {
+    return {
+      path,
+      name,
+      media: {
+        container: "docx",
+        kind: "text",
+        durationSecs: null,
+        sizeBytes: 3_400_000,
+        bitRate: null,
+        video: [],
+        audio: [],
+        coverArt: null,
+        subtitleStreams: 0,
+        hasTags: false,
+        picture: null,
+        hasLocation: false,
+        document: null,
+        text: { pictures: 4, widthPt: 595.3, heightPt: 841.9, simplified: params.get("mock") === "simplified" },
+      },
+      targets: [PDF],
+      compress: "docx",
     };
   }
   if (/\.svgz?$/i.test(name)) {
@@ -390,6 +415,25 @@ export const mockBackend: Backend = {
         warnings: media.kind === "document" && request.compress.pagesAsPictures ? ["pdfPagesAsPictures"] : [],
         // Like the core: a PDF's gain is only known once compressed.
         estimate: media.kind === "document" ? null : { bytes: capped, approximate: true },
+      };
+      return plan;
+    }
+    if (media.kind === "text" || request.target === "docx") {
+      await sleep(80);
+      const plan: ConversionPlan = {
+        target: request.target,
+        videoStream: null,
+        video: null,
+        audioStream: null,
+        audio: null,
+        coverArtStream: null,
+        image: null,
+        frames: null,
+        document: null,
+        removeLocation: false,
+        // Like the core: laid out (or read) by Konvert, size known once done.
+        warnings: media.kind === "text" ? (media.text?.simplified ? ["docxLayout", "docxSimplified"] : ["docxLayout"]) : ["pdfToDocx"],
+        estimate: null,
       };
       return plan;
     }

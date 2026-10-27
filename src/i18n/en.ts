@@ -8,11 +8,11 @@ export const en: Messages = {
   },
   drop: {
     title: "Drop a file here",
-    subtitle: "Audio, video, photos or PDFs, even several files at once: MP3, MP4, MOV, JPG, PNG, HEIC, PDF and many more",
+    subtitle: "Audio, video, photos, PDFs or Word documents, several files at once too: MP3, MP4, MOV, JPG, PNG, HEIC, PDF, DOCX and many more",
     release: "Release to open",
     choose: "Choose files…",
     pickerTitle: "Choose the files to convert",
-    pickerFilter: "Audio, video, image and PDF files",
+    pickerFilter: "Audio, video, image, PDF and Word files",
     privacy: "Everything happens on your computer. No file is uploaded anywhere.",
   },
   analyzing: "Analyzing file…",
@@ -30,6 +30,9 @@ export const en: Messages = {
     coverArt: "cover art",
     onePage: "1 page",
     pages: "{n} pages",
+    word: "Word document",
+    onePicture: "1 picture",
+    pictures: "{n} pictures",
   },
   files: {
     title: "Files to convert",
@@ -54,6 +57,7 @@ export const en: Messages = {
     groupFrames: "Frames",
     groupPages: "Pages as pictures",
     groupDocument: "PDF document",
+    groupText: "Word document",
     groupEditPdf: "Edit the PDF",
     editPdf: "Split, turn, reorder",
     lossless: "Lossless",
@@ -233,6 +237,11 @@ export const en: Messages = {
     pdfExtrasDropped: "The PDF's bookmarks and fillable fields will not be kept.",
     pdfPagesAsPictures:
       "If it helps to reduce the size, the pages will become pictures: the text can no longer be selected, links and forms are lost.",
+    docxLayout:
+      "Konvert lays out the document itself, with the installed fonts: page breaks and spacing may differ slightly from Word.",
+    docxSimplified: "Text boxes, charts, equations and embedded objects of the document will not be shown.",
+    pdfToDocx:
+      "Text and pictures become editable; layout, tables and drawings are simplified. Scanned pages without text stay pictures.",
   },
   actions: {
     convert: "Convert",

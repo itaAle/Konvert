@@ -4,6 +4,7 @@ import type { CoverArt } from "./CoverArt";
 import type { DocumentInfo } from "./DocumentInfo";
 import type { MediaKind } from "./MediaKind";
 import type { PictureInfo } from "./PictureInfo";
+import type { TextInfo } from "./TextInfo";
 import type { VideoStream } from "./VideoStream";
 
 /**
@@ -42,4 +43,8 @@ hasLocation: boolean,
 /**
  * Document details, for [`MediaKind::Document`] only.
  */
-document: DocumentInfo | null, };
+document: DocumentInfo | null, 
+/**
+ * Word document details, for [`MediaKind::Text`] only.
+ */
+text?: TextInfo | null, };

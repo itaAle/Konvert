@@ -26,6 +26,7 @@ const GROUP_TITLES: Record<TargetGroup, MessageKey> = {
   frames: "formats.groupFrames",
   pages: "formats.groupPages",
   document: "formats.groupDocument",
+  text: "formats.groupText",
 };
 
 /** Notes that the label alone does not tell (translated here, not in the catalog). */
@@ -57,7 +58,7 @@ export function FormatGrid({ options, selected, onSelect, groupTitles, notes }: 
   const expanded = showAll || selectedIsSecondary;
   const visible = expanded ? options : options.filter((o) => !o.secondary);
 
-  const groups = (["video", "audio", "audioOnly", "image", "frames", "pages", "document"] as TargetGroup[])
+  const groups = (["video", "audio", "audioOnly", "image", "frames", "pages", "document", "text"] as TargetGroup[])
     .map((group) => ({ group, items: visible.filter((o) => o.group === group) }))
     .filter((g) => g.items.length > 0);
   const order = groups.flatMap((g) => g.items.map((o) => o.format));
