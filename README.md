@@ -3,8 +3,9 @@ Convert audio, video, images and PDFs entirely on your computer, with a modern i
 
 Konvert converts between many audio, video and image formats, takes frames from videos,
 turns photos into PDFs and PDF pages into pictures, splits, turns and rearranges the pages
-of a PDF, and lets you keep or remove EXIF data and locations. Everything happens **on your computer**: no network connections, no
-telemetry, no account.
+of a PDF, **compresses** files in their own format (down to a size you choose) and lets you
+keep or remove EXIF data and locations. Everything happens **on your computer**: no network
+connections, no telemetry, no account.
 
 Platforms: Windows 10/11 (64-bit), macOS 11 or later on Apple Silicon (M1 and later),
 Linux x86_64 and arm64.
@@ -21,6 +22,9 @@ Linux x86_64 and arm64.
    and maximum size).
 4. Press **Convert**: progress for each file and overall, time remaining, and **Cancel**
    at any moment. When it is done you can open the files or show them in their folder.
+
+To make files smaller instead, pick **Compress** above the formats (see
+[Compress](#compress)).
 
 Converted files are saved next to the original (or in a folder of your choice) and never
 overwrite other files (`song.mp3` already exists? → `song (1).mp3`).
@@ -131,6 +135,31 @@ PDF documents:
   slightly different than in other readers.
 
 The format table is declarative: `crates/konvert-core/src/formats.rs`.
+
+## Compress
+
+**Compress** makes a smaller copy of each file **in its own format**, for example a PDF that
+is too large for an upload form. It works on several files at once, even of different kinds.
+
+- **Light**, **Strong** (recommended) or **Maximum**: from hardly visible changes to the
+  smallest file that is still readable (Maximum lowers the resolution too).
+- **Stay under a size** (in MB): Konvert tries stronger settings until the file fits. If it
+  cannot get there, it keeps the smallest result and says so.
+- The copy is saved as `name-compressed.ext` (`name-compresso.ext` in Italian) and is
+  **never larger than the original**: if nothing can be gained, no file is written.
+
+| File | How it gets smaller |
+|------|---------------------|
+| PDF | Pictures are scaled to the resolution they have on paper (about 200, 144 or 96 dpi) and stored again: photos as JPEG, screenshots and charts without loss or with 256 colors, gray pictures without color channels. Unused objects, duplicates, metadata and page thumbnails go; the rest is recompressed and packed into object streams. **Text, drawings, links, bookmarks and forms stay as they are.** |
+| PDF, only if you allow it | When nothing else is small enough, pages become pictures: the text can no longer be selected or searched, links and forms are lost. Off by default. |
+| JPG, WebP, AVIF, JPEG XL¹ | Lower quality; Strong limits the long side to 2560 px, Maximum to 1600 px (and leaves out the EXIF data). |
+| PNG | Every pixel kept, then 256 colors (Strong, unless the picture has soft transparency; Maximum). |
+| Video | Lower bit rate; Strong limits the picture to 1080p, Maximum to 720p at 30 frames per second with mono sound. With a size limit, the bit rate comes from the duration. |
+| Animated GIF, WebP, APNG | Narrower, fewer frames per second. |
+| Audio | Lower bit rate (mono at Maximum); WAV, FLAC, AIFF and ALAC stay lossless: 16 bits, then a lower sample rate and mono. |
+
+HEIC, BMP, TIFF, ICO and SVG files cannot be compressed in their own format: convert them
+instead (for example HEIC → JPG).
 
 ## Installation
 
