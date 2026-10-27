@@ -142,8 +142,16 @@ PDF documents:
   and the document properties of the original PDFs are not carried over.
 - PDFs created by Konvert contain no author, title, dates, file names or paths: only
   "Konvert" as the producing program.
-- PDFs that need a password to be opened are not supported: Konvert says so and does not
-  ask for passwords.
+- **Passwords**: a PDF that needs a password asks for it (on its own screen, or in its row
+  of the list). Konvert accepts the password that opens it or the owner's (RC4, AES-128 and
+  AES-256 encryption), keeps it in memory only while the file is in the list, never saves
+  or logs it, and decrypts the file in memory, never on disk. What Konvert makes of it has
+  no password, unless you protect it again.
+- **Protect with a password**: every PDF Konvert makes (edited, split, combined, from
+  photos or Word documents) can open only with a password, typed twice. It uses AES-256
+  encryption, which every current PDF reader opens. You can also forbid printing or copying
+  the text (honored by the common readers). Konvert does not keep the password: if you
+  forget it, the PDF can no longer be opened.
 - Pages are drawn by hayro, a PDF renderer written in Rust: very unusual PDFs may look
   slightly different than in other readers.
 
