@@ -2938,7 +2938,7 @@ dependencies = [
 
 [[package]]
 name = "konvert"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "konvert-core",
  "serde",
@@ -2957,7 +2957,7 @@ dependencies = [
 
 [[package]]
 name = "konvert-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "konvert-core",
  "serde",
@@ -2968,7 +2968,7 @@ dependencies = [
 
 [[package]]
 name = "konvert-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "flate2",
  "hayro 0.8.0",

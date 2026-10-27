@@ -10,7 +10,7 @@ Apple Silicon and Linux (x86_64 and arm64).
 It uses Tauri 2.11, React 19 with TypeScript, bundles FFmpeg/FFprobe and lays out Word documents with the Typst library.
 It works **entirely offline, on the user's computer**.
 **Public** repository: https://github.com/itaAle/Konvert (branch `main`).
-Releases ship a Windows NSIS installer, macOS/Linux packages and a `.sha256` file for each: `v0.1.0` to `v0.4.0` are published (0.4.0: more formats, EXIF, SVG, PDF; first release with Linux arm64); `v0.5.0` (PDF page tools) is next.
+Releases ship a Windows NSIS installer, macOS/Linux packages and a `.sha256` file for each: `v0.1.0` to `v0.4.0` are published (0.4.0: more formats, EXIF, SVG, PDF; first release with Linux arm64); `v0.5.0` (PDF page tools) is published; `v0.6.0` (Compress, Word documents) is next.
 The `ffmpeg-n9.0.2-36` pre-release mirrors the FFmpeg build and its sources (required by the LGPL).
 
 ## Binding rules (from the owner)
@@ -193,6 +193,8 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
   - New dependencies: typst, typst-layout, typst-pdf, typst-kit (only `scan-fonts`), zip (Deflate only), roxmltree, image (png/jpeg); licenses regenerated (all permissive). Rust 1.92 is now the minimum.
   - Measured with the debug CLI on a real 1.5 MB PDF summary: PDF → DOCX in 17 s (debug; much faster in release), DOCX → PDF in 2 s; the round trip keeps headings, title bars (shading), lists, tab tables, sub/superscripts and figures.
   - Verified: the UI in the browser preview with the mock (DOCX → PDF with warnings, PDF → DOCX). Not verified yet: real Word documents made by Word/LibreOffice (tests use a Word-like DOCX), opening the produced DOCX in Word, the installer size, macOS/Linux fonts.
+
+- 2026-10-27: **v0.6.0** (Compress, Word documents): version bumped in `package.json`, `package-lock.json`, `Cargo.toml`/`Cargo.lock` and `tauri.conf.json`, licenses regenerated; checked on the CI (Windows, macOS arm64, Linux x64 and arm64) before pushing to `main`.
 
 ## Backlog (next work, by priority)
 1. **PDF**: page tools done (see Current status). Possible next steps, only after the owner's OK: keep bookmarks when pages are only turned or reordered, page tools on several PDFs combined (pages of every file in one editor).
