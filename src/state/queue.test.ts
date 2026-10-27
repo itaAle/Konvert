@@ -7,6 +7,8 @@ import {
   counts,
   DEFAULT_FRAMES,
   DEFAULT_PDF,
+  editedDocuments,
+  editsPdf,
   initialQueue,
   overallProgress,
   queueReducer as reduce,
@@ -20,6 +22,7 @@ import type { ConversionPlan } from "../bindings/ConversionPlan";
 import type { FileAnalysis } from "../bindings/FileAnalysis";
 import type { TargetFormat } from "../bindings/TargetFormat";
 import type { TargetOption } from "../bindings/TargetOption";
+import { initialPages, movePage, rotatePage, toggleRemoved } from "./pages";
 
 const option = (format: TargetFormat, group: TargetOption["group"]): TargetOption => ({
   format,
@@ -73,7 +76,7 @@ function file(name: string, kind: "audio" | "videoWithAudio" | "image" | "docume
       hasTags: false,
       picture: kind === "image" ? { alpha: false, alphaStream: null, gridGroup: null, exif: false, exifCopyable: false } : null,
       hasLocation: false,
-      document: kind === "document" ? { pages: 4, widthPt: 595, heightPt: 842 } : null,
+      document: kind === "document" ? { pages: 4, widthPt: 595, heightPt: 842, extras: false } : null,
     },
     targets,
   };
@@ -314,16 +317,60 @@ describe("queue state machine", () => {
     expect(s.items.map((i) => i.name)).toEqual(["b.wav"]);
   });
 
-  it("offers a PDF for pictures and PDFs together, never for a lone PDF", () => {
+  it("offers a PDF for pictures and PDFs together, and for editing a lone PDF", () => {
     let s = run(initialQueue(), { type: "add", paths: ["a.pdf"] });
     s = reduce(s, { type: "analyzed", key: 1, file: file("a.pdf", "document", null) });
-    // Pictures of its pages only: a PDF becomes a PDF by joining others.
     expect(commonTargets(s.items).map((t) => [t.format, t.group])).toEqual([
       ["png", "pages"],
       ["jpg", "pages"],
+      ["pdf", "document"],
     ]);
+    s = reduce(s, { type: "selectTarget", target: "pdf" });
+    expect(editsPdf(s)).toBe(true);
     s = run(s, { type: "add", paths: ["b.jpg"] }, { type: "analyzed", key: 2, file: file("b.jpg", "image", null) });
     expect(commonTargets(s.items).map((t) => [t.format, t.group])).toEqual([["pdf", "document"]]);
+    expect(editsPdf(s)).toBe(false);
+  });
+
+  it("edits the pages of a lone PDF, and only of that PDF", () => {
+    let s = run(initialQueue(), { type: "add", paths: ["a.pdf"] });
+    s = run(s, { type: "analyzed", key: 1, file: file("a.pdf", "document", null) }, { type: "selectTarget", target: "pdf" });
+    const planned = (state: QueueState, parts: number[] = []) =>
+      reduce(state, {
+        type: "planned",
+        key: 1,
+        version: state.planVersion,
+        plan: { ...plan("pdf", 100), document: { pages: [1, 2, 3, 4], rotations: [], parts, dpi: 0, placement: null } },
+      });
+    // Nothing changed yet: nothing to save.
+    s = planned(s);
+    expect(canStart(s)).toBe(false);
+    expect(requestOf(s)?.pdf).toMatchObject({ layout: null, split: "none", splitAfter: [] });
+
+    // Page 4 moves to the front turned, page 2 goes; a cut after page 4.
+    const pages = toggleRemoved(rotatePage(movePage(initialPages(4), 3, 0), 0, 90), 2);
+    s = run(s, { type: "setPages", pages, cuts: [4] }, { type: "setPdf", pdf: { ...s.pdf, split: "after" } });
+    expect(s.items[0].plan).toBeNull();
+    expect(requestOf(s)?.pdf).toMatchObject({
+      layout: [
+        { number: 4, rotation: 90 },
+        { number: 1, rotation: 0 },
+        { number: 3, rotation: 0 },
+      ],
+      split: "after",
+      splitAfter: [1],
+    });
+    expect(editedDocuments(s)).toBe(2);
+    expect(editedDocuments({ ...s, pdf: { ...s.pdf, split: "every", splitEvery: 2 } })).toBe(2);
+    expect(editedDocuments({ ...s, pdf: { ...s.pdf, split: "every", splitEvery: 1 } })).toBe(3);
+    s = planned(s, [1, 2]);
+    expect(canStart(s)).toBe(true);
+
+    // With another file the edits are not sent; removing the PDF forgets them.
+    s = run(s, { type: "add", paths: ["b.pdf"] }, { type: "analyzed", key: 2, file: file("b.pdf", "document", null) });
+    expect(requestOf(s)?.pdf).toMatchObject({ layout: null, split: "none", splitAfter: [] });
+    s = reduce(s, { type: "remove", key: 1 });
+    expect(s).toMatchObject({ pages: null, cuts: [] });
   });
 
   it("combines every file into one job, in the order chosen", () => {

@@ -8,6 +8,7 @@ import type { ConversionPlan } from "../bindings/ConversionPlan";
 import type { ConversionWarning } from "../bindings/ConversionWarning";
 import type { FileAnalysis } from "../bindings/FileAnalysis";
 import type { JobEvent } from "../bindings/JobEvent";
+import type { PdfOptions } from "../bindings/PdfOptions";
 import type { Preferences } from "../bindings/Preferences";
 import type { TargetFormat } from "../bindings/TargetFormat";
 import type { TargetOption } from "../bindings/TargetOption";
@@ -161,6 +162,41 @@ function parsePages(text: string | null | undefined, count: number): number[] {
   return [...chosen].sort((a, b) => a - b);
 }
 
+/** Same rules as the core: pages in each new document (empty: one document). */
+function splitSizes(pdf: PdfOptions | null | undefined, pages: number): number[] {
+  let sizes: number[] = [];
+  if (pdf?.split === "every") {
+    for (let start = 0; start < pages; start += pdf.splitEvery) sizes.push(Math.min(pdf.splitEvery, pages - start));
+  } else if (pdf?.split === "after") {
+    const cuts = [...new Set(pdf.splitAfter.filter((c) => c >= 1 && c < pages))].sort((a, b) => a - b);
+    sizes = [...cuts, pages].map((cut, i, all) => cut - (i > 0 ? all[i - 1] : 0));
+  }
+  return sizes.length > 1 ? sizes : [];
+}
+
+/** A page drawn on a canvas: a title, lines of "text" and the page number. */
+function mockPage(number: number, widthPt: number, heightPt: number, size: number): string {
+  const scale = size / Math.max(widthPt, heightPt);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(widthPt * scale);
+  canvas.height = Math.round(heightPt * scale);
+  const g = canvas.getContext("2d")!;
+  const u = canvas.width / 20;
+  g.fillStyle = "#fff";
+  g.fillRect(0, 0, canvas.width, canvas.height);
+  g.fillStyle = `hsl(${(number * 47) % 360} 55% 55%)`;
+  g.fillRect(u * 2, u * 2, canvas.width - u * 4, u * 2.2);
+  g.fillStyle = "#c9ccd1";
+  for (let y = u * 6; y < canvas.height - u * 5; y += u * 1.3) {
+    g.fillRect(u * 2, y, (canvas.width - u * 4) * (0.6 + ((y * number) % 7) / 18), u * 0.5);
+  }
+  g.fillStyle = "#6b7280";
+  g.font = `600 ${Math.round(u * 1.6)}px sans-serif`;
+  g.textAlign = "center";
+  g.fillText(String(number), canvas.width / 2, canvas.height - u * 1.8);
+  return canvas.toDataURL("image/png");
+}
+
 function analysis(path: string): FileAnalysis {
   const name = path.split(/[\\/]/).pop() ?? path;
   if (/\.pdf$/i.test(name)) {
@@ -180,7 +216,7 @@ function analysis(path: string): FileAnalysis {
         hasTags: false,
         picture: null,
         hasLocation: false,
-        document: { pages: MOCK_PAGES, widthPt: 595.3, heightPt: 841.9 },
+        document: { pages: MOCK_PAGES, widthPt: 595.3, heightPt: 841.9, extras: true },
       },
       targets: [...PAGES, PDF],
     };
@@ -317,12 +353,32 @@ export const mockBackend: Backend = {
     }
     return analysis(path);
   },
+  async pdfThumbnails(_path, pages, size) {
+    await sleep(250);
+    return pages
+      .filter((n) => n >= 1 && n <= MOCK_PAGES)
+      .map((number) => {
+        // Page 3 is landscape, like a table in a report.
+        const [widthPt, heightPt] = number === 3 ? [841.9, 595.3] : [595.3, 841.9];
+        return { number, widthPt, heightPt, dataUrl: mockPage(number, widthPt, heightPt, size) };
+      });
+  },
   async planConversion(_path, media, request) {
     if (request.target === "pdf" || media.kind === "document") {
       const toPdf = request.target === "pdf";
-      const pages = toPdf
-        ? Array.from({ length: media.document?.pages ?? 1 }, (_, i) => i + 1)
-        : parsePages(request.pdf?.pages, media.document?.pages ?? 1);
+      const edited = toPdf && media.kind === "document";
+      const count = media.document?.pages ?? 1;
+      const layout = edited ? (request.pdf?.layout ?? Array.from({ length: count }, (_, i) => ({ number: i + 1, rotation: 0 }))) : [];
+      if (edited && layout.length === 0) {
+        throw { code: "invalid_pages", details: "no page left in the document" };
+      }
+      const pages = edited
+        ? layout.map((p) => p.number)
+        : toPdf
+          ? Array.from({ length: count }, (_, i) => i + 1)
+          : parsePages(request.pdf?.pages, count);
+      const rotations = layout.some((p) => p.rotation) ? layout.map((p) => p.rotation) : [];
+      const parts = edited ? splitSizes(request.pdf, pages.length) : [];
       const dpi = request.pdf?.dpi ?? 150;
       const plan: ConversionPlan = {
         target: request.target,
@@ -334,11 +390,19 @@ export const mockBackend: Backend = {
         image: null,
         frames: null,
         removeLocation: false,
-        document: { pages, dpi, placement: null },
-        warnings: toPdf && media.picture?.exif ? ["metadataDropped"] : !toPdf && pages.length > 300 ? ["manyFiles"] : [],
+        document: { pages, rotations, parts, dpi, placement: null },
+        warnings: edited
+          ? media.document?.extras
+            ? ["pdfExtrasDropped"]
+            : []
+          : toPdf && media.picture?.exif
+            ? ["metadataDropped"]
+            : !toPdf && pages.length > 300
+              ? ["manyFiles"]
+              : [],
         estimate: {
           bytes: toPdf
-            ? Math.round((media.sizeBytes ?? 0) * (media.kind === "document" ? 1 : 0.6))
+            ? Math.round(((media.sizeBytes ?? 0) * (edited ? pages.length / count : media.kind === "document" ? 1 : 0.6)))
             : Math.round(pages.length * 8.27 * 11.69 * dpi * dpi * (request.target === "png" ? 0.5 : 0.12)),
           approximate: true,
         },
@@ -463,6 +527,8 @@ export const mockBackend: Backend = {
     // Pages of a PDF: one picture next to it, or a folder of pictures.
     const pages = /\.pdf$/i.test(path) && request.target !== "pdf" ? parsePages(request.pdf?.pages, MOCK_PAGES) : null;
     const label = request.pdf?.pageLabel ?? "page";
+    // A split PDF: a folder of PDFs.
+    const parts = /\.pdf$/i.test(path) && request.target === "pdf" ? splitSizes(request.pdf, request.pdf?.layout?.length ?? MOCK_PAGES) : [];
     let fraction = 0;
     const delay = (jobId - 1) * 2500;
     setTimeout(() => emit({ jobId, update: { state: "running" } }), 100 + delay);
@@ -486,7 +552,9 @@ export const mockBackend: Backend = {
               state: "done",
               outcome: series
                 ? { output: `C:\\Video\\${name}`, sizeBytes: 42_000_000, files: 120, elapsed: 9.8 }
-                : pages && pages.length > 1
+                : parts.length > 1
+                  ? { output: `C:\\Documenti\\${name}`, sizeBytes: 1_300_000, files: parts.length, elapsed: 0.6 }
+                  : pages && pages.length > 1
                   ? { output: `C:\\Documenti\\${name}`, sizeBytes: pages.length * 420_000, files: pages.length, elapsed: 2.4 }
                   : pages
                     ? {

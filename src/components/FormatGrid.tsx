@@ -12,6 +12,10 @@ interface FormatGridProps {
   options: TargetOption[];
   selected: TargetFormat | null;
   onSelect: (format: TargetFormat) => void;
+  /** Titles of groups that mean something else here (a lone PDF: "Edit the PDF"). */
+  groupTitles?: Partial<Record<TargetGroup, MessageKey>>;
+  /** Second lines of cards that mean something else here. */
+  notes?: Partial<Record<TargetFormat, MessageKey>>;
 }
 
 const GROUP_TITLES: Record<TargetGroup, MessageKey> = {
@@ -30,9 +34,9 @@ const NOTES: Partial<Record<TargetFormat, MessageKey>> = {
 };
 
 /** Second line of a card: what sets the format apart. */
-function noteOf(option: TargetOption): string | null {
+function noteOf(option: TargetOption, notes: FormatGridProps["notes"]): string | null {
   const detail = option.label.match(/\((.+)\)$/)?.[1] ?? null;
-  const key = NOTES[option.format];
+  const key = notes?.[option.format] ?? NOTES[option.format];
   if (key) return t(key);
   // "ALAC (M4A)": the container, then "lossless".
   if (option.lossless) return detail ? `${detail} · ${t("formats.lossless")}` : t("formats.lossless");
@@ -45,7 +49,7 @@ function noteOf(option: TargetOption): string | null {
  * frames). Less common formats wait behind "More formats". Behaves as one ARIA
  * radio group: Tab enters it, arrow keys move the selection.
  */
-export function FormatGrid({ options, selected, onSelect }: FormatGridProps) {
+export function FormatGrid({ options, selected, onSelect, groupTitles, notes }: FormatGridProps) {
   const buttons = useRef(new Map<TargetFormat, HTMLButtonElement>());
   const [showAll, setShowAll] = useState(false);
   const hasSecondary = options.some((o) => o.secondary);
@@ -74,13 +78,13 @@ export function FormatGrid({ options, selected, onSelect }: FormatGridProps) {
         {groups.map(({ group, items }) => (
           <div key={group}>
             {groups.length > 1 && (
-              <h3 className="mb-2 px-1 text-[13px] font-medium text-label-secondary">{t(GROUP_TITLES[group])}</h3>
+              <h3 className="mb-2 px-1 text-[13px] font-medium text-label-secondary">{t(groupTitles?.[group] ?? GROUP_TITLES[group])}</h3>
             )}
             <div className="grid grid-cols-4 gap-2.5">
               {items.map((option) => {
                 const active = option.format === selected;
                 const name = option.label.replace(/ \(.+\)$/, "");
-                const note = noteOf(option);
+                const note = noteOf(option, notes);
                 return (
                   <button
                     key={option.format}

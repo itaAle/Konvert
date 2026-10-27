@@ -5,7 +5,18 @@ import { useCallback, useEffect, useRef } from "react";
 import type { TargetFormat } from "../bindings/TargetFormat";
 import { t } from "../i18n";
 import { revealVariants } from "../lib/motion";
-import { allWarnings, canStart, combines, commonTargets, readyItems, totalEstimate } from "../state/queue";
+import {
+  allWarnings,
+  canStart,
+  combines,
+  commonTargets,
+  editedDocuments,
+  editsPdf,
+  lonePdf,
+  pdfChanged,
+  readyItems,
+  totalEstimate,
+} from "../state/queue";
 import type { QueueController } from "../state/useQueue";
 import { AdvancedPanel } from "./AdvancedPanel";
 import { DestinationRow } from "./DestinationRow";
@@ -14,10 +25,12 @@ import { FileList } from "./FileList";
 import { FormatGrid } from "./FormatGrid";
 import { FramesPanel } from "./FramesPanel";
 import { LocationRow } from "./LocationRow";
+import { PageEditor } from "./PageEditor";
 import { PagesPanel } from "./PagesPanel";
 import { PdfPanel } from "./PdfPanel";
 import { PlanFooterInfo, PlanSummary, hasStrongWarning, isRemux } from "./PlanSummary";
 import { QualityPicker } from "./QualityPicker";
+import { SplitPanel } from "./SplitPanel";
 import { Button } from "./ui/Button";
 import { Page } from "./ui/Page";
 
@@ -56,6 +69,11 @@ export function SetupScreen({ q }: { q: QueueController }) {
   const pagePictures = allPlanned && pageCounts.every((n) => n != null) ? (pageCounts as number[]).reduce((a, b) => a + b, 0) : null;
   const invalidPages = planError?.code === "invalid_pages";
   const together = combines(state);
+  // A lone PDF made into new PDFs: its pages are edited, maybe split.
+  const lone = lonePdf(state.items);
+  const editing = editsPdf(state) && lone != null;
+  const documentCount = editing ? editedDocuments(state) : null;
+  const unchanged = editing && !pdfChanged(state);
 
   // Bring quality and warnings into view once the options have appeared, and
   // whenever an important warning shows up, so it never stays below the fold.
@@ -79,7 +97,11 @@ export function SetupScreen({ q }: { q: QueueController }) {
         )}
       </div>
       <Button variant="primary" size="lg" disabled={!canStart(state)} onClick={() => void q.start()} className="min-w-44">
-        {together || (state.target === "pdf" && ready.length === 1)
+        {editing
+          ? documentCount != null && documentCount > 1
+            ? t("actions.splitPdf")
+            : t("actions.savePdf")
+          : together || (state.target === "pdf" && ready.length === 1)
           ? t("actions.makePdf")
           : ready.length > 1
             ? t("actions.convertAll", { n: ready.length })
@@ -131,7 +153,13 @@ export function SetupScreen({ q }: { q: QueueController }) {
           {targets.length > 0 ? (
             <>
               {!single && <p className="-mt-2 mb-3 px-1 text-[13px] text-label-secondary">{t("formats.common")}</p>}
-              <FormatGrid options={targets} selected={state.target} onSelect={q.selectTarget} />
+              <FormatGrid
+                options={targets}
+                selected={state.target}
+                onSelect={q.selectTarget}
+                groupTitles={lone ? { document: "formats.groupEditPdf" } : undefined}
+                notes={lone ? { pdf: "formats.editPdf" } : undefined}
+              />
             </>
           ) : (
             !analyzing && <p className="px-1 text-[14px] text-label-secondary">{t("formats.none")}</p>
@@ -176,7 +204,29 @@ export function SetupScreen({ q }: { q: QueueController }) {
                   <PdfPanel value={state.pdf} onChange={q.setPdf} canCombine={ready.length > 1 && documents.length === 0} />
                 </section>
               )}
-              {option.group === "document" && documents.length > 0 && (
+              {editing && (
+                <>
+                  <section>
+                    <SectionTitle>{t("pdf.editTitle")}</SectionTitle>
+                    <PageEditor
+                      key={lone.path}
+                      path={lone.path}
+                      count={lone.file!.media.document?.pages ?? 1}
+                      firstPage={lone.file!.media.document ?? { widthPt: 595, heightPt: 842 }}
+                      pages={state.pages}
+                      cuts={state.cuts}
+                      split={state.pdf.split}
+                      splitEvery={state.pdf.splitEvery}
+                      onChange={q.setPages}
+                    />
+                  </section>
+                  <section>
+                    <SectionTitle>{t("pdf.resultTitle")}</SectionTitle>
+                    <SplitPanel value={state.pdf} onChange={q.setPdf} documents={documentCount} unchanged={unchanged} />
+                  </section>
+                </>
+              )}
+              {option.group === "document" && documents.length > 0 && !editing && (
                 <p className="-mt-2 flex items-start gap-2 px-1 text-[13px] text-label-secondary">
                   <Info size={15} className="mt-0.5 shrink-0" aria-hidden />
                   {t("pdf.mergeHint")}
@@ -196,7 +246,7 @@ export function SetupScreen({ q }: { q: QueueController }) {
               )}
               {/* Margin keeps the content clear of the faded edge above the footer. */}
               <div ref={summaryRef} className="flex scroll-mb-10 flex-col gap-4">
-                <PlanSummary warnings={warnings} error={invalidPages ? null : planError} lowSpace={q.lowSpace} />
+                <PlanSummary warnings={warnings} error={invalidPages && !editing ? null : planError} lowSpace={q.lowSpace} />
                 <DestinationRow />
               </div>
             </motion.div>

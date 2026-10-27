@@ -10,6 +10,7 @@ import type { QualityPreset } from "../bindings/QualityPreset";
 import type { TargetFormat } from "../bindings/TargetFormat";
 import { t } from "../i18n";
 import { backend, toErrorPayload } from "../lib/api";
+import type { EditorPage } from "./pages";
 import { usePreferences } from "./preferences";
 import {
   canStart,
@@ -146,8 +147,8 @@ export function useQueue() {
     const s = stateRef.current;
     const base = requestOf(s);
     if (!canStart(s) || !base) return;
-    // Pictures of PDF pages are named "name-pagina-01" in the interface language.
-    const request = { ...base, pdf: { ...s.pdf, pageLabel: t("pdf.pageLabel") } };
+    // Pictures of PDF pages and split PDFs are named "name-pagina-01" in the interface language.
+    const request = { ...base, pdf: { ...base.pdf!, pageLabel: t("pdf.pageLabel"), pagesLabel: t("pdf.pagesLabel") } };
     const items = readyItems(s);
     cancelling.current = false;
     dispatch({ type: "start" });
@@ -210,6 +211,7 @@ export function useQueue() {
     setFrames: (frames: FrameOptions) => dispatch({ type: "setFrames", frames }),
     setRemoveLocation: (removeLocation: boolean) => dispatch({ type: "setRemoveLocation", removeLocation }),
     setPdf: (pdf: PdfOptions) => dispatch({ type: "setPdf", pdf }),
+    setPages: (pages: EditorPage[] | null, cuts: number[]) => dispatch({ type: "setPages", pages, cuts }),
     start,
     cancelAll,
     back: () => dispatch({ type: "back" }),
