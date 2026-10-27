@@ -123,13 +123,23 @@ PDF documents:
   click the scissors between two pages, saved in a new folder named after the document
   (`Report/Report-pages-01-03.pdf`, `Report/Report-page-04.pdf`, …). Edits and splits
   combine: take out, turn and move pages, then split the result.
-- **Combine**: PDFs and pictures become one PDF, in the order of the list (move the files
-  up and down), named after the first file. Pages keep their size and rotation.
+- **Combine**: PDFs and pictures become one PDF, named after the first file. The same
+  page editor shows the pages of every file (a colored dot and the file name tell them
+  apart): move, turn or take out pages across files, and split the result with the
+  scissors. Moving a file up or down in the list moves all its pages. With a Word
+  document among the files, they are combined in the order of the list.
 - Pages are copied as they are, never re-compressed: only what they use (fonts, pictures)
   goes into the new PDF, so a few pages taken from a large document make a small file.
-  Links to pages that are left out are removed. Bookmarks, form fields, attachments and
-  the document properties of the original PDFs are not carried over (Konvert says so
-  when a PDF has bookmarks or a form).
+  Links to pages that are left out are removed.
+- **Bookmarks** come along with their pages, in their original order. A bookmark whose
+  page is taken out leads to the first page of its section still there, or goes when
+  nothing of its section is left (Konvert tells you before). Split documents get the
+  bookmarks of their own pages; combined PDFs keep the bookmarks of each file.
+- **Fillable forms** come along too: the fields of the pages you keep, with their values.
+  When two combined PDFs have fields with the same name, those of the later file are
+  numbered (`Name_2`), so that each keeps its own value. XFA forms and digitally signed
+  forms keep their look but can no longer be filled in (Konvert says so). Attachments
+  and the document properties of the original PDFs are not carried over.
 - PDFs created by Konvert contain no author, title, dates, file names or paths: only
   "Konvert" as the producing program.
 - PDFs that need a password to be opened are not supported: Konvert says so and does not
