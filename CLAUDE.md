@@ -5,7 +5,7 @@
 > machine paths or other private data in it.
 
 ## What it is
-Konvert is an Apple-style audio/video/image converter for 64-bit Windows 10/11, macOS 11+ on
+Konvert is an Apple-style audio/video/image/PDF converter for 64-bit Windows 10/11, macOS 11+ on
 Apple Silicon and Linux (x86_64 and arm64).
 It uses Tauri 2.11, React 19 with TypeScript, and bundles FFmpeg/FFprobe.
 It works **entirely offline, on the user's computer**.
@@ -36,7 +36,7 @@ Cargo workspace (`Cargo.toml`, resolver 3, toolchain pinned to 1.99.1 in `rust-t
   - `formats.rs`: declarative catalog with `TargetFormat`, `FORMATS` (FormatSpec), `RULES`, `available_targets`, `is_offered`. Pictures are `FormatKind::Image` with a single `ImageCodec` (JPG, PNG, WebP, AVIF, BMP, TIFF, GIF, ICO).
     - A format's id is its serialized `TargetFormat` name (`TargetFormat::id`/`from_id`, CLI `--to alac`). Formats may share an extension (ALAC/AAC `.m4a`, still/animated WebP and GIF): `source_format(media, input)` uses the extension, the kind of content and `detect_codecs`.
     - `secondary: true` formats are shown under "More formats" in the UI.
-    - Groups (`TargetGroup`): video, audio, audioOnly, image, frames (pictures from a video). Animations (GIF, animated WebP, APNG) share the GIF limits (`VideoCodec::is_animation`).
+    - Groups (`TargetGroup`): video, audio, audioOnly, image, frames (pictures from a video), pages (pictures of PDF pages), document (PDF). Animations (GIF, animated WebP, APNG) share the GIF limits (`VideoCodec::is_animation`).
   - `probe.rs`: ffprobe (including `-show_stream_groups`) → `MediaInfo`.
     - Still pictures (`image2`/`*_pipe` demuxers, HEIF/AVIF brands) are `MediaKind::Image` with `PictureInfo` (alpha, AVIF alpha plane, HEIC grid, EXIF); animated GIF/APNG/WebP stay videos.
     - For non-HEIF pictures a second ffprobe reads the first frame (`apply_first_frame_json`): EXIF orientation and EXIF presence. Stored dimensions are the displayed (already rotated) ones.
@@ -44,9 +44,9 @@ Cargo workspace (`Cargo.toml`, resolver 3, toolchain pinned to 1.99.1 in `rust-t
     - Video streams also report their displayed size: a quarter-turn display matrix swaps width and height, so resized portrait videos keep their proportions.
   - `request.rs` → `plan.rs` (`plan_conversion`, pure) → `command.rs` (`build_from_plan`, pure FFmpeg arguments) → `convert.rs` (execution).
   - `estimate.rs`: size estimate and warnings.
-  - New modules: `exif.rs`, `svg.rs`, `metadata.rs` (see below).
+  - New modules: `exif.rs`, `svg.rs`, `metadata.rs`, `pdf.rs` (see below).
   - Other modules: `naming.rs` (`name (n).ext`, never overwrite), `workspace.rs` (`%TEMP%\Konvert\run-…` with a lock and cleanup after crashes), `process.rs` (kill-on-close Job Object and `CREATE_NO_WINDOW`), `progress.rs`, `disk.rs`, `binaries.rs`, `error.rs`.
-  - Stable error codes in `error.rs`: `engine_missing`, `input_not_found`, `output_unavailable`, `not_media`, `corrupt_input`, `unsupported_conversion`, `disk_full`, `permission_denied`, `cancelled`, `engine_failed`, `io`. Each has an i18n message.
+  - Stable error codes in `error.rs`: `engine_missing`, `input_not_found`, `output_unavailable`, `not_media`, `corrupt_input`, `unsupported_conversion`, `invalid_pages`, `pdf_encrypted`, `disk_full`, `permission_denied`, `cancelled`, `engine_failed`, `io`. Each has an i18n message.
   - FFmpeg always runs with `-protocol_whitelist file`, and inputs are passed as `file:` URLs.
   - Pictures: `plan.rs::plan_picture` → `plan_still` → `ImagePlan` (always re-encoded); `command.rs::picture_args` (one filter graph: grid/alphamerge, scale, white background for JPG/BMP, alpha plane for AVIF, palette for GIF; encoders mjpeg, png, libwebp, libaom-av1 still-picture, bmp, tiff, gif; muxers `image2pipe`/`webp`/`avif`/`gif`/`ico`).
     - ICO: `ImagePlan::icons` (16/32/48/256 px up to the picture's size, each fitted into a transparent square), one PNG stream per size into the `ico` muxer (`command.rs::icon_args`). `.ico` inputs are pictures (largest stream; the first-frame probe selects that stream by index).
@@ -56,19 +56,23 @@ Cargo workspace (`Cargo.toml`, resolver 3, toolchain pinned to 1.99.1 in `rust-t
   - Tags and covers: `FormatSpec::tags` (false for raw AC3/E-AC3/MP2 → `TagsDropped`), `cover_art` (attached picture: MP3, M4A, ALAC, FLAC, AIFF with `-write_id3v2 1`) and `cover_art_tag` (Ogg/Opus: `metadata.rs` builds a FLAC picture block, base64, in an `ffmetadata` file passed as a second input with `-map_metadata:s:a:0 1:g`).
   - Optional encoders: `FormatSpec::requires_encoder` (JPEG XL → libjxl); `engine_encoders` + `formats::supported_targets` filter what the app and the CLI offer (the macOS build has no libjxl). The picker/associations list `.jxl` everywhere but macOS (`LIBJXL_EXTENSIONS` in `commands.rs`).
   - SVG (`svg.rs`, resvg): detected before ffprobe, intrinsic size from usvg; `ImagePlan::render` is the drawing size (vector: `max_dimension` may enlarge, icons get every size); `convert.rs` renders a PNG in the workspace and FFmpeg encodes it. Never reads files named by the SVG (string href resolver disabled), catches panics, caps size at 16384 px / 100 MP. Test SVGs have no `xmlns` URL (the privacy check rejects URLs in code; usvg accepts elements without namespace).
-  - Tests: unit tests in the modules and `tests/engine.rs` (26 integration tests with real FFmpeg; the JPEG XL one skips itself without libjxl). `tests/fixtures/mod.rs` builds JPEGs with EXIF and grid HEIC files in memory (HEVC tiles made with libkvazaar).
-- `crates/konvert-cli/`: development CLI (`npm run cli -- targets|plan|convert …`), not shipped.
+  - PDF (`pdf.rs`: hayro 0.8 reads and draws, lopdf 0.46 without default features writes; pure Rust, no network): `.pdf` inputs are detected before ffprobe as `MediaKind::Document` with `DocumentInfo` (pages, first page size). Password-protected files → `pdf_encrypted` (hayro opens files with an empty user password). `FormatKind::Document` target `Pdf` (no muxer: written by Konvert).
+    - Pictures → PDF: `plan_document` places the picture (`pdf::place`: A4/Letter/fit, orientation, margins 0/14/42 pt) and plans a JPEG (preset → full size, 300 or 150 dpi on paper); `convert.rs::run_document` encodes it with FFmpeg in the workspace, then `pdf::assemble`. PDF parts are merged page by page (inherited MediaBox/CropBox/Rotate/Resources copied; outlines, AcroForm, metadata and Info dropped; Info has only `Producer: Konvert`).
+    - PDF → pictures: `plan_pages` (`DocumentPlan` pages/dpi, `pdf::parse_pages` `1-3, 5, 8-` → `invalid_pages`); `run_pages` renders on a blocking thread (channel of 2 pages, `AtomicBool` stop, panics caught, 600 dpi and 100 MP caps), PNG written directly, JPG/WebP through FFmpeg. One page → one file next to the PDF; several → `naming::move_series_named` folder `name/name-<label>-NN.ext` (label from `PdfOptions::page_label`, letters only).
+    - Several files → one PDF: `CombinedJob` + `run_combined` (named after the first file), IPC `start_combined`.
+  - Tests: unit tests in the modules and `tests/engine.rs` (31 integration tests with real FFmpeg; the JPEG XL one skips itself without libjxl). `tests/fixtures/mod.rs` builds JPEGs with EXIF, grid HEIC files (HEVC tiles made with libkvazaar) and PDFs (plain, with personal metadata, encrypted) in memory.
+- `crates/konvert-cli/`: development CLI (`npm run cli -- targets|plan|convert|combine …`, PDF options `--page-size/--orientation/--margin/--dpi/--pages`), not shipped.
 - `src-tauri/`: thin IPC layer.
-  - `commands.rs` holds 20 commands, also listed in `build.rs::COMMANDS` and `capabilities/default.json`: **a new command must be added in all three places**.
-  - Other files: `jobs.rs` (sequential queue, `job-update` event), `prefs.rs`, `debug_log.rs` (redacted log, off by default), `launch.rs` (`LaunchFiles` queue for files from argv, the second instance and macOS `RunEvent::Opened`), `lib.rs` (single instance, Mica, close confirmation for × and ⌘Q via `ExitRequested`).
+  - `commands.rs` holds 21 commands (`start_combined` makes one PDF from several files), also listed in `build.rs::COMMANDS` and `capabilities/default.json`: **a new command must be added in all three places**.
+  - Other files: `jobs.rs` (sequential queue, `job-update` event; `enqueue_combined` for one PDF from several files), `prefs.rs`, `debug_log.rs` (redacted log, off by default), `launch.rs` (`LaunchFiles` queue for files from argv, the second instance and macOS `RunEvent::Opened`), `lib.rs` (single instance, Mica, close confirmation for × and ⌘Q via `ExitRequested`).
   - `tauri.conf.json`: strict CSP, `freezePrototype`, WebView2 flags without networking, per-user NSIS with `windows/installer-hooks.nsh` ("Open with" via `OpenWithProgids`; on Windows do NOT use Tauri's `fileAssociations`, which take over the default program).
   - `tauri.macos.conf.json` (.app/.dmg, hardened runtime, `fileAssociations` with rank `Alternate`) and `tauri.linux.conf.json` (.deb/.rpm/AppImage, MIME types) are merged over it; both use an opaque window. They may not touch security settings (`check:privacy`).
   - Tests keep the Windows installer's and the macOS/Linux associations' extensions identical to the file picker's `MEDIA_EXTENSIONS`.
 - `src/`: React, Tailwind v4 (tokens via `data-scheme`/`data-vibrancy`), Motion, bundled Inter font, lucide icons.
   - `lib/api.ts` (IPC) and `lib/mock.ts` (fake backend, only for `npm run dev` in the browser).
-  - `state/queue.ts`: pure queue reducer, with tests.
+  - `state/queue.ts`: pure queue reducer, with tests. PDF: `pdf` options, `move` (order of the pages), `combines()` (PDF target with several files: always with a PDF among them, for photos unless "One PDF" is off); a combined job shares one `jobId` across items and `resultItems` shows it once. A lone PDF is not offered PDF as target.
   - `i18n/it.ts` and `en.ts`: typed; a test checks that the keys match.
-  - `components/`: DropScreen, FormatGrid ("More formats"), FramesPanel (one frame or a series), QualityPicker, AdvancedPanel, PlanSummary, ConvertingScreen, DoneScreen (folder outputs), SettingsSheet, …
+  - `components/`: DropScreen, FormatGrid ("More formats"), FramesPanel (one frame or a series), PdfPanel (paper, orientation, margins, one PDF), PagesPanel (dpi, page range), FileList (move up/down when combining), ui/Segmented, QualityPicker, AdvancedPanel, PlanSummary, ConvertingScreen, DoneScreen (folder outputs), SettingsSheet, …
   - `state/queue.ts::commonTargets` intersects formats by group too: photos and videos never share a picture format (converted photo vs frame).
 - `src/bindings/`: TypeScript types **generated** by ts-rs during `cargo test`. If you change an exported Rust type, regenerate and commit them.
 - `scripts/`:
@@ -114,6 +118,8 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
 - Real-app check without the file picker: `npx tauri build --debug --no-bundle`, then start `target/debug/konvert.exe` with the file as argument (same path as "Open with") and read the window with UI Automation (query twice to wake up WebView2's accessibility tree).
 - UI in the browser: `npm run dev` (port 1420) with the fake backend; for the agents' preview, create `.claude/launch.json` (ignored by Git) with a `konvert-ui` configuration running `npm run dev` on port 1420; `?files=a.jpg|b.mp4` sets what the file picker returns.
 - Drag & drop cannot be automated: ask the owner to try it by hand.
+- Reading the real app with UI Automation: find the window by enumerating the `konvert` process windows with class `Tauri Window` and `AutomationElement.FromHandle` (searching by name from the root fails); redefine the `Add-Type` helper in every PowerShell call and do not name a C# method `Main`.
+- The browser pane captures only part of the page at device pixel ratio 2: read it with `read_page`/`get_page_text`, or shift `#root` with a CSS transform just for the screenshot.
 - `target/release/konvert.pdb` contains the user's path: never upload `target/` or `.pdb` files.
 - FFmpeg 9: a 1×1 crop of 4:2:0 YUV fails (convert to rgba first); `-map 0:g:0` on a HEIC gives a single tile, `[0:g:0]` in a filter graph gives the whole photo.
 
@@ -140,20 +146,21 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
   - v0.3.0 ships Windows, macOS arm64 and Linux x64 only: the first Linux arm64 packaging failed (missing `xdg-utils`, fixed). The owner will run **Release packages** with `platform: linux-arm64` later; then restore arm64 in the README (platforms line and installation table).
   - Not verified on real hardware yet: drag & drop and "Open With" on macOS/Linux, Gatekeeper, the Linux desktop integration.
 
-- 2026-10-26: **more formats, phase A** on `main` (not pushed): the stretched portrait video bug is fixed; new outputs ALAC, AAC, AC3, E-AC3, MP2, CAF, MKA, TS, MPG, 3GP, FLV, animated WebP, APNG, BMP, TIFF, still GIF, ICO; frames from videos (one frame or a series in a folder); new inputs .eac3/.mp2/.caf/.apng/.ico.
+- 2026-10-26: **more formats, phase A** on `main` (pushed 2026-10-27): the stretched portrait video bug is fixed; new outputs ALAC, AAC, AC3, E-AC3, MP2, CAF, MKA, TS, MPG, 3GP, FLV, animated WebP, APNG, BMP, TIFF, still GIF, ICO; frames from videos (one frame or a series in a folder); new inputs .eac3/.mp2/.caf/.apng/.ico.
   - Owner's decisions for the whole plan: runtime encoder detection (JPEG XL only where the engine has libjxl, so not on macOS), SVG through resvg on every platform, no RAW input, PDF in pure Rust (spike first; PDFium only after asking), frames as a "Frames" group in the format grid, series in a subfolder, "remove location" off by default.
   - Green tests (Windows): 28 Vitest, 139 core unit tests, 22 integration tests, 17 app tests.
   - Not verified by hand yet: the new formats in the installed app, "Open with" on the new extensions, drag & drop of videos into the Frames flow.
 
-- 2026-10-26: **more formats, phase B** on `main` (not pushed): cover art in AIFF/OGG/Opus and a "tags dropped" warning; EXIF kept in JPG/PNG/WebP/AVIF (also from HEIC) with "Remove the location" (photos and videos); JPEG XL where FFmpeg has libjxl; SVG input through resvg (new dependency, licenses regenerated). No RAW (owner's decision).
+- 2026-10-26: **more formats, phase B** on `main` (pushed 2026-10-27): cover art in AIFF/OGG/Opus and a "tags dropped" warning; EXIF kept in JPG/PNG/WebP/AVIF (also from HEIC) with "Remove the location" (photos and videos); JPEG XL where FFmpeg has libjxl; SVG input through resvg (new dependency, licenses regenerated). No RAW (owner's decision).
   - Green tests (Windows): 29 Vitest, 159 core unit tests, 26 integration tests, 17 app tests; `cargo check -p konvert-core` passes for macOS and Linux targets.
   - Not verified by hand yet: real iPhone HEIC photos with GPS, EXIF read by Windows Explorer/Photos in the converted files, SVG files with system fonts and complex text.
 
+- 2026-10-26: **more formats, phase C (PDF)** on `main` (pushed 2026-10-27): pictures → PDF (A4/Letter/fit, orientation, margins, one PDF or one each), PDF → PNG/JPG/WebP pictures (dpi, page range), PDFs and pictures combined into one PDF in the list order; `.pdf` in the picker and "Open with". New dependencies hayro and lopdf (licenses regenerated). Spike: hayro drew multilingual text, emoji, gradients, transparency and images correctly, about 10 ms per page.
+  - Green tests (Windows): 32 Vitest, 173 core unit tests, 31 integration tests, 17 app tests; `cargo clippy -p konvert-core` is clean for `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`.
+  - Not verified by hand yet: a conversion started from the app (agents checked analysis, plans and the UI there, but never convert into the owner's destination folder), real-world PDFs (scans, forms, large files), "Open with" on `.pdf`.
+
 ## Backlog (next work, by priority)
-1. **More formats and PDF**, in three phases agreed with the owner (in progress):
-   - A: done (see Current status);
-   - B: done (see Current status);
-   - C: PDF in pure Rust (hayro, lopdf, pdf-writer): pictures → PDF, PDF → pictures, merge; split/rotate/reorder only after a further OK.
+1. **More formats and PDF**: phases A, B and C done (see Current status). Proposed next, only after the owner's OK: PDF page tools (split a PDF, extract, rotate and reorder pages).
 2. Finish the macOS/Linux rollout (see Current status), and macOS window vibrancy (needs `macOSPrivateApi`).
 3. Hardware encoders NVENC/QSV/AMF/h264_mf/VideoToolbox, with automatic detection.
 4. FFmpeg built without any network support on Windows and Linux (macOS already is).

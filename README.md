@@ -1,7 +1,7 @@
 # Konvert
-Audio, video and image file converter with a modern interface.
+Audio, video, image and PDF file converter with a modern interface.
 
-Konvert converts audio, video and image files from one format to another **entirely on
+Konvert converts audio, video, image and PDF files from one format to another **entirely on
 your computer**: no network connections, no telemetry, no account.
 
 Platforms: Windows 10/11 (64-bit), macOS 11 or later on Apple Silicon (M1 and later),
@@ -9,7 +9,7 @@ Linux x86_64. Linux arm64 packages are coming in a later release.
 
 ## How to use it
 
-1. Drag one or more audio, video or image files into the window (or use **Choose files…**,
+1. Drag one or more audio, video, image or PDF files into the window (or use **Choose files…**,
    Ctrl+O / ⌘O, or right-click the file → **Open with** → **Konvert**).
 2. Konvert analyzes them and offers only the formats that make sense (for several files:
    the ones they all have in common).
@@ -37,7 +37,8 @@ Konvert only offers the conversions that make sense for the file you give it:
 | Audio | MP3, M4A (AAC), ALAC (M4A), WAV, FLAC, OGG (Vorbis), OPUS, WMA, AIFF; more formats: AAC, AC3, E-AC3, MP2, CAF (ALAC), MKA |
 | Video with audio | MP4, MKV, MOV, WebM, AVI, GIF, animated WebP; more formats: TS, MPG (MPEG-2), 3GP, FLV, APNG. Also **audio only** in every audio format and **frames** as JPG, PNG or WebP |
 | Video without audio | The same, without the audio formats |
-| Picture (JPG/JPEG, PNG, WebP, AVIF, HEIC/HEIF, BMP, TIFF, ICO, SVG, JPEG XL¹) | JPG, PNG, WebP, AVIF; more formats: BMP, TIFF, GIF, ICO, JPEG XL¹ |
+| Picture (JPG/JPEG, PNG, WebP, AVIF, HEIC/HEIF, BMP, TIFF, ICO, SVG, JPEG XL¹) | JPG, PNG, WebP, AVIF, **PDF**; more formats: BMP, TIFF, GIF, ICO, JPEG XL¹ |
+| PDF document | Its **pages as pictures** (PNG, JPG, WebP); together with other PDFs or pictures, **one PDF** |
 
 ¹ JPEG XL needs FFmpeg's libjxl, which the Windows and Linux builds have and the macOS
 build does not: Konvert checks the engine and offers JPEG XL only where it works.
@@ -91,6 +92,30 @@ Pictures:
 - Animated GIF, WebP and PNG files are treated as videos.
 - Camera RAW files (DNG, CR2, NEF…) are not supported: FFmpeg cannot develop them and no
   small, permissively licensed alternative does it well enough.
+
+PDF documents:
+
+- **Pictures → PDF**: one picture per page, on A4 or Letter paper (orientation automatic or
+  chosen) or on a page shaped like the photo, with no, small or normal margins. Photos are
+  turned the right way up; the quality setting decides the picture quality and resolution
+  on the page (**Best quality**: full size, **Balanced**: 300 dpi, **Small file**: 150 dpi).
+  Several photos go into **one PDF** in the order of the list (or, if you turn that off,
+  one PDF each).
+- **PDF → pictures**: every page or only some (`1-3, 5, 8-`), as PNG, JPG or WebP at 72 to
+  600 dpi, drawn on white. One page is saved next to the PDF (`Report-page-05.png`),
+  several go into a new folder (`Report/Report-page-01.png`, …); the word between name and
+  number follows the language of the interface (`page`, `pagina`).
+- **Combine**: PDFs and pictures become one PDF, in the order of the list (move the files
+  up and down), named after the first file. Pages keep their size and rotation;
+  bookmarks, form fields, attachments and the document properties of the original PDFs
+  are not carried over.
+- PDFs created by Konvert contain no author, title, dates, file names or paths: only
+  "Konvert" as the producing program.
+- PDFs that need a password to be opened are not supported: Konvert says so and does not
+  ask for passwords.
+- Pages are drawn by hayro, a PDF renderer written in Rust: very unusual PDFs may look
+  slightly different than in other readers.
+- Splitting a PDF, extracting, rotating or reordering pages are not available yet.
 
 The format table is declarative: `crates/konvert-core/src/formats.rs`.
 
@@ -210,6 +235,8 @@ Konvert works entirely on your computer. No data leaves your device.
   never network addresses. On macOS FFmpeg is also built without any network protocol.
 - SVG drawings are drawn by a library without network code, and a drawing may not even
   read other files: pictures it names are ignored, only pictures embedded in it are drawn.
+- PDF files are read and written by Rust libraries without network code (hayro, lopdf):
+  links, scripts, forms and embedded files in a PDF are never opened or run.
 - The only web address the app knows is the releases page, which opens in your browser
   only if you click it.
 
@@ -255,6 +282,7 @@ Ideas collected for upcoming updates:
 - FFmpeg built **without any network support** on Windows and Linux too (today the network
   is blocked at runtime there; the macOS build already has no network protocol).
 - **Signed** installer with a code-signing certificate (no SmartScreen warning).
+- **PDF page tools**: split a PDF, extract, rotate and reorder pages.
 
 ## Development
 
@@ -327,7 +355,7 @@ installed with Konvert.
 ```
 crates/konvert-core/   domain logic in Rust (no Tauri dependency): probing, format
                        catalog, planning, estimates, FFmpeg command builder, execution,
-                       unique names, temporary files
+                       EXIF, SVG and PDF handling, unique names, temporary files
 crates/konvert-cli/    development CLI on top of konvert-core
 src-tauri/             Tauri app: IPC commands, queue, preferences, log, permissions,
                        configuration (tauri.conf.json, plus tauri.macos/linux.conf.json
