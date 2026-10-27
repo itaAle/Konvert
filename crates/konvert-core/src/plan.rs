@@ -17,7 +17,7 @@ use crate::formats::{
     self, AudioCodec, FormatKind, FormatSpec, ImageCodec, TargetFormat, VideoCodec,
     is_lossless_audio_codec, is_lossless_image, is_lossless_video_codec,
 };
-use crate::pdf::{self, Placement};
+use crate::pdf::{self, PdfForm, Placement};
 use crate::probe::{
     AudioStream, MediaInfo, MediaKind, PictureInfo, VideoStream, pix_fmt_has_alpha,
 };
@@ -210,8 +210,11 @@ pub enum ConversionWarning {
     ChannelsDownmixed,
     /// The photo's EXIF data (camera, date, location) is not kept.
     MetadataDropped,
-    /// The bookmarks and the fillable form of a PDF are not kept.
-    PdfExtrasDropped,
+    /// Some bookmarks of a PDF lead to pages left out: they go, or lead to
+    /// the first page of their section still there.
+    PdfBookmarksDropped,
+    /// An XFA or signed form keeps its look but can no longer be filled in.
+    PdfFormFixed,
     /// Compressed PDF: its pages may become pictures (text, links and forms lost).
     PdfPagesAsPictures,
     /// Word document laid out by Konvert: page breaks may differ from Word's.
@@ -613,6 +616,13 @@ fn plan_document(
             };
             let pages: Vec<u32> = layout.iter().map(|p| p.number).collect();
             let kept = pages.len() as u64;
+            let mut warnings = Vec::new();
+            if info.bookmark_pages.iter().any(|p| !pages.contains(p)) {
+                warnings.push(W::PdfBookmarksDropped);
+            }
+            if info.form == PdfForm::Fixed {
+                warnings.push(W::PdfFormFixed);
+            }
             Ok(ConversionPlan {
                 target: TargetFormat::Pdf,
                 video_stream: None,
@@ -631,11 +641,7 @@ fn plan_document(
                 }),
                 remove_location: false,
                 compress: None,
-                warnings: if info.extras {
-                    vec![W::PdfExtrasDropped]
-                } else {
-                    Vec::new()
-                },
+                warnings,
                 // The pages are copied as they are, with what they use.
                 estimate: media.size_bytes.map(|bytes| SizeEstimate {
                     bytes: bytes * kept / u64::from(info.pages.max(1)),
@@ -2211,7 +2217,7 @@ mod tests {
         assert_eq!(enc.rate, AudioRate::Bitrate { kbps: 32 });
     }
 
-    fn pdf_document(pages: u32, extras: bool) -> MediaInfo {
+    fn pdf_document(pages: u32, bookmark_pages: Vec<u32>, form: PdfForm) -> MediaInfo {
         MediaInfo {
             container: "pdf".into(),
             kind: MediaKind::Document,
@@ -2229,7 +2235,8 @@ mod tests {
                 pages,
                 width_pt: 595.0,
                 height_pt: 842.0,
-                extras,
+                bookmark_pages,
+                form,
             }),
             text: None,
         }
@@ -2238,16 +2245,28 @@ mod tests {
     #[test]
     fn a_pdf_is_edited_into_one_or_several_pdfs() {
         use crate::request::{PdfOptions, PdfPage, PdfSplit};
-        let page = |number, rotation| PdfPage { number, rotation };
-        let edit = |options: PdfOptions, extras: bool| {
+        let page = |number, rotation| PdfPage {
+            file: 0,
+            number,
+            rotation,
+        };
+        let edit_with = |options: PdfOptions, bookmarks: Vec<u32>, form: PdfForm| {
             let request = ConversionRequest {
                 pdf: Some(options),
                 ..req(TargetFormat::Pdf, QualityPreset::Balanced)
             };
-            plan_conversion(&pdf_document(10, extras), &request, Path::new("a.pdf"))
+            plan_conversion(
+                &pdf_document(10, bookmarks, form),
+                &request,
+                Path::new("a.pdf"),
+            )
+        };
+        let edit = |options: PdfOptions, bookmarks: bool| {
+            let bookmarks = if bookmarks { vec![1, 4] } else { Vec::new() };
+            edit_with(options, bookmarks, PdfForm::None)
         };
         // Every page as it is: one document, about as large as the source.
-        let p = edit(PdfOptions::default(), false).unwrap();
+        let p = edit(PdfOptions::default(), true).unwrap();
         let doc = p.document.unwrap();
         assert_eq!(doc.pages, (1..=10).collect::<Vec<_>>());
         assert!(doc.rotations.is_empty() && doc.parts.is_empty());
@@ -2272,7 +2291,27 @@ mod tests {
         );
         assert_eq!(doc.parts, [1, 1]);
         assert_eq!(p.estimate.unwrap().bytes, 200_000);
-        assert_eq!(p.warnings, [W::PdfExtrasDropped]);
+        // A bookmark leads to page 1, which is left out.
+        assert_eq!(p.warnings, [W::PdfBookmarksDropped]);
+        // Bookmarks to kept pages only, a fillable form: nothing to say.
+        let kept = PdfOptions {
+            layout: Some(vec![page(4, 0), page(1, 0)]),
+            ..PdfOptions::default()
+        };
+        let p = edit_with(kept.clone(), vec![1, 4], PdfForm::Fillable).unwrap();
+        assert!(p.warnings.is_empty());
+        let p = edit_with(kept, Vec::new(), PdfForm::Fixed).unwrap();
+        assert_eq!(p.warnings, [W::PdfFormFixed]);
+        // A page of another file is not part of a single PDF.
+        let other = PdfOptions {
+            layout: Some(vec![PdfPage {
+                file: 1,
+                number: 1,
+                rotation: 0,
+            }]),
+            ..PdfOptions::default()
+        };
+        assert_eq!(edit(other, false).unwrap_err().code(), "invalid_pages");
 
         let p = edit(
             PdfOptions {

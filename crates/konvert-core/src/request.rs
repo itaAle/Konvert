@@ -144,12 +144,15 @@ pub enum PageMargin {
     Normal,
 }
 
-/// A page of a PDF made from another PDF: which page, and how it is turned.
+/// A page of a PDF made from other files: which page, and how it is turned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct PdfPage {
-    /// 1-based page number in the source document.
+    /// Index of the source file among the files combined (0 for a single PDF).
+    #[serde(default)]
+    pub file: u32,
+    /// 1-based page number in the source file (a picture has one page).
     pub number: u32,
     /// Clockwise turn added to the page's own: 0, 90, 180 or 270 degrees.
     #[serde(default)]
@@ -191,8 +194,9 @@ pub struct PdfOptions {
     /// Word between the name and a range of pages in file names (`"pagine"`,
     /// `"pages"`).
     pub pages_label: Option<String>,
-    /// PDF to PDF: the pages of the new document, in order and each with its
-    /// turn; pages left out are removed (`None`: every page as it is).
+    /// PDF to PDF, and files combined into one PDF: the pages of the new
+    /// document, in order and each with its turn; pages left out are removed
+    /// (`None`: every page as it is).
     pub layout: Option<Vec<PdfPage>>,
     /// PDF to PDF: one document, or several.
     pub split: PdfSplit,

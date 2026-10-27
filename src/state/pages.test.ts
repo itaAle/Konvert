@@ -36,7 +36,7 @@ describe("page editor", () => {
     pages = rotateAll(toggleRemoved(initialPages(2), 1), 90);
     // Pages left out are not turned.
     expect(pages.map((p) => p.rotation)).toEqual([90, 0]);
-    expect(layoutOf(pages)).toEqual([{ number: 1, rotation: 90 }]);
+    expect(layoutOf(pages)).toEqual([{ file: 0, number: 1, rotation: 90 }]);
   });
 
   it("leaves pages out and puts them back, never the last one", () => {

@@ -63,7 +63,7 @@ export function keptCount(pages: EditorPage[]): number {
 /** Pages of the new document for the core (`null`: every page as it is). */
 export function layoutOf(pages: EditorPage[] | null): PdfPage[] | null {
   if (!pages || !isEdited(pages)) return null;
-  return pages.filter((p) => !p.removed).map(({ number, rotation }) => ({ number, rotation }));
+  return pages.filter((p) => !p.removed).map(({ number, rotation }) => ({ file: 0, number, rotation }));
 }
 
 /**

@@ -20,7 +20,8 @@
 //!          --margin none|small|normal   (pictures to PDF)
 //!          --dpi N  --pages "1-3, 5"   (PDF to pictures)
 //!          --layout "3, 1-2, 5@90"  --rotate 90|180|270
-//!          --split-every N | --split-after "2, 5"   (PDF to PDF)
+//!          --split-every N | --split-after "2, 5"   (PDF to PDF; with combine,
+//!                    "2:1-3" are pages of the second file)
 //!          --compress light|strong|max  --max-mb N  --pages-as-pictures
 //!                    (a smaller copy in the same format: no --to needed)
 //! ```
@@ -60,7 +61,8 @@ OPTIONS: --preset max|balanced|small  --height N  --fps N
          --margin none|small|normal   (pictures to PDF)
          --dpi N  --pages \"1-3, 5\"   (PDF to pictures)
          --layout \"3, 1-2, 5@90\"  --rotate 90|180|270
-         --split-every N | --split-after \"2, 5\"   (PDF to PDF)
+         --split-every N | --split-after \"2, 5\"   (PDF to PDF; with combine,
+                   \"2:1-3\" are pages of the second file)
          --compress light|strong|max  --max-mb N  --pages-as-pictures
                    (a smaller copy in the same format: no --to needed)";
 
@@ -90,6 +92,14 @@ fn parse_layout(text: &str) -> Result<Vec<PdfPage>, String> {
             Some((range, turn)) => (range, turn.trim().parse().map_err(|_| wrong())?),
             None => (part, 0),
         };
+        // "2:1-3": pages of the second file combined.
+        let (file, range) = match range.split_once(':') {
+            Some((file, range)) => match file.trim().parse::<u32>() {
+                Ok(file) if file > 0 => (file - 1, range),
+                _ => return Err(wrong()),
+            },
+            None => (0, range),
+        };
         let number = |s: &str| s.trim().parse::<u32>().map_err(|_| wrong());
         let (first, last) = match range.split_once('-') {
             Some((a, b)) => (number(a)?, number(b)?),
@@ -100,11 +110,11 @@ fn parse_layout(text: &str) -> Result<Vec<PdfPage>, String> {
         } else {
             (last..=first).rev().collect()
         };
-        pages.extend(
-            numbers
-                .into_iter()
-                .map(|number| PdfPage { number, rotation }),
-        );
+        pages.extend(numbers.into_iter().map(|number| PdfPage {
+            file,
+            number,
+            rotation,
+        }));
     }
     Ok(pages)
 }
@@ -119,6 +129,7 @@ fn rotate_pages(request: &mut ConversionRequest, media: &MediaInfo, rotate: Opti
     let layout = pdf.layout.get_or_insert_with(|| {
         (1..=info.pages)
             .map(|number| PdfPage {
+                file: 0,
                 number,
                 rotation: 0,
             })

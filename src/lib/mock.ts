@@ -217,7 +217,7 @@ function analysis(path: string): FileAnalysis {
         hasTags: false,
         picture: null,
         hasLocation: false,
-        document: { pages: MOCK_PAGES, widthPt: 595.3, heightPt: 841.9, extras: true },
+        document: { pages: MOCK_PAGES, widthPt: 595.3, heightPt: 841.9, bookmarkPages: [1, 3, 9], form: "fillable" },
       },
       targets: [...PAGES, PDF, DOCX],
       compress: "pdf",
@@ -465,9 +465,10 @@ export const mockBackend: Backend = {
         removeLocation: false,
         document: { pages, rotations, parts, dpi, placement: null },
         warnings: edited
-          ? media.document?.extras
-            ? ["pdfExtrasDropped"]
-            : []
+          ? [
+              ...(media.document?.bookmarkPages.some((p) => !pages.includes(p)) ? (["pdfBookmarksDropped"] as const) : []),
+              ...(media.document?.form === "fixed" ? (["pdfFormFixed"] as const) : []),
+            ]
           : toPdf && media.picture?.exif
             ? ["metadataDropped"]
             : !toPdf && pages.length > 300

@@ -27,11 +27,13 @@ use crate::metadata;
 use crate::naming;
 use crate::pdf;
 use crate::pdf_compress;
-use crate::plan::{ConversionPlan, DocumentPlan, plan_conversion};
+use crate::plan::{ConversionPlan, plan_conversion};
 use crate::probe::{MediaInfo, MediaKind};
 use crate::process;
 use crate::progress::{Progress, ProgressParser};
-use crate::request::{CompressOptions, ConversionRequest, FrameMode, PdfPage};
+use crate::request::{
+    CompressOptions, ConversionRequest, FrameMode, PdfOptions, PdfPage, QualityPreset,
+};
 use crate::svg;
 use crate::workspace::Workspace;
 
@@ -73,6 +75,52 @@ fn serialize_secs<S: serde::Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::
     s.serialize_f64(d.as_secs_f64())
 }
 
+/// A small PNG of a picture as a `data:` URL (longest side at most `size`
+/// pixels, never enlarged), made like a PNG conversion (turned upright, HEIC tiles
+/// joined, SVG drawn) in the private workspace: a page of the page editor.
+/// `id` must not be used by another job at the same time.
+pub async fn picture_thumbnail(
+    bins: &Binaries,
+    workspace: &Workspace,
+    id: u64,
+    input: &Path,
+    media: &MediaInfo,
+    size: u32,
+) -> Result<String, CoreError> {
+    if media.kind != MediaKind::Image {
+        return Err(CoreError::UnsupportedConversion {
+            details: "only pictures have a picture thumbnail".into(),
+        });
+    }
+    let mut request = ConversionRequest::new(TargetFormat::Png, QualityPreset::Small);
+    request.advanced.max_dimension = Some(size.clamp(16, pdf::MAX_THUMBNAIL));
+    let job = ConversionJob {
+        id,
+        input: input.to_path_buf(),
+        media: media.clone(),
+        request,
+        output_dir: workspace.dir().to_path_buf(),
+    };
+    let mut plan = plan_conversion(media, &job.request, input)?;
+    if let Some(image) = plan.image.as_mut() {
+        image.copy_exif = false;
+    }
+    let output = workspace.job_output(id, "png");
+    encode(
+        bins,
+        workspace,
+        &job,
+        &plan,
+        &output,
+        &CancellationToken::new(),
+        &mut |_| {},
+    )
+    .await?;
+    let png = std::fs::read(&output);
+    let _ = std::fs::remove_file(&output);
+    Ok(format!("data:image/png;base64,{}", metadata::base64(&png?)))
+}
+
 /// Runs `job`, calling `on_progress` as FFmpeg reports progress.
 pub async fn run_conversion(
     bins: &Binaries,
@@ -97,7 +145,8 @@ pub async fn run_conversion(
         return run_series(bins, workspace, job, &plan, cancel, on_progress, started).await;
     }
     if job.request.target == TargetFormat::Pdf && job.media.kind == MediaKind::Document {
-        return run_edit(workspace, job, &plan, cancel, on_progress, started).await;
+        let inputs = [(job.input.clone(), job.media.clone())];
+        return run_build(bins, workspace, job, &inputs, cancel, on_progress, started).await;
     }
     if job.request.target == TargetFormat::Docx
         || (job.request.target == TargetFormat::Pdf && job.media.kind == MediaKind::Text)
@@ -106,7 +155,7 @@ pub async fn run_conversion(
     }
     if job.request.target == TargetFormat::Pdf {
         let inputs = [(job.input.clone(), job.media.clone())];
-        return run_document(bins, workspace, job, &inputs, cancel, on_progress, started).await;
+        return run_build(bins, workspace, job, &inputs, cancel, on_progress, started).await;
     }
     if job.media.kind == MediaKind::Document {
         return run_pages(bins, workspace, job, &plan, cancel, on_progress, started).await;
@@ -528,7 +577,9 @@ async fn run_series(
     })
 }
 
-/// Several files (pictures and PDFs, in order) into one PDF document.
+/// Several files (pictures, PDFs and Word documents) into one PDF document:
+/// every page in order, or the pages of `request.pdf.layout` (whose `file`
+/// is an index in `inputs`), maybe split into several documents.
 #[derive(Debug, Clone)]
 pub struct CombinedJob {
     pub id: u64,
@@ -537,7 +588,8 @@ pub struct CombinedJob {
     pub output_dir: PathBuf,
 }
 
-/// Runs a [`CombinedJob`]: one PDF named after the first file.
+/// Runs a [`CombinedJob`]: one PDF named after the first file (or a folder
+/// named after it, when the document is split).
 pub async fn run_combined(
     bins: &Binaries,
     workspace: &Workspace,
@@ -570,7 +622,7 @@ pub async fn run_combined(
         request,
         output_dir: job.output_dir.clone(),
     };
-    run_document(
+    run_build(
         bins,
         workspace,
         &lead,
@@ -582,9 +634,14 @@ pub async fn run_combined(
     .await
 }
 
-/// Builds one PDF from pictures (each encoded as JPEG by FFmpeg, turned the
-/// right way up, on its own page) and PDFs (every page copied), in order.
-async fn run_document(
+/// New PDFs from pictures (each encoded as JPEG by FFmpeg, turned the right
+/// way up, on its own page), PDFs and Word documents (laid out by Konvert):
+/// the pages of the layout (every page when there is none), in order and
+/// turned, as one document or split into several. One document goes next to
+/// the other outputs; several go into a new folder named after the first file
+/// (`name-pages-01-03.pdf`...). The documents are built on a worker thread,
+/// with cancellation between them.
+async fn run_build(
     bins: &Binaries,
     workspace: &Workspace,
     job: &ConversionJob,
@@ -593,32 +650,70 @@ async fn run_document(
     mut on_progress: impl FnMut(Progress) + Send,
     started: Instant,
 ) -> Result<ConversionOutcome, CoreError> {
+    let options = job.request.pdf.clone().unwrap_or_default();
+    let layout = match options.layout.as_deref() {
+        // The pages of a Word document exist only once it is laid out.
+        Some(_) if inputs.iter().any(|(_, m)| m.kind == MediaKind::Text) => {
+            return Err(CoreError::InvalidPages {
+                details: "the pages of a Word document cannot be arranged one by one".into(),
+            });
+        }
+        Some(layout) => {
+            let counts: Vec<u32> = inputs
+                .iter()
+                .map(|(_, media)| media.document.as_ref().map_or(1, |d| d.pages))
+                .collect();
+            Some(pdf::check_pages(Some(layout), &counts)?)
+        }
+        None => None,
+    };
+
+    // Files with no page in the layout are left out; the others are read or
+    // made into pages, in order.
+    let used: Vec<u32> = (0..inputs.len() as u32)
+        .filter(|&i| {
+            layout
+                .as_ref()
+                .is_none_or(|l| l.iter().any(|p| p.file == i))
+        })
+        .collect();
+    let steps = used.len() + 1;
     let picture_file = workspace.dir().join(format!("job-{}-page.jpg", job.id));
-    let mut parts = Vec::with_capacity(inputs.len());
+    let mut files = Vec::with_capacity(used.len());
     let result: Result<(), CoreError> =
         async {
-            for (i, (input, media)) in inputs.iter().enumerate() {
+            for (step, &i) in used.iter().enumerate() {
+                let (input, media) = &inputs[i as usize];
                 if cancel.is_cancelled() {
                     return Err(CoreError::Cancelled);
                 }
-                on_progress(fraction(i, inputs.len() + 1));
-                if media.kind == MediaKind::Text {
-                    let data = std::fs::read(input)?;
-                    let laid_out = tokio::task::spawn_blocking(move || typeset(&data))
-                        .await
-                        .map_err(|e| CoreError::Io(std::io::Error::other(e)))??;
-                    parts.push(pdf::Part::Document(laid_out));
-                    continue;
-                }
-                let plan = plan_conversion(media, &job.request, input)?;
-                let document =
-                    plan.document
-                        .clone()
-                        .ok_or_else(|| CoreError::UnsupportedConversion {
-                            details: "not a picture or a PDF".into(),
-                        })?;
-                match (&plan.image, document.placement) {
-                    (Some(image), Some(placement)) => {
+                on_progress(fraction(step, steps));
+                match media.kind {
+                    MediaKind::Text => {
+                        let data = std::fs::read(input)?;
+                        let laid_out = tokio::task::spawn_blocking(move || typeset(&data))
+                            .await
+                            .map_err(|e| CoreError::Io(std::io::Error::other(e)))??;
+                        files.push(pdf::Part::Document(laid_out));
+                    }
+                    MediaKind::Document => files.push(pdf::Part::Document(std::fs::read(input)?)),
+                    _ => {
+                        let request = ConversionRequest {
+                            pdf: Some(PdfOptions {
+                                layout: None,
+                                ..options.clone()
+                            }),
+                            ..job.request.clone()
+                        };
+                        let plan = plan_conversion(media, &request, input)?;
+                        let (Some(image), Some(placement)) = (
+                            &plan.image,
+                            plan.document.as_ref().and_then(|d| d.placement),
+                        ) else {
+                            return Err(CoreError::UnsupportedConversion {
+                                details: "not a picture or a PDF".into(),
+                            });
+                        };
                         // The picture as FFmpeg makes a JPG of it (rotation, HEIC
                         // tiles, transparency on white).
                         let jpeg_plan = ConversionPlan {
@@ -637,17 +732,13 @@ async fn run_document(
                                 details: "picture size unknown".into(),
                             }
                         })?;
-                        parts.push(pdf::Part::Picture {
+                        files.push(pdf::Part::Picture {
                             jpeg,
                             width,
                             height,
                             placement,
                         });
                     }
-                    _ => parts.push(pdf::Part::Pages(
-                        std::fs::read(input)?,
-                        layout_of(&document),
-                    )),
                 }
             }
             Ok(())
@@ -655,83 +746,52 @@ async fn run_document(
         .await;
     let _ = std::fs::remove_file(&picture_file);
     result?;
+    on_progress(fraction(used.len(), steps));
 
-    on_progress(fraction(inputs.len(), inputs.len() + 1));
-    let assembled = tokio::task::spawn_blocking(move || pdf::assemble(parts))
-        .await
-        .map_err(|e| CoreError::Io(std::io::Error::other(e)))??;
-    if cancel.is_cancelled() {
-        return Err(CoreError::Cancelled);
-    }
-    let temp_output = workspace.job_output(job.id, "pdf");
-    std::fs::write(&temp_output, &assembled.0)?;
-    let stem = output_stem(&job.input);
-    let output_dir = job.output_dir.clone();
-    let temp = temp_output.clone();
-    let moved = tokio::task::spawn_blocking(move || {
-        naming::move_to_unique(&temp, &output_dir, &stem, "pdf")
-    })
-    .await
-    .map_err(|e| CoreError::Io(std::io::Error::other(e)))?;
-    let output = match moved {
-        Ok(path) => path,
-        Err(e) => {
-            let _ = std::fs::remove_file(&temp_output);
-            return Err(e.into());
-        }
+    // The layout, with the files numbered among those used.
+    let layout: Option<Vec<PdfPage>> = layout.map(|layout| {
+        layout
+            .into_iter()
+            .map(|page| PdfPage {
+                file: used.iter().position(|&f| f == page.file).unwrap_or(0) as u32,
+                ..page
+            })
+            .collect()
+    });
+    let total = match &layout {
+        Some(layout) => layout.len() as u32,
+        None => files
+            .iter()
+            .map(|file| match file {
+                pdf::Part::Picture { .. } => Ok(1),
+                pdf::Part::Document(data) => pdf::page_count(data),
+            })
+            .sum::<Result<u32, CoreError>>()?,
     };
-    Ok(ConversionOutcome {
-        size_bytes: assembled.0.len() as u64,
-        output,
-        files: 1,
-        elapsed: started.elapsed(),
-    })
-}
+    let parts = pdf::split_sizes(
+        options.split,
+        options.split_every,
+        &options.split_after,
+        total,
+    )?;
+    // Split documents are named after their pages: the page numbers of a
+    // single PDF, otherwise positions in the new document.
+    let numbers: Vec<u32> = match &layout {
+        Some(layout) if inputs.len() == 1 => layout.iter().map(|p| p.number).collect(),
+        _ => (1..=total).collect(),
+    };
 
-/// Pages of the plan with their turns.
-fn layout_of(document: &DocumentPlan) -> Vec<PdfPage> {
-    document
-        .pages
-        .iter()
-        .enumerate()
-        .map(|(i, &number)| PdfPage {
-            number,
-            rotation: document.rotations.get(i).copied().unwrap_or(0),
-        })
-        .collect()
-}
-
-/// A PDF made from another one: some of its pages, in a new order, turned.
-/// One document goes next to the other outputs; several (a split) go into a
-/// new folder named after the source (`name-pages-01-03.pdf`...). The
-/// documents are built on a worker thread, with cancellation between them.
-async fn run_edit(
-    workspace: &Workspace,
-    job: &ConversionJob,
-    plan: &ConversionPlan,
-    cancel: &CancellationToken,
-    mut on_progress: impl FnMut(Progress) + Send,
-    started: Instant,
-) -> Result<ConversionOutcome, CoreError> {
-    let document = plan
-        .document
-        .clone()
-        .ok_or_else(|| CoreError::UnsupportedConversion {
-            details: "no pages to copy".into(),
-        })?;
     let temp_dir = workspace.job_dir(job.id);
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(&temp_dir)?;
-
-    let data = std::fs::read(&job.input)?;
-    let total = document.parts.len().max(1);
+    let documents = parts.len().max(1);
     let stop = Arc::new(AtomicBool::new(false));
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<(usize, Vec<u8>)>(1);
-    let editor = {
+    let builder = {
         let stop = stop.clone();
-        let (layout, parts) = (layout_of(&document), document.parts.clone());
+        let parts = parts.clone();
         tokio::task::spawn_blocking(move || {
-            pdf::edit(&data, &layout, &parts, &stop, |i, bytes| {
+            pdf::build(files, layout.as_deref(), &parts, &stop, |i, bytes| {
                 sender.blocking_send((i, bytes)).is_ok()
             })
         })
@@ -750,20 +810,20 @@ async fn run_edit(
             };
             std::fs::write(temp_dir.join(format!("part-{i:06}.pdf")), &bytes)?;
             done += 1;
-            on_progress(fraction(done, total));
+            on_progress(fraction(used.len() * documents + done, steps * documents));
         }
     }
     .await;
-    // Stop the editor (if still working) and collect its own outcome.
+    // Stop the builder (if still working) and collect its own outcome.
     stop.store(true, Ordering::Relaxed);
     drop(receiver);
-    let edited = editor
+    let built = builder
         .await
         .map_err(|e| CoreError::Io(std::io::Error::other(e)))?;
-    let outcome = result.and(match edited {
+    let outcome = result.and(match built {
         // Stopped by us after an error or a cancellation: already reported.
         Err(CoreError::Cancelled) if cancel.is_cancelled() => Err(CoreError::Cancelled),
-        other => other,
+        other => other.map(|_| ()),
     });
     if let Err(e) = outcome {
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -771,11 +831,10 @@ async fn run_edit(
     }
 
     let stem = output_stem(&job.input);
-    let options = job.request.pdf.clone().unwrap_or_default();
     let names = part_names(
         &stem,
-        &document.pages,
-        &document.parts,
+        &numbers,
+        &parts,
         &label(options.page_label.as_deref(), "page"),
         &label(options.pages_label.as_deref(), "pages"),
     );

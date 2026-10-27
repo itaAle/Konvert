@@ -80,7 +80,7 @@ function file(name: string, kind: "audio" | "videoWithAudio" | "image" | "docume
       hasTags: false,
       picture: kind === "image" ? { alpha: false, alphaStream: null, gridGroup: null, exif: false, exifCopyable: false } : null,
       hasLocation: false,
-      document: kind === "document" ? { pages: 4, widthPt: 595, heightPt: 842, extras: false } : null,
+      document: kind === "document" ? { pages: 4, widthPt: 595, heightPt: 842, bookmarkPages: [], form: "none" } : null,
     },
     targets,
     // Like the core: every file keeps its own format, except HEIC photos.

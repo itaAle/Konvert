@@ -2,21 +2,22 @@
 //!
 //! * analysis ([`probe`]) and rendering of pages to pictures and thumbnails
 //!   with hayro (pure Rust, no unsafe code);
-//! * pictures laid out on pages ([`place`]), documents assembled or merged
-//!   ([`assemble`]) and pages rearranged, turned or split into several
-//!   documents ([`edit`]) with lopdf.
+//! * pictures laid out on pages ([`place`]), and new documents built from
+//!   the pages of several files, in any order, turned, split into several
+//!   documents ([`build`]) with lopdf. Bookmarks and fillable forms come along
+//!   with their pages.
 //!
 //! Konvert never asks for passwords: a PDF that needs one gives
 //! [`CoreError::PdfEncrypted`]. PDFs protected only against editing (empty
 //! user password) open normally. The PDFs Konvert writes carry no path, user
 //! name or date: their only metadata is `Producer: Konvert`.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use hayro::hayro_interpret::InterpreterSettings;
-use hayro::hayro_syntax::object::{Array, Dict};
+use hayro::hayro_syntax::object::{self as hayro_object, Array, Dict, Name, ObjectIdentifier};
 use hayro::hayro_syntax::page::Page;
 use hayro::hayro_syntax::{LoadPdfError, Pdf};
 use hayro::vello_cpu::Pixmap;
@@ -49,10 +50,32 @@ pub struct DocumentInfo {
     /// Size of the first page, in points (rotation applied).
     pub width_pt: f32,
     pub height_pt: f32,
-    /// Bookmarks or a fillable form, which the PDFs Konvert writes do not keep.
+    /// Pages the bookmarks lead to (1-based, in order, without repeats).
     #[serde(default)]
-    pub extras: bool,
+    pub bookmark_pages: Vec<u32>,
+    #[serde(default)]
+    pub form: PdfForm,
 }
+
+/// The fillable form of a PDF, as the PDFs made from it keep it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PdfForm {
+    /// No fillable field.
+    #[default]
+    None,
+    /// Fields that stay fillable.
+    Fillable,
+    /// An XFA form, or one with a digital signature: its fields keep their
+    /// look but can no longer be filled in.
+    Fixed,
+}
+
+/// Most bookmarks, form fields or name tree nodes read from one document.
+const MAX_ITEMS: usize = 100_000;
+/// Deepest bookmark or field tree followed.
+const MAX_DEPTH: u32 = 64;
 
 /// The file starts like a PDF (`%PDF-` within its first kilobyte).
 pub fn is_pdf(path: &Path) -> bool {
@@ -91,8 +114,10 @@ pub fn probe(path: &Path) -> Result<MediaInfo, CoreError> {
         std::panic::catch_unwind(|| open(data)).map_err(|_| damaged("the reader failed"))??;
     let pages = pdf.pages();
     let (width_pt, height_pt) = pages[0].render_dimensions();
-    let extras = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| has_extras(&pdf)))
-        .unwrap_or(false);
+    let (bookmark_pages, form) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        (bookmark_pages(&pdf), form_kind(&pdf))
+    }))
+    .unwrap_or_default();
     Ok(MediaInfo {
         container: "pdf".into(),
         kind: MediaKind::Document,
@@ -110,36 +135,189 @@ pub fn probe(path: &Path) -> Result<MediaInfo, CoreError> {
             pages: pages.len() as u32,
             width_pt,
             height_pt,
-            extras,
+            bookmark_pages,
+            form,
         }),
         text: None,
     })
 }
 
-/// The document has bookmarks or form fields.
-fn has_extras(pdf: &Pdf) -> bool {
+/// Pages the bookmarks of a document lead to (1-based, sorted, without repeats).
+fn bookmark_pages(pdf: &Pdf) -> Vec<u32> {
     let xref = pdf.xref();
     let Some(catalog) = xref.get::<Dict>(xref.root_id()) else {
-        return false;
+        return Vec::new();
     };
-    let outline = catalog
+    let Some(first) = catalog
         .get::<Dict>(b"Outlines")
-        .is_some_and(|o| o.contains_key(b"First"));
-    let form = catalog
-        .get::<Dict>(b"AcroForm")
-        .and_then(|f| f.get::<Array>(b"Fields"))
-        .is_some_and(|f| f.raw_iter().next().is_some());
-    outline || form
+        .and_then(|o| o.get::<Dict>(b"First"))
+    else {
+        return Vec::new();
+    };
+    let numbers: HashMap<ObjectIdentifier, u32> = pdf
+        .pages()
+        .iter()
+        .enumerate()
+        .filter_map(|(i, page)| Some((page.raw().obj_id()?, i as u32 + 1)))
+        .collect();
+    let mut named = None;
+    let mut found = BTreeSet::new();
+    let mut seen = HashSet::new();
+    let mut stack = vec![first];
+    let mut visited = 0;
+    while let Some(item) = stack.pop() {
+        visited += 1;
+        if visited > MAX_ITEMS || item.obj_id().is_some_and(|id| !seen.insert(id)) {
+            continue;
+        }
+        let dest = match item.get::<hayro_object::Object>(b"Dest") {
+            Some(dest) => Some(dest),
+            None => item
+                .get::<Dict>(b"A")
+                .filter(|a| a.get::<Name>(b"S").is_some_and(|s| &*s == b"GoTo"))
+                .and_then(|a| a.get::<hayro_object::Object>(b"D")),
+        };
+        if let Some(page) = dest
+            .and_then(|d| destination_page(&catalog, d, &mut named))
+            .and_then(|id| numbers.get(&id))
+        {
+            found.insert(*page);
+        }
+        stack.extend(item.get::<Dict>(b"Next"));
+        stack.extend(item.get::<Dict>(b"First"));
+    }
+    found.into_iter().collect()
+}
+
+/// The page object a destination leads to: an explicit `[page …]` array, a
+/// dictionary holding one, or a name looked up among the document's
+/// destinations (read once, when first needed).
+fn destination_page<'a>(
+    catalog: &Dict<'a>,
+    dest: hayro_object::Object<'a>,
+    named: &mut Option<HashMap<Vec<u8>, ObjectIdentifier>>,
+) -> Option<ObjectIdentifier> {
+    use hayro_object::Object as O;
+    match dest {
+        O::Array(array) => array.raw_iter().next()?.as_obj_ref().map(Into::into),
+        O::Dict(dict) => match dict.get::<hayro_object::Object>(b"D")? {
+            O::Array(array) => array.raw_iter().next()?.as_obj_ref().map(Into::into),
+            _ => None,
+        },
+        O::Name(name) => named
+            .get_or_insert_with(|| named_pages(catalog))
+            .get(&*name)
+            .copied(),
+        O::String(name) => named
+            .get_or_insert_with(|| named_pages(catalog))
+            .get(name.as_bytes())
+            .copied(),
+        _ => None,
+    }
+}
+
+/// The page of each named destination: the `Dests` dictionary of the
+/// catalog and the `Dests` name tree.
+fn named_pages(catalog: &Dict<'_>) -> HashMap<Vec<u8>, ObjectIdentifier> {
+    use hayro_object::Object as O;
+    let page_of = |value: O<'_>| -> Option<ObjectIdentifier> {
+        let array = match value {
+            O::Array(array) => array,
+            O::Dict(dict) => dict.get::<Array>(b"D")?,
+            _ => return None,
+        };
+        array.raw_iter().next()?.as_obj_ref().map(Into::into)
+    };
+    let mut named = HashMap::new();
+    if let Some(dests) = catalog.get::<Dict>(b"Dests") {
+        for key in dests.keys() {
+            if let Some(page) = dests.get::<O>(&*key).and_then(page_of) {
+                named.insert(key.to_vec(), page);
+            }
+        }
+    }
+    let tree = catalog
+        .get::<Dict>(b"Names")
+        .and_then(|n| n.get::<Dict>(b"Dests"));
+    let mut nodes: Vec<(Dict, u32)> = tree.into_iter().map(|t| (t, 0)).collect();
+    let mut visited = 0;
+    while let Some((node, depth)) = nodes.pop() {
+        visited += 1;
+        if depth > MAX_DEPTH || visited > MAX_ITEMS {
+            break;
+        }
+        if let Some(kids) = node.get::<Array>(b"Kids") {
+            nodes.extend(kids.iter::<Dict>().map(|k| (k, depth + 1)));
+        }
+        if let Some(pairs) = node.get::<Array>(b"Names") {
+            let mut items = pairs.iter::<O>();
+            while let (Some(name), Some(value)) = (items.next(), items.next()) {
+                if let (O::String(name), Some(page)) = (name, page_of(value)) {
+                    named.insert(name.as_bytes().to_vec(), page);
+                }
+            }
+        }
+    }
+    named
+}
+
+/// The kind of fillable form of a document.
+fn form_kind(pdf: &Pdf) -> PdfForm {
+    let xref = pdf.xref();
+    let Some(form) = xref
+        .get::<Dict>(xref.root_id())
+        .and_then(|c| c.get::<Dict>(b"AcroForm"))
+    else {
+        return PdfForm::None;
+    };
+    let Some(fields) = form.get::<Array>(b"Fields") else {
+        return PdfForm::None;
+    };
+    let mut nodes: Vec<(Dict, u32)> = fields.iter::<Dict>().map(|f| (f, 0)).collect();
+    if nodes.is_empty() {
+        return PdfForm::None;
+    }
+    if form.contains_key(b"XFA") {
+        return PdfForm::Fixed;
+    }
+    let mut visited = 0;
+    while let Some((field, depth)) = nodes.pop() {
+        visited += 1;
+        if depth > MAX_DEPTH || visited > MAX_ITEMS {
+            break;
+        }
+        let signed =
+            field.get::<Name>(b"FT").is_some_and(|t| &*t == b"Sig") && field.contains_key(b"V");
+        if signed {
+            return PdfForm::Fixed;
+        }
+        if let Some(kids) = field.get::<Array>(b"Kids") {
+            nodes.extend(kids.iter::<Dict>().map(|k| (k, depth + 1)));
+        }
+    }
+    PdfForm::Fillable
 }
 
 /// Pages of a PDF made from another one: `None` means every page as it is.
 /// Each page appears at most once; turns are multiples of 90 degrees.
 pub fn check_layout(layout: Option<&[PdfPage]>, count: u32) -> Result<Vec<PdfPage>, CoreError> {
+    check_pages(layout, &[count])
+}
+
+/// Pages of a PDF made from several files (`counts`: pages of each file, a
+/// picture has one): `None` means every page of every file, in order. Each
+/// page appears at most once; turns are multiples of 90 degrees.
+pub fn check_pages(layout: Option<&[PdfPage]>, counts: &[u32]) -> Result<Vec<PdfPage>, CoreError> {
     let Some(layout) = layout else {
-        return Ok((1..=count)
-            .map(|number| PdfPage {
-                number,
-                rotation: 0,
+        return Ok(counts
+            .iter()
+            .enumerate()
+            .flat_map(|(file, &count)| {
+                (1..=count).map(move |number| PdfPage {
+                    file: file as u32,
+                    number,
+                    rotation: 0,
+                })
             })
             .collect());
     };
@@ -147,27 +325,39 @@ pub fn check_layout(layout: Option<&[PdfPage]>, count: u32) -> Result<Vec<PdfPag
     if layout.is_empty() {
         return Err(invalid("no page left in the document".into()));
     }
-    let mut seen = vec![false; count as usize + 1];
+    let mut seen = HashSet::new();
     layout
         .iter()
         .map(|page| {
+            let Some(&count) = counts.get(page.file as usize) else {
+                return Err(invalid(format!("file {} does not exist", page.file + 1)));
+            };
             if page.number == 0 || page.number > count {
                 return Err(invalid(format!(
                     "page {} does not exist (the document has {count} pages)",
                     page.number
                 )));
             }
-            if std::mem::replace(&mut seen[page.number as usize], true) {
+            if !seen.insert((page.file, page.number)) {
                 return Err(invalid(format!("page {} is listed twice", page.number)));
             }
             if page.rotation % 90 != 0 {
                 return Err(invalid(format!("invalid turn {}°", page.rotation)));
             }
             Ok(PdfPage {
-                number: page.number,
                 rotation: page.rotation % 360,
+                ..*page
             })
         })
+        .collect()
+}
+
+/// The pages of one file in a layout of several, as a layout of that file alone.
+pub fn pages_of_file(layout: &[PdfPage], file: u32) -> Vec<PdfPage> {
+    layout
+        .iter()
+        .filter(|p| p.file == file)
+        .map(|p| PdfPage { file: 0, ..*p })
         .collect()
 }
 
@@ -457,72 +647,84 @@ pub fn place(width: u32, height: u32, options: &PdfOptions) -> Placement {
     }
 }
 
-// --- Assembling documents ------------------------------------------------------------
+// --- Building documents ------------------------------------------------------------
 
-/// One part of an assembled document.
+/// One file of a new document.
 pub enum Part {
-    /// A JPEG picture (RGB) of `width`×`height` pixels on its own page.
+    /// A JPEG picture (RGB) of `width`×`height` pixels, on a page of its own.
     Picture {
         jpeg: Vec<u8>,
         width: u32,
         height: u32,
         placement: Placement,
     },
-    /// Every page of a PDF file.
+    /// A PDF file.
     Document(Vec<u8>),
-    /// Some pages of a PDF file, in this order and each with its turn.
-    Pages(Vec<u8>, Vec<PdfPage>),
 }
 
-/// What was left out while assembling.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct AssembleReport {
-    pub pages: u32,
-    /// Bookmarks or form fields of the merged documents were not kept.
-    pub dropped_extras: bool,
+/// Builds one PDF from pictures and documents, every page in order. Gives
+/// the document and its number of pages.
+pub fn assemble(parts: Vec<Part>) -> Result<(Vec<u8>, u32), CoreError> {
+    let mut document = Vec::new();
+    let pages = build(parts, None, &[], &AtomicBool::new(false), |_, bytes| {
+        document = bytes;
+        true
+    })?;
+    Ok((document, pages))
 }
 
-/// Builds one PDF from pictures and documents, in order.
-pub fn assemble(parts: Vec<Part>) -> Result<(Vec<u8>, AssembleReport), CoreError> {
-    let mut writer = Writer::new();
-    let mut report = AssembleReport::default();
-    for part in parts {
-        match part {
+/// Makes new PDFs out of the `pages` of one document (in this order, each
+/// with its turn): see [`build`].
+pub fn edit(
+    data: Vec<u8>,
+    pages: &[PdfPage],
+    parts: &[u32],
+    cancel: &AtomicBool,
+    on_document: impl FnMut(usize, Vec<u8>) -> bool,
+) -> Result<(), CoreError> {
+    build(
+        vec![Part::Document(data)],
+        Some(pages),
+        parts,
+        cancel,
+        on_document,
+    )
+    .map(|_| ())
+}
+
+/// Makes new PDFs out of the pages of `files`: `layout` lists them in order,
+/// each with its turn (`None`: every page of every file), and `parts` is the
+/// number of pages of each new document (empty: a single one). Bookmarks and
+/// fillable forms come along with their pages. Each document is handed to
+/// `on_document` as soon as it is ready; stops when `cancel` is set or
+/// `on_document` returns `false`. Gives the number of pages.
+/// Blocking: run it on a worker thread.
+pub fn build(
+    files: Vec<Part>,
+    layout: Option<&[PdfPage]>,
+    parts: &[u32],
+    cancel: &AtomicBool,
+    mut on_document: impl FnMut(usize, Vec<u8>) -> bool,
+) -> Result<u32, CoreError> {
+    let inputs = files
+        .into_iter()
+        .map(|file| match file {
             Part::Picture {
                 jpeg,
                 width,
                 height,
                 placement,
-            } => writer.add_picture(jpeg, width, height, placement),
-            Part::Document(data) => {
-                let source = Source::open(&data)?;
-                writer.add_pages(&source, &source.every_page())?;
-                report.dropped_extras |= source.extras;
-            }
-            Part::Pages(data, pages) => {
-                let source = Source::open(&data)?;
-                writer.add_pages(&source, &pages)?;
-                report.dropped_extras |= source.extras;
-            }
-        }
-    }
-    report.pages = writer.kids.len() as u32;
-    Ok((writer.finish()?, report))
-}
-
-/// Makes new PDFs out of the `pages` of one document (in this order, each
-/// with its turn): `parts` is the number of pages of each new document (empty:
-/// a single one). Each document is handed to `on_document` as soon as it is
-/// ready; stops when `cancel` is set or `on_document` returns `false`.
-/// Blocking: run it on a worker thread.
-pub fn edit(
-    data: &[u8],
-    pages: &[PdfPage],
-    parts: &[u32],
-    cancel: &AtomicBool,
-    mut on_document: impl FnMut(usize, Vec<u8>) -> bool,
-) -> Result<(), CoreError> {
-    let source = Source::open(data)?;
+            } => Ok(Input::Picture {
+                jpeg,
+                width,
+                height,
+                placement,
+            }),
+            Part::Document(data) => Source::open(&data).map(|s| Input::Pdf(Box::new(s))),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let counts: Vec<u32> = inputs.iter().map(Input::pages).collect();
+    let pages = check_pages(layout, &counts)?;
     let whole = [pages.len() as u32];
     let sizes = if parts.is_empty() { &whole[..] } else { parts };
     if sizes.iter().map(|&n| n as usize).sum::<usize>() != pages.len() || sizes.contains(&0) {
@@ -536,13 +738,13 @@ pub fn edit(
             return Err(CoreError::Cancelled);
         }
         let mut writer = Writer::new();
-        writer.add_pages(&source, &pages[start..start + size as usize])?;
+        writer.add(&inputs, &pages[start..start + size as usize])?;
         start += size as usize;
-        if !on_document(i, writer.finish()?) {
+        if !on_document(i, writer.finish(&inputs)?) {
             return Err(CoreError::Cancelled);
         }
     }
-    Ok(())
+    Ok(pages.len() as u32)
 }
 
 /// Page attributes a page may inherit from its parents.
@@ -551,15 +753,70 @@ const INHERITED: [&[u8]; 4] = [b"Resources", b"MediaBox", b"CropBox", b"Rotate"]
 /// file's history (dates, metadata, private data of the program that made it).
 const PAGE_ENTRIES_DROPPED: [&[u8]; 4] = [b"Parent", b"Metadata", b"PieceInfo", b"LastModified"];
 
+/// A file whose pages go into new documents.
+enum Input {
+    Picture {
+        jpeg: Vec<u8>,
+        width: u32,
+        height: u32,
+        placement: Placement,
+    },
+    Pdf(Box<Source>),
+}
+
+impl Input {
+    fn pages(&self) -> u32 {
+        match self {
+            Input::Picture { .. } => 1,
+            Input::Pdf(source) => source.pages.len() as u32,
+        }
+    }
+}
+
 /// A PDF opened to copy pages out of it.
 struct Source {
     doc: Document,
     /// Page objects, in document order.
     pages: Vec<ObjectId>,
+    /// Position of each page object in `pages`.
+    page_index: HashMap<ObjectId, usize>,
     /// Destinations of the document by name, used by its links.
     named: HashMap<Vec<u8>, Object>,
-    /// Bookmarks or form fields, which are not carried over.
-    extras: bool,
+    /// Annotations of each page (those held by reference).
+    annots: HashMap<ObjectId, Vec<ObjectId>>,
+    /// Every annotation of the document held by reference.
+    all_annots: HashSet<ObjectId>,
+    outline: Vec<Bookmark>,
+    /// The document opens with its bookmarks shown.
+    show_outline: bool,
+    /// The fillable form, when it can be kept (not XFA, not signed).
+    form: Option<Form>,
+}
+
+/// One bookmark of a document, with the bookmarks under it.
+struct Bookmark {
+    title: Object,
+    /// The page it leads to, and how it is shown (`/XYZ x y zoom`…).
+    target: Option<(ObjectId, Vec<Object>)>,
+    /// Any other action (a web link, a named action…), copied as it is.
+    action: Option<Object>,
+    /// Color and style of the title.
+    style: Vec<(&'static [u8], Object)>,
+    open: bool,
+    children: Vec<Bookmark>,
+}
+
+/// The fillable form of a document.
+struct Form {
+    /// Fields at the top of the form.
+    fields: Vec<ObjectId>,
+    /// Fonts and other resources of the fields (`DR`).
+    resources: Option<Object>,
+    /// Default appearance and alignment, appearances to be made (`DA`, `Q`,
+    /// `NeedAppearances`).
+    entries: Vec<(&'static [u8], Object)>,
+    /// Calculation order of the fields (`CO`).
+    order: Vec<ObjectId>,
 }
 
 impl Source {
@@ -573,9 +830,6 @@ impl Source {
         if doc.is_encrypted() {
             doc.decrypt("").map_err(|_| CoreError::PdfEncrypted)?;
         }
-        let extras = doc
-            .catalog()
-            .is_ok_and(|c| c.has(b"Outlines") || c.has(b"AcroForm"));
         let pages: Vec<ObjectId> = doc.get_pages().into_values().collect();
         if pages.is_empty() {
             return Err(damaged("the document has no pages"));
@@ -606,37 +860,210 @@ impl Source {
                 page.set(key, value);
             }
         }
-        let named = named_destinations(&doc);
-        Ok(Self {
-            doc,
+        let mut annots = HashMap::new();
+        for &page in &pages {
+            let list: Vec<ObjectId> = doc
+                .get_dictionary(page)
+                .and_then(|p| p.get(b"Annots"))
+                .map(|a| resolve(&doc, a))
+                .and_then(Object::as_array)
+                .map(|a| a.iter().filter_map(|o| o.as_reference().ok()).collect())
+                .unwrap_or_default();
+            annots.insert(page, list);
+        }
+        let mut source = Self {
+            page_index: pages.iter().enumerate().map(|(i, &p)| (p, i)).collect(),
+            named: named_destinations(&doc),
+            all_annots: annots.values().flatten().copied().collect(),
+            annots,
+            show_outline: doc.catalog().is_ok_and(|c| {
+                c.get(b"PageMode")
+                    .and_then(Object::as_name)
+                    .is_ok_and(|m| m == b"UseOutlines")
+            }),
+            outline: Vec::new(),
+            form: None,
             pages,
-            named,
-            extras,
-        })
-    }
-
-    fn every_page(&self) -> Vec<PdfPage> {
-        (1..=self.pages.len() as u32)
-            .map(|number| PdfPage {
-                number,
-                rotation: 0,
-            })
-            .collect()
+            doc,
+        };
+        source.outline = source.read_outline();
+        source.form = source.read_form();
+        Ok(source)
     }
 
     /// Follows references until a direct object.
-    fn resolve<'a>(&'a self, mut object: &'a Object) -> &'a Object {
-        for _ in 0..32 {
-            match object {
-                Object::Reference(id) => match self.doc.get_object(*id) {
-                    Ok(next) => object = next,
-                    Err(_) => return &Object::Null,
-                },
-                _ => return object,
+    fn resolve<'a>(&'a self, object: &'a Object) -> &'a Object {
+        resolve(&self.doc, object)
+    }
+
+    /// An entry of the catalog, resolved.
+    fn catalog_entry(&self, key: &[u8]) -> Option<&Object> {
+        let catalog = self.doc.catalog().ok()?;
+        Some(self.resolve(catalog.get(key).ok()?))
+    }
+
+    fn read_outline(&self) -> Vec<Bookmark> {
+        let first = self
+            .catalog_entry(b"Outlines")
+            .and_then(|o| o.as_dict().ok())
+            .and_then(|o| o.get(b"First").ok());
+        let mut budget = MAX_ITEMS;
+        self.read_bookmarks(first, 0, &mut budget, &mut HashSet::new())
+    }
+
+    /// A list of bookmarks, from the first one, with those under them.
+    fn read_bookmarks(
+        &self,
+        first: Option<&Object>,
+        depth: u32,
+        budget: &mut usize,
+        seen: &mut HashSet<ObjectId>,
+    ) -> Vec<Bookmark> {
+        let mut bookmarks = Vec::new();
+        let mut next = first;
+        while depth <= MAX_DEPTH
+            && let Some(&Object::Reference(id)) = next
+            && *budget > 0
+            && seen.insert(id)
+        {
+            *budget -= 1;
+            let Ok(item) = self.doc.get_dictionary(id) else {
+                break;
+            };
+            let get = |key: &[u8]| item.get(key).ok().map(|o| self.resolve(o));
+            let (target, action) = match (get(b"Dest"), get(b"A")) {
+                (Some(dest), _) => (self.destination(dest, 0), None),
+                (None, Some(Object::Dictionary(a)))
+                    if a.get(b"S")
+                        .and_then(Object::as_name)
+                        .is_ok_and(|s| s == b"GoTo") =>
+                {
+                    let dest = a.get(b"D").ok().map(|d| self.resolve(d));
+                    (dest.and_then(|d| self.destination(d, 0)), None)
+                }
+                (None, Some(_)) => (None, item.get(b"A").ok().cloned()),
+                (None, None) => (None, None),
+            };
+            let style = [b"C" as &[u8], b"F"]
+                .into_iter()
+                .filter_map(|key| Some((key, get(key)?.clone())))
+                .collect();
+            bookmarks.push(Bookmark {
+                title: get(b"Title")
+                    .filter(|t| matches!(t, Object::String(..)))
+                    .cloned()
+                    .unwrap_or_else(|| Object::string_literal("")),
+                target,
+                action,
+                style,
+                open: get(b"Count")
+                    .and_then(|c| c.as_i64().ok())
+                    .is_some_and(|c| c > 0),
+                children: self.read_bookmarks(item.get(b"First").ok(), depth + 1, budget, seen),
+            });
+            next = item.get(b"Next").ok();
+        }
+        bookmarks
+    }
+
+    /// The page a destination leads to and how it is shown: an explicit
+    /// `[page /XYZ …]` array, a dictionary holding one, or a name.
+    fn destination(&self, dest: &Object, depth: u32) -> Option<(ObjectId, Vec<Object>)> {
+        let array = match dest {
+            Object::Name(name) | Object::String(name, _) => {
+                self.named.get(name)?.as_array().ok()?
+            }
+            Object::Dictionary(d) if depth == 0 => {
+                return self.destination(self.resolve(d.get(b"D").ok()?), 1);
+            }
+            Object::Array(array) => array,
+            _ => return None,
+        };
+        let page = match array.first()? {
+            Object::Reference(id) if self.page_index.contains_key(id) => *id,
+            // Some writers give the position of the page instead.
+            Object::Integer(i) => *self.pages.get(usize::try_from(*i).ok()?)?,
+            _ => return None,
+        };
+        let view = array[1..].iter().map(|o| self.resolve(o).clone()).collect();
+        Some((page, view))
+    }
+
+    fn read_form(&self) -> Option<Form> {
+        let form = self.catalog_entry(b"AcroForm")?.as_dict().ok()?;
+        if form.has(b"XFA") {
+            return None;
+        }
+        let references = |key: &[u8]| -> Vec<ObjectId> {
+            form.get(key)
+                .map(|o| self.resolve(o))
+                .and_then(Object::as_array)
+                .map(|a| a.iter().filter_map(|o| o.as_reference().ok()).collect())
+                .unwrap_or_default()
+        };
+        let fields = references(b"Fields");
+        if fields.is_empty() || self.signed(&fields) {
+            return None;
+        }
+        Some(Form {
+            fields,
+            resources: form.get(b"DR").ok().cloned(),
+            entries: [b"DA" as &[u8], b"Q", b"NeedAppearances"]
+                .into_iter()
+                .filter_map(|key| Some((key, self.resolve(form.get(key).ok()?).clone())))
+                .collect(),
+            order: references(b"CO"),
+        })
+    }
+
+    /// Some field holds a digital signature.
+    fn signed(&self, fields: &[ObjectId]) -> bool {
+        let mut nodes: Vec<(ObjectId, u32)> = fields.iter().map(|&f| (f, 0)).collect();
+        let mut visited = 0;
+        while let Some((id, depth)) = nodes.pop() {
+            visited += 1;
+            if depth > MAX_DEPTH || visited > MAX_ITEMS {
+                break;
+            }
+            let Ok(field) = self.doc.get_dictionary(id) else {
+                continue;
+            };
+            if field
+                .get(b"FT")
+                .and_then(Object::as_name)
+                .is_ok_and(|t| t == b"Sig")
+                && field.has(b"V")
+            {
+                return true;
+            }
+            if let Ok(kids) = field
+                .get(b"Kids")
+                .map(|k| self.resolve(k))
+                .and_then(Object::as_array)
+            {
+                nodes.extend(
+                    kids.iter()
+                        .filter_map(|k| k.as_reference().ok())
+                        .map(|k| (k, depth + 1)),
+                );
             }
         }
-        &Object::Null
+        false
     }
+}
+
+/// Follows references until a direct object.
+fn resolve<'a>(doc: &'a Document, mut object: &'a Object) -> &'a Object {
+    for _ in 0..32 {
+        match object {
+            Object::Reference(id) => match doc.get_object(*id) {
+                Ok(next) => object = next,
+                Err(_) => return &Object::Null,
+            },
+            _ => return object,
+        }
+    }
+    &Object::Null
 }
 
 /// Named destinations of a document: the `Dests` dictionary of the catalog
@@ -681,7 +1108,7 @@ fn named_destinations(doc: &Document) -> HashMap<Vec<u8>, Object> {
     while let Some((node, depth)) = nodes.pop() {
         visited += 1;
         let Ok(node) = node.as_dict() else { continue };
-        if depth > 32 || visited > 100_000 {
+        if depth > MAX_DEPTH || visited > MAX_ITEMS {
             break;
         }
         if let Some(Object::Array(kids)) = node.get(b"Kids").ok().and_then(deref) {
@@ -700,11 +1127,43 @@ fn named_destinations(doc: &Document) -> HashMap<Vec<u8>, Object> {
     named
 }
 
+/// A bookmark placed in a new document.
+struct Placed {
+    title: Object,
+    link: Option<Link>,
+    style: Vec<(&'static [u8], Object)>,
+    open: bool,
+    children: Vec<Placed>,
+}
+
+/// Where a bookmark leads.
+#[derive(Clone)]
+enum Link {
+    /// A page of the document (`[page /XYZ …]`).
+    Dest(Object),
+    /// Another action.
+    Action(Object),
+}
+
+/// The first page a list of bookmarks (or those under them) leads to.
+fn first_dest(bookmarks: &[Placed]) -> Option<Link> {
+    bookmarks.iter().find_map(|b| match &b.link {
+        Some(link @ Link::Dest(_)) => Some(link.clone()),
+        _ => first_dest(&b.children),
+    })
+}
+
 /// A PDF being written, page by page.
 struct Writer {
     out: Document,
     pages_id: ObjectId,
     kids: Vec<Object>,
+    /// New number of each object copied (or about to be), by file and old number.
+    copied: HashMap<(usize, ObjectId), ObjectId>,
+    /// Pages of each file in this document.
+    placed: HashSet<(usize, ObjectId)>,
+    /// Annotations of those pages.
+    annots: HashSet<(usize, ObjectId)>,
 }
 
 impl Writer {
@@ -715,10 +1174,95 @@ impl Writer {
             out,
             pages_id,
             kids: Vec::new(),
+            copied: HashMap::new(),
+            placed: HashSet::new(),
+            annots: HashSet::new(),
         }
     }
 
-    fn add_picture(&mut self, jpeg: Vec<u8>, width: u32, height: u32, placement: Placement) {
+    /// Adds `pages` of `inputs`, in order and turned, with what they use
+    /// (contents, fonts, pictures, annotations): the other pages and the
+    /// document structure stay behind. Links to pages left out are removed.
+    fn add(&mut self, inputs: &[Input], pages: &[PdfPage]) -> Result<(), CoreError> {
+        let missing = |page: &PdfPage| CoreError::InvalidPages {
+            details: format!("page {} does not exist", page.number),
+        };
+        // Every page is numbered first, so that links between pages work
+        // whatever their order.
+        let mut olds = Vec::with_capacity(pages.len());
+        for page in pages {
+            let file = page.file as usize;
+            let old = match inputs.get(file) {
+                Some(Input::Pdf(source)) => {
+                    let old = (page.number as usize)
+                        .checked_sub(1)
+                        .and_then(|i| source.pages.get(i))
+                        .copied()
+                        .ok_or_else(|| missing(page))?;
+                    if !self.placed.insert((file, old)) {
+                        return Err(CoreError::InvalidPages {
+                            details: "a page is listed twice".into(),
+                        });
+                    }
+                    self.copied.insert((file, old), self.out.new_object_id());
+                    self.annots.extend(
+                        source
+                            .annots
+                            .get(&old)
+                            .into_iter()
+                            .flatten()
+                            .map(|&a| (file, a)),
+                    );
+                    Some(old)
+                }
+                Some(Input::Picture { .. }) if page.number == 1 => None,
+                _ => return Err(missing(page)),
+            };
+            olds.push(old);
+        }
+
+        for (page, old) in pages.iter().zip(olds) {
+            let file = page.file as usize;
+            let id = match (&inputs[file], old) {
+                (Input::Pdf(source), Some(old)) => {
+                    self.import(file, source, &[old]);
+                    self.copied[&(file, old)]
+                }
+                (
+                    Input::Picture {
+                        jpeg,
+                        width,
+                        height,
+                        placement,
+                    },
+                    _,
+                ) => self.add_picture(jpeg.clone(), *width, *height, *placement),
+                (Input::Pdf(_), None) => continue,
+            };
+            let dict = self
+                .out
+                .get_dictionary_mut(id)
+                .map_err(|e| damaged(&e.to_string()))?;
+            dict.set("Parent", self.pages_id);
+            let turn = i64::from(page.rotation % 360);
+            if turn != 0 {
+                let own = dict.get(b"Rotate").and_then(Object::as_i64).unwrap_or(0);
+                dict.set("Rotate", (own + turn).rem_euclid(360));
+            }
+            self.drop_dead_links(id);
+            self.kids.push(id.into());
+        }
+        Ok(())
+    }
+
+    /// A page holding a picture; gives its number.
+    fn add_picture(
+        &mut self,
+        jpeg: Vec<u8>,
+        width: u32,
+        height: u32,
+        placement: Placement,
+    ) -> ObjectId {
         let image = Stream::new(
             dictionary! {
                 "Type" => "XObject",
@@ -741,75 +1285,59 @@ impl Writer {
         let content_id = self.out.add_object(content);
         let page = dictionary! {
             "Type" => "Page",
-            "Parent" => self.pages_id,
             "MediaBox" => vec![0.into(), 0.into(), placement.page_width.into(), placement.page_height.into()],
             "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => image_id } },
             "Contents" => content_id,
         };
-        self.kids.push(self.out.add_object(page).into());
+        self.out.add_object(page)
     }
 
-    /// Copies `pages` of `source`, in order and turned, with what they use
-    /// (contents, fonts, pictures, annotations): the other pages, the
-    /// document structure and its metadata stay behind. Links to pages that
-    /// are left out are removed.
-    fn add_pages(&mut self, source: &Source, pages: &[PdfPage]) -> Result<(), CoreError> {
+    /// Copies the objects `roots` of file `file` with everything they use,
+    /// unless already copied. Pages that are not in this document, their
+    /// annotations and the objects of the document as a whole stay behind:
+    /// references to them become null.
+    fn import(&mut self, file: usize, source: &Source, roots: &[ObjectId]) {
         let doc = &source.doc;
-        let chosen: Vec<ObjectId> = pages
-            .iter()
-            .map(|page| {
-                (page.number as usize)
-                    .checked_sub(1)
-                    .and_then(|i| source.pages.get(i))
-                    .copied()
-                    .ok_or_else(|| CoreError::InvalidPages {
-                        details: format!("page {} does not exist", page.number),
-                    })
-            })
-            .collect::<Result<_, _>>()?;
-        let kept: HashSet<ObjectId> = chosen.iter().copied().collect();
-        if kept.len() != chosen.len() {
-            return Err(CoreError::InvalidPages {
-                details: "a page is listed twice".into(),
-            });
+        let mut queue = VecDeque::new();
+        for &root in roots {
+            match self.copied.get(&(file, root)) {
+                // A page of this document is numbered before being copied.
+                Some(new)
+                    if self.placed.contains(&(file, root))
+                        && !self.out.objects.contains_key(new) => {}
+                Some(_) => continue,
+                None if self.left_out(file, source, root) => continue,
+                None => {
+                    let new = self.out.new_object_id();
+                    self.copied.insert((file, root), new);
+                }
+            }
+            queue.push_back(root);
         }
-        let every_page: HashSet<ObjectId> = source.pages.iter().copied().collect();
-
-        // Everything reachable from the chosen pages, except other pages and
-        // document-level objects. New numbers avoid clashes with this writer's.
-        let mut numbers: HashMap<ObjectId, ObjectId> = HashMap::new();
-        let mut queue: VecDeque<ObjectId> = VecDeque::new();
-        for &id in &chosen {
-            numbers.insert(id, self.out.new_object_id());
-            queue.push_back(id);
-        }
+        let mut fresh = Vec::new();
         let mut found = Vec::new();
         while let Some(id) = queue.pop_front() {
+            fresh.push(id);
             let Ok(object) = doc.get_object(id) else {
                 continue;
             };
             found.clear();
-            references(object, kept.contains(&id), &mut found);
+            references(object, self.placed.contains(&(file, id)), &mut found);
             if let Some(dest) = named_target(source, object) {
                 references(dest, false, &mut found);
             }
             for &r in &found {
-                if numbers.contains_key(&r) || every_page.contains(&r) {
-                    continue;
-                }
-                if doc.get_object(r).is_ok_and(|o| !document_level(o)) {
-                    numbers.insert(r, self.out.new_object_id());
+                if !self.copied.contains_key(&(file, r)) && !self.left_out(file, source, r) {
+                    self.copied.insert((file, r), self.out.new_object_id());
                     queue.push_back(r);
                 }
             }
         }
 
-        for (&old, &new) in &numbers {
-            let Ok(object) = doc.get_object(old) else {
-                continue;
-            };
-            let mut object = object.clone();
-            if kept.contains(&old)
+        for old in fresh {
+            let new = self.copied[&(file, old)];
+            let mut object = doc.get_object(old).cloned().unwrap_or(Object::Null);
+            if self.placed.contains(&(file, old))
                 && let Object::Dictionary(dict) = &mut object
             {
                 for key in PAGE_ENTRIES_DROPPED {
@@ -824,26 +1352,32 @@ impl Writer {
                 let key: &[u8] = if dict.has(b"Dest") { b"Dest" } else { b"D" };
                 dict.set(key, dest);
             }
-            renumber(&mut object, &numbers);
+            renumber(&mut object, file, &self.copied);
             self.out.objects.insert(new, object);
         }
+    }
 
-        for (page, old) in pages.iter().zip(&chosen) {
-            let id = numbers[old];
-            let dict = self
-                .out
-                .get_dictionary_mut(id)
-                .map_err(|e| damaged(&e.to_string()))?;
-            dict.set("Parent", self.pages_id);
-            let turn = i64::from(page.rotation % 360);
-            if turn != 0 {
-                let own = dict.get(b"Rotate").and_then(Object::as_i64).unwrap_or(0);
-                dict.set("Rotate", (own + turn).rem_euclid(360));
-            }
-            self.drop_dead_links(id);
-            self.kids.push(id.into());
-        }
-        Ok(())
+    /// Objects of a file that never come along: pages that are not in this
+    /// document, their annotations and the document structure.
+    fn left_out(&self, file: usize, source: &Source, id: ObjectId) -> bool {
+        (source.page_index.contains_key(&id) && !self.placed.contains(&(file, id)))
+            || (source.all_annots.contains(&id) && !self.annots.contains(&(file, id)))
+            || source.doc.get_object(id).map_or(true, document_level)
+    }
+
+    /// A copy of `object` of file `file` in this document, with what it uses.
+    fn import_object(&mut self, file: usize, source: &Source, object: &Object) -> Object {
+        let mut found = Vec::new();
+        references(object, false, &mut found);
+        self.import(file, source, &found);
+        let mut object = object.clone();
+        renumber(&mut object, file, &self.copied);
+        object
+    }
+
+    /// Follows references among the objects written so far.
+    fn resolved(&self, object: &Object) -> Object {
+        resolve(&self.out, object).clone()
     }
 
     /// Removes the links of a page that lead nowhere (to a page left out).
@@ -897,26 +1431,296 @@ impl Writer {
         let Some(Object::Array(list)) = resolve(annots) else {
             return;
         };
-        if !list.iter().any(dead) {
+        // Annotations left behind with their pages are null now.
+        if !list.iter().any(|a| dead(a) || matches!(a, Object::Null)) {
             return;
         }
-        let alive: Vec<Object> = list.iter().filter(|a| !dead(a)).cloned().collect();
+        let alive: Vec<Object> = list
+            .iter()
+            .filter(|a| !dead(a) && !matches!(a, Object::Null))
+            .cloned()
+            .collect();
         if let Ok(dict) = self.out.get_dictionary_mut(page) {
             dict.set("Annots", alive);
         }
     }
 
-    fn finish(mut self) -> Result<Vec<u8>, CoreError> {
+    /// A bookmark in this document: it leads to its page if the page is
+    /// here, otherwise to the first page of its section still here; it is
+    /// gone if nothing of its section is left.
+    fn place_bookmark(
+        &mut self,
+        file: usize,
+        source: &Source,
+        bookmark: &Bookmark,
+    ) -> Option<Placed> {
+        let children: Vec<Placed> = bookmark
+            .children
+            .iter()
+            .filter_map(|b| self.place_bookmark(file, source, b))
+            .collect();
+        let link = match (&bookmark.target, &bookmark.action) {
+            (Some((page, view)), _) => {
+                if self.placed.contains(&(file, *page)) {
+                    let mut dest = vec![Object::Reference(self.copied[&(file, *page)])];
+                    dest.extend(view.iter().cloned());
+                    Some(Link::Dest(Object::Array(dest)))
+                } else if children.is_empty() {
+                    return None;
+                } else {
+                    first_dest(&children)
+                }
+            }
+            (None, Some(action)) => Some(Link::Action(self.import_object(file, source, action))),
+            // A heading whose section is gone.
+            (None, None) if !bookmark.children.is_empty() && children.is_empty() => return None,
+            (None, None) => None,
+        };
+        Some(Placed {
+            title: bookmark.title.clone(),
+            link,
+            style: bookmark.style.clone(),
+            open: bookmark.open,
+            children,
+        })
+    }
+
+    /// Writes the bookmarks; gives the outline's number.
+    fn write_outline(&mut self, bookmarks: Vec<Placed>) -> ObjectId {
+        let root = self.out.new_object_id();
+        let (first, last, visible) = self.write_bookmarks(bookmarks, root);
+        self.out.objects.insert(
+            root,
+            Object::Dictionary(dictionary! {
+                "Type" => "Outlines", "First" => first, "Last" => last, "Count" => visible,
+            }),
+        );
+        root
+    }
+
+    /// Writes a list of bookmarks under `parent`: gives the first, the last
+    /// and how many are shown (with those under the open ones).
+    fn write_bookmarks(
+        &mut self,
+        bookmarks: Vec<Placed>,
+        parent: ObjectId,
+    ) -> (ObjectId, ObjectId, i64) {
+        let ids: Vec<ObjectId> = bookmarks.iter().map(|_| self.out.new_object_id()).collect();
+        let mut visible = 0;
+        for (i, bookmark) in bookmarks.into_iter().enumerate() {
+            let mut dict = dictionary! { "Title" => bookmark.title, "Parent" => parent };
+            if i > 0 {
+                dict.set("Prev", ids[i - 1]);
+            }
+            if let Some(&next) = ids.get(i + 1) {
+                dict.set("Next", next);
+            }
+            if !bookmark.children.is_empty() {
+                let (first, last, below) = self.write_bookmarks(bookmark.children, ids[i]);
+                dict.set("First", first);
+                dict.set("Last", last);
+                dict.set("Count", if bookmark.open { below } else { -below });
+                if bookmark.open {
+                    visible += below;
+                }
+            }
+            match bookmark.link {
+                Some(Link::Dest(dest)) => dict.set("Dest", dest),
+                Some(Link::Action(action)) => dict.set("A", action),
+                None => {}
+            }
+            for (key, value) in bookmark.style {
+                dict.set(key, value);
+            }
+            visible += 1;
+            self.out.objects.insert(ids[i], Object::Dictionary(dict));
+        }
+        (ids[0], ids[ids.len() - 1], visible)
+    }
+
+    /// The fillable form of this document: the fields of each file with a
+    /// widget on its pages here. Fields of different files with the same name
+    /// would share their value: the later ones are numbered (`Nome_2`).
+    fn write_form(&mut self, inputs: &[Input]) -> Option<ObjectId> {
+        let mut fields: Vec<Object> = Vec::new();
+        let mut taken: HashSet<Vec<u8>> = HashSet::new();
+        let mut resources = Dictionary::new();
+        let mut entries: Vec<(&[u8], Object)> = Vec::new();
+        let mut order = Vec::new();
+        for (file, input) in inputs.iter().enumerate() {
+            let Input::Pdf(source) = input else { continue };
+            let Some(form) = &source.form else { continue };
+            let mut names = Vec::new();
+            let before = fields.len();
+            for &field in &form.fields {
+                let Some(&new) = self.copied.get(&(file, field)) else {
+                    continue;
+                };
+                if !self.prune_field(new, 0) {
+                    continue;
+                }
+                if let Some(name) = self.field_name(new) {
+                    let name = if taken.contains(&name) {
+                        let renamed = (2..)
+                            .map(|n| numbered(&name, n))
+                            .find(|n| !taken.contains(n) && !names.contains(n))
+                            .unwrap_or(name);
+                        if let Ok(dict) = self.out.get_dictionary_mut(new) {
+                            dict.set(
+                                "T",
+                                Object::String(renamed.clone(), lopdf::StringFormat::Literal),
+                            );
+                        }
+                        renamed
+                    } else {
+                        name
+                    };
+                    names.push(name);
+                }
+                fields.push(new.into());
+            }
+            if fields.len() == before {
+                continue;
+            }
+            taken.extend(names);
+            order.extend(
+                form.order
+                    .iter()
+                    .filter_map(|o| self.copied.get(&(file, *o)))
+                    .map(|&n| Object::Reference(n)),
+            );
+            if let Some(dr) = &form.resources {
+                let dr = self.import_object(file, source, dr);
+                self.merge_resources(&mut resources, &dr);
+            }
+            for (key, value) in &form.entries {
+                if !entries.iter().any(|(k, _)| k == key) {
+                    entries.push((key, value.clone()));
+                }
+            }
+        }
+        if fields.is_empty() {
+            return None;
+        }
+        let mut form = dictionary! { "Fields" => fields };
+        if !resources.is_empty() {
+            form.set("DR", resources);
+        }
+        for (key, value) in entries {
+            form.set(key, value);
+        }
+        if !order.is_empty() {
+            form.set("CO", order);
+        }
+        Some(self.out.add_object(form))
+    }
+
+    /// Removes the widgets left behind from a copied field (and from the
+    /// fields under it): false when nothing of it is left.
+    fn prune_field(&mut self, id: ObjectId, depth: u32) -> bool {
+        let Ok(field) = self.out.get_dictionary(id) else {
+            return false;
+        };
+        let widget = field
+            .get(b"Subtype")
+            .and_then(Object::as_name)
+            .is_ok_and(|s| s == b"Widget");
+        let Ok(kids) = field.get(b"Kids").cloned() else {
+            return true;
+        };
+        if depth > MAX_DEPTH {
+            return true;
+        }
+        let Object::Array(kids) = self.resolved(&kids) else {
+            return widget;
+        };
+        let alive: Vec<Object> = kids
+            .into_iter()
+            .filter(|kid| match kid {
+                Object::Reference(k) => self.prune_field(*k, depth + 1),
+                _ => false,
+            })
+            .collect();
+        let any = !alive.is_empty();
+        if let Ok(field) = self.out.get_dictionary_mut(id) {
+            field.set("Kids", alive);
+        }
+        any || widget
+    }
+
+    /// The partial name of a field (`T`).
+    fn field_name(&self, id: ObjectId) -> Option<Vec<u8>> {
+        let name = self.out.get_dictionary(id).ok()?.get(b"T").ok()?;
+        match self.resolved(name) {
+            Object::String(name, _) => Some(name),
+            _ => None,
+        }
+    }
+
+    /// Adds the field resources `dr` (fonts…) of another file to `merged`:
+    /// names already there keep their resource.
+    fn merge_resources(&self, merged: &mut Dictionary, dr: &Object) {
+        let Object::Dictionary(dr) = self.resolved(dr) else {
+            return;
+        };
+        for (category, value) in dr.iter() {
+            let Object::Dictionary(value) = self.resolved(value) else {
+                if !merged.has(category) {
+                    merged.set(category.clone(), value.clone());
+                }
+                continue;
+            };
+            let mut entry = match merged.get(category) {
+                Ok(Object::Dictionary(d)) => d.clone(),
+                _ => Dictionary::new(),
+            };
+            for (name, resource) in value.iter() {
+                if !entry.has(name) {
+                    entry.set(name.clone(), resource.clone());
+                }
+            }
+            merged.set(category.clone(), entry);
+        }
+    }
+
+    fn finish(mut self, inputs: &[Input]) -> Result<Vec<u8>, CoreError> {
         let count = self.kids.len() as i64;
+        let kids = std::mem::take(&mut self.kids);
         self.out.objects.insert(
             self.pages_id,
-            Object::Dictionary(
-                dictionary! { "Type" => "Pages", "Kids" => self.kids, "Count" => count },
-            ),
+            Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => count }),
         );
-        let catalog_id = self
-            .out
-            .add_object(dictionary! { "Type" => "Catalog", "Pages" => self.pages_id });
+        let mut catalog = dictionary! { "Type" => "Catalog", "Pages" => self.pages_id };
+        // The bookmarks of each file with pages here, one file after the other.
+        let mut bookmarks = Vec::new();
+        let mut show_outline = false;
+        for (file, input) in inputs.iter().enumerate() {
+            let Input::Pdf(source) = input else { continue };
+            if !source
+                .pages
+                .iter()
+                .any(|p| self.placed.contains(&(file, *p)))
+            {
+                continue;
+            }
+            for bookmark in &source.outline {
+                if let Some(placed) = self.place_bookmark(file, source, bookmark) {
+                    bookmarks.push(placed);
+                }
+            }
+            show_outline |= source.show_outline;
+        }
+        if !bookmarks.is_empty() {
+            let outline = self.write_outline(bookmarks);
+            catalog.set("Outlines", outline);
+            if show_outline {
+                catalog.set("PageMode", "UseOutlines");
+            }
+        }
+        if let Some(form) = self.write_form(inputs) {
+            catalog.set("AcroForm", form);
+        }
+        let catalog_id = self.out.add_object(catalog);
         let info_id = self
             .out
             .add_object(dictionary! { "Producer" => Object::string_literal("Konvert") });
@@ -929,6 +1733,19 @@ impl Writer {
             .map_err(|e| CoreError::Io(std::io::Error::other(e.to_string())))?;
         Ok(bytes)
     }
+}
+
+/// `name` followed by `_n`, in the encoding of the name (PDFDocEncoding or
+/// UTF-16 with a byte order mark).
+fn numbered(name: &[u8], n: u32) -> Vec<u8> {
+    let suffix = format!("_{n}");
+    let mut numbered = name.to_vec();
+    if name.starts_with(&[0xFE, 0xFF]) {
+        numbered.extend(suffix.encode_utf16().flat_map(u16::to_be_bytes));
+    } else {
+        numbered.extend(suffix.bytes());
+    }
+    numbered
 }
 
 /// Objects that belong to the document as a whole, never copied with a page.
@@ -988,21 +1805,24 @@ fn references(object: &Object, page: bool, found: &mut Vec<ObjectId>) {
     }
 }
 
-/// Gives references their new numbers; those to objects left behind become null.
-fn renumber(object: &mut Object, numbers: &HashMap<ObjectId, ObjectId>) {
+/// Gives the references of an object of file `file` their new numbers; those
+/// to objects left behind become null.
+fn renumber(object: &mut Object, file: usize, numbers: &HashMap<(usize, ObjectId), ObjectId>) {
     match object {
         Object::Reference(id) => {
             let new = numbers
-                .get(id)
+                .get(&(file, *id))
                 .map_or(Object::Null, |n| Object::Reference(*n));
             *object = new;
         }
-        Object::Array(items) => items.iter_mut().for_each(|o| renumber(o, numbers)),
-        Object::Dictionary(dict) => dict.iter_mut().for_each(|(_, o)| renumber(o, numbers)),
+        Object::Array(items) => items.iter_mut().for_each(|o| renumber(o, file, numbers)),
+        Object::Dictionary(dict) => dict
+            .iter_mut()
+            .for_each(|(_, o)| renumber(o, file, numbers)),
         Object::Stream(stream) => stream
             .dict
             .iter_mut()
-            .for_each(|(_, o)| renumber(o, numbers)),
+            .for_each(|(_, o)| renumber(o, file, numbers)),
         _ => {}
     }
 }
@@ -1110,10 +1930,9 @@ mod tests {
     fn documents_are_merged_page_by_page_without_personal_metadata() {
         let first = sample_pdf(&[(A4.0, A4.1), (A4.1, A4.0)]);
         let second = sample_pdf(&[(LETTER.0, LETTER.1)]);
-        let (merged, report) =
+        let (merged, pages) =
             assemble(vec![Part::Document(first), Part::Document(second)]).unwrap();
-        assert_eq!(report.pages, 3);
-        assert!(!report.dropped_extras);
+        assert_eq!(pages, 3);
         assert_eq!(page_count(&merged).unwrap(), 3);
         // Sizes and order are kept.
         let pdf = open(merged.clone()).unwrap();
@@ -1226,7 +2045,7 @@ mod tests {
     fn pictures_become_pages() {
         // A tiny but valid JPEG is not needed to assemble: the bytes are copied.
         let placement = place(400, 300, &PdfOptions::default());
-        let (pdf, report) = assemble(vec![
+        let (pdf, pages) = assemble(vec![
             Part::Picture {
                 jpeg: vec![0xff, 0xd8, 0xff, 0xd9],
                 width: 400,
@@ -1236,7 +2055,7 @@ mod tests {
             Part::Document(sample_pdf(&[(A4.0, A4.1)])),
         ])
         .unwrap();
-        assert_eq!(report.pages, 2);
+        assert_eq!(pages, 2);
         let doc = Document::load_mem(&pdf).unwrap();
         assert_eq!(doc.get_pages().len(), 2);
         assert!(is_pdf_bytes(&pdf));
@@ -1247,19 +2066,59 @@ mod tests {
     }
 
     fn page(number: u32, rotation: u16) -> PdfPage {
-        PdfPage { number, rotation }
+        PdfPage {
+            file: 0,
+            number,
+            rotation,
+        }
+    }
+
+    fn page_of(file: u32, number: u32, rotation: u16) -> PdfPage {
+        PdfPage {
+            file,
+            number,
+            rotation,
+        }
     }
 
     /// Edits `data` into a single document.
     fn edit_one(data: &[u8], pages: &[PdfPage]) -> Vec<u8> {
         let mut result = Vec::new();
-        edit(data, pages, &[], &AtomicBool::new(false), |_, bytes| {
-            result.push(bytes);
-            true
-        })
+        edit(
+            data.to_vec(),
+            pages,
+            &[],
+            &AtomicBool::new(false),
+            |_, bytes| {
+                result.push(bytes);
+                true
+            },
+        )
         .unwrap();
         assert_eq!(result.len(), 1);
         result.pop().unwrap()
+    }
+
+    /// Builds the pages of `layout` into a single document.
+    fn build_one(files: Vec<Part>, layout: &[PdfPage]) -> Vec<u8> {
+        build_parts(files, layout, &[]).pop().unwrap()
+    }
+
+    /// Builds the pages of `layout` into documents of `parts` pages.
+    fn build_parts(files: Vec<Part>, layout: &[PdfPage], parts: &[u32]) -> Vec<Vec<u8>> {
+        let mut result = Vec::new();
+        build(
+            files,
+            Some(layout),
+            parts,
+            &AtomicBool::new(false),
+            |_, bytes| {
+                result.push(bytes);
+                true
+            },
+        )
+        .unwrap();
+        result
     }
 
     fn rotations(data: &[u8]) -> Vec<i64> {
@@ -1447,12 +2306,17 @@ mod tests {
         let text = String::from_utf8_lossy(&edited);
         assert!(!text.contains("Mario Rossi") && !text.contains("D:2026"));
         // Merging honours the chosen pages too.
-        let (merged, report) = assemble(vec![
-            Part::Pages(data.clone(), vec![page(2, 180)]),
-            Part::Document(data),
-        ])
-        .unwrap();
-        assert_eq!(report.pages, 4);
+        let layout = [
+            page(2, 180),
+            page_of(1, 1, 0),
+            page_of(1, 2, 0),
+            page_of(1, 3, 0),
+        ];
+        let merged = build_one(
+            vec![Part::Document(data.clone()), Part::Document(data)],
+            &layout,
+        );
+        assert_eq!(page_count(&merged).unwrap(), 4);
         assert_eq!(rotations(&merged), [270, 90, 90, 90]);
     }
 
@@ -1514,8 +2378,8 @@ mod tests {
     #[test]
     fn links_follow_their_pages_and_links_to_removed_pages_go() {
         let data = linked_pdf();
-        assert!(has_extras(&open(data.clone()).unwrap()));
-        assert!(Source::open(&data).unwrap().extras);
+        assert_eq!(bookmark_pages(&open(data.clone()).unwrap()), [1]);
+        assert_eq!(Source::open(&data).unwrap().outline.len(), 1);
 
         // All pages: every link still works, the named one now points directly.
         let all = edit_one(&data, &[page(1, 0), page(2, 0), page(3, 0)]);
@@ -1527,11 +2391,11 @@ mod tests {
         let without_third = edit_one(&data, &[page(1, 0), page(2, 0)]);
         assert_eq!(link_targets(&without_third), [Some(1)]);
 
-        // Bookmarks, names and page dates are not carried over; the font is shared.
+        // The bookmark to page 1 stays; names and page dates are not carried
+        // over; the font is shared.
         let doc = Document::load_mem(&without_second).unwrap();
         let catalog = doc.catalog().unwrap();
-        assert!(!catalog.has(b"Outlines") && !catalog.has(b"Names"));
-        assert!(!has_extras(&open(without_second.clone()).unwrap()));
+        assert!(catalog.has(b"Outlines") && !catalog.has(b"Names"));
         let text = String::from_utf8_lossy(&without_second);
         assert!(!text.contains("D:2026"));
         let fonts = doc
@@ -1548,7 +2412,7 @@ mod tests {
         let pages: Vec<PdfPage> = (1..=5).map(|n| page(n, 0)).collect();
         let mut counts = Vec::new();
         edit(
-            &data,
+            data.clone(),
             &pages,
             &[2, 3],
             &AtomicBool::new(false),
@@ -1560,14 +2424,30 @@ mod tests {
         .unwrap();
         assert_eq!(counts, [(0, 2), (1, 3)]);
         // Parts that do not match the pages.
-        let err = edit(&data, &pages, &[2, 2], &AtomicBool::new(false), |_, _| true);
+        let err = edit(
+            data.clone(),
+            &pages,
+            &[2, 2],
+            &AtomicBool::new(false),
+            |_, _| true,
+        );
         assert_eq!(err.unwrap_err().code(), "invalid_pages");
         // Stopped after the first part, or before any.
-        let err = edit(&data, &pages, &[2, 3], &AtomicBool::new(false), |_, _| {
-            false
-        });
+        let err = edit(
+            data.clone(),
+            &pages,
+            &[2, 3],
+            &AtomicBool::new(false),
+            |_, _| false,
+        );
         assert_eq!(err.unwrap_err().code(), "cancelled");
-        let err = edit(&data, &pages, &[2, 3], &AtomicBool::new(true), |_, _| true);
+        let err = edit(
+            data.clone(),
+            &pages,
+            &[2, 3],
+            &AtomicBool::new(true),
+            |_, _| true,
+        );
         assert_eq!(err.unwrap_err().code(), "cancelled");
     }
 
@@ -1592,5 +2472,490 @@ mod tests {
                 .code(),
             "corrupt_input"
         );
+    }
+
+    /// Four A4 pages with bookmarks and a fillable form:
+    /// * "Capitolo 1" (page 1, open) with "1.1" (page 2) and "1.2" (page 3,
+    ///   through a `GoTo` action); "Capitolo 2" (page 4, by name); "Sito" (a
+    ///   mail link);
+    /// * fields "Nome" (widget on page 1), "Firma" (widgets on pages 2 and
+    ///   3) and "Data" (page 4), with a default font.
+    ///
+    /// With `xfa`, the form is an XFA form.
+    fn structured_pdf(xfa: bool) -> Vec<u8> {
+        let mut doc = Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let font = doc.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica",
+        });
+        let ids: Vec<ObjectId> = (0..4).map(|_| doc.new_object_id()).collect();
+        let rect = || -> Vec<Object> { vec![72.into(), 72.into(), 272.into(), 100.into()] };
+        let widget = |doc: &mut Document, page: ObjectId, extra: Dictionary| {
+            let mut dict = dictionary! {
+                "Type" => "Annot", "Subtype" => "Widget", "Rect" => rect(), "P" => page,
+            };
+            dict.extend(&extra);
+            doc.add_object(dict)
+        };
+        let nome = widget(
+            &mut doc,
+            ids[0],
+            dictionary! {
+                "FT" => "Tx", "T" => Object::string_literal("Nome"), "V" => Object::string_literal("Ada"),
+            },
+        );
+        let firma = doc.new_object_id();
+        let firma_kids: Vec<ObjectId> = [ids[1], ids[2]]
+            .iter()
+            .map(|&p| widget(&mut doc, p, dictionary! { "Parent" => firma }))
+            .collect();
+        doc.objects.insert(
+            firma,
+            Object::Dictionary(dictionary! {
+                "FT" => "Tx", "T" => Object::string_literal("Firma"),
+                "Kids" => firma_kids.iter().map(|&k| Object::from(k)).collect::<Vec<_>>(),
+            }),
+        );
+        let data = widget(
+            &mut doc,
+            ids[3],
+            dictionary! { "FT" => "Tx", "T" => Object::string_literal("Data") },
+        );
+        let annots = [
+            vec![nome],
+            vec![firma_kids[0]],
+            vec![firma_kids[1]],
+            vec![data],
+        ];
+        for (i, &id) in ids.iter().enumerate() {
+            let text = format!("BT /F1 24 Tf 72 720 Td (Pagina {}) Tj ET", i + 1);
+            let content = doc.add_object(Stream::new(Dictionary::new(), text.into_bytes()));
+            let annots: Vec<Object> = annots[i].iter().map(|&a| a.into()).collect();
+            doc.objects.insert(
+                id,
+                Object::Dictionary(dictionary! {
+                    "Type" => "Page", "Parent" => pages_id,
+                    "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+                    "Contents" => content,
+                    "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+                    "Annots" => annots,
+                }),
+            );
+        }
+        let kids: Vec<Object> = ids.iter().map(|id| (*id).into()).collect();
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => 4 }),
+        );
+
+        let outlines = doc.new_object_id();
+        let fit = |page: ObjectId| -> Object { vec![page.into(), "Fit".into()].into() };
+        let [chapter1, one, two, chapter2, site] = [(); 5].map(|_| doc.new_object_id());
+        let item = |title: &str, parent: ObjectId| {
+            dictionary! { "Title" => Object::string_literal(title), "Parent" => parent }
+        };
+        let mut c1 = item("Capitolo 1", outlines);
+        c1.extend(&dictionary! {
+            "Dest" => fit(ids[0]), "Next" => chapter2, "First" => one, "Last" => two, "Count" => 2,
+            "C" => vec![1.into(), 0.into(), 0.into()],
+        });
+        let mut i1 = item("1.1", chapter1);
+        i1.extend(&dictionary! { "Dest" => fit(ids[1]), "Next" => two });
+        let mut i2 = item("1.2", chapter1);
+        i2.extend(&dictionary! {
+            "A" => dictionary! { "S" => "GoTo", "D" => fit(ids[2]) }, "Prev" => one,
+        });
+        let mut c2 = item("Capitolo 2", outlines);
+        c2.extend(&dictionary! {
+            "Dest" => Object::string_literal("cap2"), "Prev" => chapter1, "Next" => site,
+        });
+        let mut web = item("Sito", outlines);
+        web.extend(&dictionary! {
+            "A" => dictionary! { "S" => "URI", "URI" => Object::string_literal("mailto:posta@example.invalid") },
+            "Prev" => chapter2,
+        });
+        for (id, dict) in [
+            (chapter1, c1),
+            (one, i1),
+            (two, i2),
+            (chapter2, c2),
+            (site, web),
+        ] {
+            doc.objects.insert(id, Object::Dictionary(dict));
+        }
+        doc.objects.insert(
+            outlines,
+            Object::Dictionary(dictionary! {
+                "Type" => "Outlines", "First" => chapter1, "Last" => site, "Count" => 5,
+            }),
+        );
+        let mut form = dictionary! {
+            "Fields" => vec![nome.into(), firma.into(), data.into()],
+            "DR" => dictionary! { "Font" => dictionary! { "Helv" => font } },
+            "DA" => Object::string_literal("/Helv 0 Tf 0 g"),
+        };
+        if xfa {
+            form.set("XFA", Object::string_literal("<xdp/>"));
+        }
+        let names = dictionary! {
+            "Dests" => dictionary! {
+                "Names" => vec![Object::string_literal("cap2"), fit(ids[3])],
+            },
+        };
+        let catalog = doc.add_object(dictionary! {
+            "Type" => "Catalog", "Pages" => pages_id, "Outlines" => outlines,
+            "Names" => names, "AcroForm" => form, "PageMode" => "UseOutlines",
+        });
+        doc.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        bytes
+    }
+
+    /// One bookmark as the tests see it: depth, title, the position of the
+    /// page it leads to, and its `Count`.
+    type Seen = (u32, String, Option<usize>, i64);
+
+    fn bookmark(depth: u32, title: &str, page: Option<usize>, count: i64) -> Seen {
+        (depth, title.to_string(), page, count)
+    }
+
+    /// The bookmarks of a document, in order.
+    fn outline_of(data: &[u8]) -> Vec<Seen> {
+        fn walk(
+            doc: &Document,
+            pages: &[ObjectId],
+            first: Option<ObjectId>,
+            depth: u32,
+            found: &mut Vec<Seen>,
+        ) {
+            let mut next = first;
+            while let Some(id) = next {
+                let item = doc.get_dictionary(id).unwrap();
+                let title = String::from_utf8_lossy(item.get(b"Title").unwrap().as_str().unwrap());
+                let page = item
+                    .get(b"Dest")
+                    .ok()
+                    .and_then(|d| d.as_array().ok()?.first()?.as_reference().ok())
+                    .and_then(|p| pages.iter().position(|q| *q == p));
+                let count = item.get(b"Count").and_then(Object::as_i64).unwrap_or(0);
+                found.push((depth, title.into_owned(), page, count));
+                let first = item.get(b"First").and_then(Object::as_reference).ok();
+                walk(doc, pages, first, depth + 1, found);
+                next = item.get(b"Next").and_then(Object::as_reference).ok();
+            }
+        }
+        let doc = Document::load_mem(data).unwrap();
+        let pages: Vec<ObjectId> = doc.get_pages().into_values().collect();
+        let mut found = Vec::new();
+        let Ok(outlines) = doc
+            .catalog()
+            .unwrap()
+            .get(b"Outlines")
+            .and_then(Object::as_reference)
+        else {
+            return found;
+        };
+        let first = doc
+            .get_dictionary(outlines)
+            .unwrap()
+            .get(b"First")
+            .and_then(Object::as_reference)
+            .ok();
+        walk(&doc, &pages, first, 0, &mut found);
+        found
+    }
+
+    /// Names of the top fields of a document's form, each with the number of
+    /// its widgets.
+    fn fields_of(data: &[u8]) -> Vec<(String, usize)> {
+        let doc = Document::load_mem(data).unwrap();
+        let Ok(form) = doc.catalog().unwrap().get(b"AcroForm") else {
+            return Vec::new();
+        };
+        let form = match form {
+            Object::Reference(id) => doc.get_dictionary(*id).unwrap(),
+            other => other.as_dict().unwrap(),
+        };
+        form.get(b"Fields")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                let field = doc.get_dictionary(f.as_reference().unwrap()).unwrap();
+                let name = String::from_utf8_lossy(field.get(b"T").unwrap().as_str().unwrap());
+                let widgets = field
+                    .get(b"Kids")
+                    .and_then(Object::as_array)
+                    .map_or(1, Vec::len);
+                (name.into_owned(), widgets)
+            })
+            .collect()
+    }
+
+    fn field(name: &str, widgets: usize) -> (String, usize) {
+        (name.to_string(), widgets)
+    }
+
+    #[test]
+    fn bookmarks_and_forms_are_found_by_the_analysis() {
+        let pdf = open(structured_pdf(false)).unwrap();
+        // "Sito" leads out of the document; "Capitolo 2" goes by its name.
+        assert_eq!(bookmark_pages(&pdf), [1, 2, 3, 4]);
+        assert_eq!(form_kind(&pdf), PdfForm::Fillable);
+        assert_eq!(
+            form_kind(&open(structured_pdf(true)).unwrap()),
+            PdfForm::Fixed
+        );
+        let plain = open(sample_pdf(&[(A4.0, A4.1)])).unwrap();
+        assert!(bookmark_pages(&plain).is_empty());
+        assert_eq!(form_kind(&plain), PdfForm::None);
+    }
+
+    #[test]
+    fn bookmarks_follow_their_pages() {
+        let data = structured_pdf(false);
+        let all = [page(1, 0), page(2, 0), page(3, 0), page(4, 0)];
+        // Every page: the same bookmarks, with named and action destinations
+        // made explicit, the first chapter open, the mail link kept.
+        let same = edit_one(&data, &all);
+        assert_eq!(
+            outline_of(&same),
+            [
+                bookmark(0, "Capitolo 1", Some(0), 2),
+                bookmark(1, "1.1", Some(1), 0),
+                bookmark(1, "1.2", Some(2), 0),
+                bookmark(0, "Capitolo 2", Some(3), 0),
+                bookmark(0, "Sito", None, 0),
+            ]
+        );
+        let doc = Document::load_mem(&same).unwrap();
+        let catalog = doc.catalog().unwrap();
+        assert_eq!(
+            catalog.get(b"PageMode").unwrap().as_name().unwrap(),
+            b"UseOutlines"
+        );
+        let outlines = catalog
+            .get(b"Outlines")
+            .and_then(Object::as_reference)
+            .unwrap();
+        let count = doc.get_dictionary(outlines).unwrap().get(b"Count");
+        assert_eq!(count.unwrap().as_i64().unwrap(), 5);
+        assert!(String::from_utf8_lossy(&same).contains("mailto:posta@example.invalid"));
+
+        // Reordered: the bookmarks keep their order and follow their pages.
+        let reordered = edit_one(&data, &[page(4, 0), page(3, 90), page(2, 0), page(1, 0)]);
+        let targets: Vec<Option<usize>> = outline_of(&reordered).iter().map(|b| b.2).collect();
+        assert_eq!(targets, [Some(3), Some(2), Some(1), Some(0), None]);
+
+        // The first page is gone: its chapter leads to its first section left.
+        let without_first = edit_one(&data, &[page(2, 0), page(3, 0), page(4, 0)]);
+        assert_eq!(
+            outline_of(&without_first)[0],
+            bookmark(0, "Capitolo 1", Some(0), 2)
+        );
+        // Its sections are gone: the chapter is left on its own.
+        let without_sections = edit_one(&data, &[page(1, 0), page(4, 0)]);
+        assert_eq!(
+            outline_of(&without_sections),
+            [
+                bookmark(0, "Capitolo 1", Some(0), 0),
+                bookmark(0, "Capitolo 2", Some(1), 0),
+                bookmark(0, "Sito", None, 0),
+            ]
+        );
+        // The whole chapter is gone.
+        let last = edit_one(&data, &[page(4, 0)]);
+        assert_eq!(
+            outline_of(&last),
+            [
+                bookmark(0, "Capitolo 2", Some(0), 0),
+                bookmark(0, "Sito", None, 0)
+            ]
+        );
+
+        // Split in two: each document has the bookmarks of its pages.
+        let parts = build_parts(vec![Part::Document(data.clone())], &all, &[2, 2]);
+        assert_eq!(
+            outline_of(&parts[0]),
+            [
+                bookmark(0, "Capitolo 1", Some(0), 1),
+                bookmark(1, "1.1", Some(1), 0),
+                bookmark(0, "Sito", None, 0),
+            ]
+        );
+        assert_eq!(
+            outline_of(&parts[1]),
+            [
+                bookmark(0, "Capitolo 1", Some(0), 1),
+                bookmark(1, "1.2", Some(0), 0),
+                bookmark(0, "Capitolo 2", Some(1), 0),
+                bookmark(0, "Sito", None, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn forms_keep_the_fields_of_their_pages() {
+        let data = structured_pdf(false);
+        let all = [page(1, 0), page(2, 0), page(3, 0), page(4, 0)];
+        let same = edit_one(&data, &all);
+        assert_eq!(
+            fields_of(&same),
+            [field("Nome", 1), field("Firma", 2), field("Data", 1)]
+        );
+        let doc = Document::load_mem(&same).unwrap();
+        let form = doc
+            .catalog()
+            .unwrap()
+            .get(b"AcroForm")
+            .and_then(Object::as_reference)
+            .unwrap();
+        let form = doc.get_dictionary(form).unwrap();
+        assert_eq!(
+            form.get(b"DA").unwrap().as_str().unwrap(),
+            b"/Helv 0 Tf 0 g"
+        );
+        assert!(form.get(b"DR").unwrap().as_dict().unwrap().has(b"Font"));
+        // The value of a field comes along.
+        assert!(String::from_utf8_lossy(&same).contains("(Ada)"));
+
+        // Page 3 is gone, and one widget of "Firma" with it.
+        let without_third = edit_one(&data, &[page(1, 0), page(2, 0), page(4, 0)]);
+        assert_eq!(
+            fields_of(&without_third),
+            [field("Nome", 1), field("Firma", 1), field("Data", 1)]
+        );
+        // Pages 2 and 3 are gone, and "Firma" with them.
+        let without_signature = edit_one(&data, &[page(4, 0), page(1, 0)]);
+        assert_eq!(
+            fields_of(&without_signature),
+            [field("Nome", 1), field("Data", 1)]
+        );
+        let doc = Document::load_mem(&without_signature).unwrap();
+        let widgets = doc
+            .objects
+            .values()
+            .filter(|o| {
+                o.as_dict().is_ok_and(|d| {
+                    d.get(b"Subtype")
+                        .and_then(Object::as_name)
+                        .is_ok_and(|s| s == b"Widget")
+                })
+            })
+            .count();
+        assert_eq!(widgets, 2);
+
+        // Two copies of the same form: the fields of the second one are
+        // renamed, so that each keeps its own value; "Firma" of the first
+        // copy is not here, so the second one keeps its name.
+        let twice = build_one(
+            vec![Part::Document(data.clone()), Part::Document(data.clone())],
+            &[page(1, 0), page_of(1, 1, 0), page_of(1, 2, 0)],
+        );
+        assert_eq!(
+            fields_of(&twice),
+            [field("Nome", 1), field("Nome_2", 1), field("Firma", 1)]
+        );
+
+        // An XFA form is not kept as a form: its widgets keep their look.
+        let xfa = edit_one(&structured_pdf(true), &all);
+        assert!(fields_of(&xfa).is_empty());
+        assert_eq!(outline_of(&xfa).len(), 5);
+    }
+
+    #[test]
+    fn pages_of_several_files_are_combined_in_any_order() {
+        let first = linked_pdf();
+        let second = sample_pdf(&[(200.0, 100.0), (300.0, 300.0)]);
+        let photo = place(400, 300, &PdfOptions::default());
+        let files = || {
+            vec![
+                Part::Document(first.clone()),
+                Part::Document(second.clone()),
+                Part::Picture {
+                    jpeg: vec![0xff, 0xd8, 0xff, 0xd9],
+                    width: 400,
+                    height: 300,
+                    placement: photo,
+                },
+            ]
+        };
+        let layout = [
+            page_of(1, 2, 0),
+            page(3, 0),
+            page_of(2, 1, 90),
+            page(1, 0),
+            page_of(1, 1, 0),
+        ];
+        let combined = build_one(files(), &layout);
+        let sizes: Vec<(f32, f32)> = open(combined.clone())
+            .unwrap()
+            .pages()
+            .iter()
+            .map(|p| p.render_dimensions())
+            .collect();
+        assert_eq!(
+            sizes,
+            [
+                (300.0, 300.0),
+                (595.0, 842.0),
+                (photo.page_height, photo.page_width),
+                (595.0, 842.0),
+                (200.0, 100.0),
+            ]
+        );
+        assert_eq!(rotations(&combined), [0, 0, 90, 0, 0]);
+        // Page 1 of the first file (here the fourth) links twice to its page
+        // 3 (here the second); its page 2 is not here, nor the link to it.
+        let doc = Document::load_mem(&combined).unwrap();
+        let pages: Vec<ObjectId> = doc.get_pages().into_values().collect();
+        let annots = doc.get_dictionary(pages[3]).unwrap().get(b"Annots");
+        assert_eq!(annots.unwrap().as_array().unwrap().len(), 2);
+        // Its bookmark leads to its page 1, here the fourth page.
+        assert_eq!(outline_of(&combined), [bookmark(0, "Inizio", Some(3), 0)]);
+        // The shared font is copied once.
+        let fonts = doc
+            .objects
+            .values()
+            .filter(|o| o.as_dict().is_ok_and(|d| d.has_type(b"Font")))
+            .count();
+        assert_eq!(fonts, 1);
+
+        // The combined pages, split in two documents.
+        let parts = build_parts(files(), &layout, &[3, 2]);
+        let counts: Vec<u32> = parts.iter().map(|p| page_count(p).unwrap()).collect();
+        assert_eq!(counts, [3, 2]);
+        // A picture listed twice, a page or a file that is not there.
+        for wrong in [
+            vec![page_of(2, 1, 0), page_of(2, 1, 0)],
+            vec![page_of(2, 2, 0)],
+            vec![page_of(3, 1, 0)],
+        ] {
+            let err = build(
+                files(),
+                Some(&wrong),
+                &[],
+                &AtomicBool::new(false),
+                |_, _| true,
+            );
+            assert_eq!(err.unwrap_err().code(), "invalid_pages", "{wrong:?}");
+        }
+    }
+
+    #[test]
+    fn layouts_of_several_files_are_checked() {
+        assert_eq!(
+            check_pages(None, &[2, 1]).unwrap(),
+            [page(1, 0), page(2, 0), page_of(1, 1, 0)]
+        );
+        assert_eq!(
+            pages_of_file(&[page(2, 0), page_of(1, 1, 90), page(1, 0)], 1),
+            [page(1, 90)]
+        );
+        assert!(check_pages(Some(&[page_of(1, 1, 0), page(1, 0)]), &[1, 1]).is_ok());
+        let err = check_layout(Some(&[page_of(1, 1, 0)]), 3).unwrap_err();
+        assert_eq!(err.code(), "invalid_pages");
     }
 }

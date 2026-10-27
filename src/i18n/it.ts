@@ -237,7 +237,9 @@ export const it = {
     paddedToSquare: "Le icone sono quadrate: l'immagine verrà centrata su uno sfondo trasparente.",
     manyFiles: "Verranno create molte immagini: scegli un intervallo più lungo per averne meno.",
     metadataDropped: "I dati EXIF della foto (fotocamera, data, posizione) non verranno conservati.",
-    pdfExtrasDropped: "I segnalibri e i campi compilabili del PDF non verranno conservati.",
+    pdfBookmarksDropped:
+      "Alcuni segnalibri portano a pagine tolte: spariranno, oppure porteranno alla prima pagina rimasta della loro sezione.",
+    pdfFormFixed: "Il modulo di questo PDF (XFA o firmato digitalmente) resterà visibile ma non sarà più compilabile.",
     pdfPagesAsPictures:
       "Se serve a ridurre il peso, le pagine diventeranno immagini: il testo non sarà più selezionabile, link e moduli andranno persi.",
     docxLayout:

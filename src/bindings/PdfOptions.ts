@@ -33,8 +33,9 @@ pageLabel?: string | null,
  */
 pagesLabel?: string | null, 
 /**
- * PDF to PDF: the pages of the new document, in order and each with its
- * turn; pages left out are removed (`None`: every page as it is).
+ * PDF to PDF, and files combined into one PDF: the pages of the new
+ * document, in order and each with its turn; pages left out are removed
+ * (`None`: every page as it is).
  */
 layout?: Array<PdfPage> | null, 
 /**

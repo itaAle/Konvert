@@ -234,7 +234,9 @@ export const en: Messages = {
     paddedToSquare: "Icons are square: the picture will be centered on a transparent background.",
     manyFiles: "This will create a lot of pictures: choose a longer interval to get fewer.",
     metadataDropped: "The photo's EXIF data (camera, date, location) will not be kept.",
-    pdfExtrasDropped: "The PDF's bookmarks and fillable fields will not be kept.",
+    pdfBookmarksDropped:
+      "Some bookmarks lead to pages you left out: they will go, or lead to the first page left in their section.",
+    pdfFormFixed: "This PDF's form (XFA or digitally signed) will stay visible but can no longer be filled in.",
     pdfPagesAsPictures:
       "If it helps to reduce the size, the pages will become pictures: the text can no longer be selected, links and forms are lost.",
     docxLayout:

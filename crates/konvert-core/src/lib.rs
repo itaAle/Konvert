@@ -38,7 +38,9 @@ pub mod workspace;
 mod process;
 
 pub use binaries::Binaries;
-pub use convert::{CombinedJob, ConversionJob, ConversionOutcome, run_combined, run_conversion};
+pub use convert::{
+    CombinedJob, ConversionJob, ConversionOutcome, picture_thumbnail, run_combined, run_conversion,
+};
 pub use disk::available_space;
 pub use error::{CoreError, ErrorPayload};
 pub use estimate::SizeEstimate;

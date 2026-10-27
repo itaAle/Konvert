@@ -1618,6 +1618,78 @@ async fn pdfs_are_merged_in_order_without_personal_metadata() {
     assert!(!String::from_utf8_lossy(&data).contains("Mario Rossi"));
 }
 
+#[tokio::test]
+async fn pages_of_several_files_are_arranged_and_split() {
+    let bins = engine();
+    let tmp = TempDir::new("pdf-arrange");
+    let photo = sample_jpeg(&bins, &tmp, "Foto.jpg", None);
+    let first = tmp.path("Primo.pdf");
+    std::fs::write(&first, fixtures::pdf(&[A4, A4, A4])).unwrap();
+    let second = tmp.path("Secondo.pdf");
+    std::fs::write(&second, fixtures::pdf(&[(612.0, 792.0)])).unwrap();
+    let mut inputs = Vec::new();
+    for path in [&first, &photo, &second] {
+        inputs.push((path.clone(), probe(&bins, path).await.unwrap()));
+    }
+    let page = |file, number, rotation| konvert_core::PdfPage {
+        file,
+        number,
+        rotation,
+    };
+    // The letter page first, then the photo turned, then two pages of the
+    // first PDF (its page 2 left out); split after the photo.
+    let mut request = req(TargetFormat::Pdf, QualityPreset::Balanced);
+    request.pdf = Some(konvert_core::PdfOptions {
+        layout: Some(vec![
+            page(2, 1, 0),
+            page(1, 1, 90),
+            page(0, 3, 0),
+            page(0, 1, 0),
+        ]),
+        split: konvert_core::PdfSplit::After,
+        split_after: vec![2],
+        page_label: Some("pagina".into()),
+        pages_label: Some("pagine".into()),
+        ..Default::default()
+    });
+    let out_dir = tmp.path("out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ws = Workspace::create(&tmp.path("ws")).unwrap();
+    let job = konvert_core::CombinedJob {
+        id: 4,
+        inputs,
+        request,
+        output_dir: out_dir.clone(),
+    };
+    let outcome = konvert_core::run_combined(&bins, &ws, &job, &CancellationToken::new(), |_| {})
+        .await
+        .unwrap();
+    // A folder named after the first file, documents named by position.
+    assert_eq!(outcome.output, out_dir.join("Primo"));
+    assert_eq!(outcome.files, 2);
+    assert_eq!(
+        files_in(&outcome.output),
+        ["Primo-pagine-01-02.pdf", "Primo-pagine-03-04.pdf"]
+    );
+    assert_eq!(files_in(ws.dir()), [".lock"]);
+    let one = std::fs::read(outcome.output.join("Primo-pagine-01-02.pdf")).unwrap();
+    assert_eq!(pdf_page_sizes(&one)[0], (612.0, 792.0));
+    assert_eq!(pdf_rotations(&one), [0, 90]);
+    let two = std::fs::read(outcome.output.join("Primo-pagine-03-04.pdf")).unwrap();
+    assert_eq!(pdf_page_sizes(&two), [A4, A4]);
+
+    // The photo's page in the page editor: a small PNG, never enlarged, and
+    // nothing left in the workspace.
+    let media = probe(&bins, &photo).await.unwrap();
+    let thumbnail = konvert_core::picture_thumbnail(&bins, &ws, 1 << 48, &photo, &media, 32)
+        .await
+        .unwrap();
+    assert!(thumbnail.starts_with("data:image/png;base64,iVBORw0KGgo"));
+    assert_eq!(files_in(ws.dir()), [".lock"]);
+    let err = konvert_core::picture_thumbnail(&bins, &ws, 2, &first, &job.inputs[0].1, 32).await;
+    assert_eq!(err.unwrap_err().code(), "unsupported_conversion");
+}
+
 fn pdf_rotations(data: &[u8]) -> Vec<i64> {
     let doc = lopdf::Document::load_mem(data).unwrap();
     doc.get_pages()
@@ -1632,7 +1704,11 @@ fn pdf_rotations(data: &[u8]) -> Vec<i64> {
 }
 
 fn pdf_page(number: u32, rotation: u16) -> konvert_core::PdfPage {
-    konvert_core::PdfPage { number, rotation }
+    konvert_core::PdfPage {
+        file: 0,
+        number,
+        rotation,
+    }
 }
 
 #[tokio::test]
