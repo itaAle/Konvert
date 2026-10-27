@@ -262,6 +262,23 @@ pub async fn pdf_thumbnails(
     .map_err(payload)
 }
 
+/// A small picture of a photo, shown as its page while arranging the pages of
+/// a PDF: a PNG `data:` URL. Made by the bundled engine in the private
+/// workspace; nothing leaves the computer.
+#[tauri::command]
+pub async fn picture_thumbnail(
+    state: State<'_, AppState>,
+    path: PathBuf,
+    size: u32,
+) -> Result<String, ErrorPayload> {
+    let bins = state.binaries().map_err(payload)?;
+    let media = konvert_core::probe(bins, &path).await.map_err(payload)?;
+    let id = state.thumbnails.fetch_add(1, Ordering::Relaxed);
+    konvert_core::picture_thumbnail(bins, &state.workspace, id, &path, &media, size)
+        .await
+        .map_err(payload)
+}
+
 /// Queues a conversion; progress arrives through `job-update` events.
 /// The destination comes from the preferences (default: next to the original).
 #[tauri::command]

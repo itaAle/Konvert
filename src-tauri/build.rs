@@ -17,6 +17,7 @@ const COMMANDS: &[&str] = &[
     "analyze_file",
     "plan_conversion",
     "pdf_thumbnails",
+    "picture_thumbnail",
     "start_conversion",
     "start_combined",
     "cancel_conversion",

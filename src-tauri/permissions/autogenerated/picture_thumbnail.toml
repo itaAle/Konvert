@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-picture-thumbnail"
+description = "Enables the picture_thumbnail command without any pre-configured scope."
+commands.allow = ["picture_thumbnail"]
+
+[[permission]]
+identifier = "deny-picture-thumbnail"
+description = "Denies the picture_thumbnail command without any pre-configured scope."
+commands.deny = ["picture_thumbnail"]

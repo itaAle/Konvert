@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 use konvert_core::{Binaries, CoreError, Workspace, workspace};
 use tauri::{AppHandle, Manager};
@@ -10,6 +10,10 @@ use tauri::{AppHandle, Manager};
 use crate::debug_log::DebugLog;
 use crate::jobs::JobQueue;
 use crate::prefs::PrefsStore;
+
+/// First number of the private files of picture thumbnails, far from the
+/// numbers of conversion jobs (which start at 1).
+const THUMBNAIL_IDS: u64 = 1 << 48;
 
 pub struct AppState {
     /// `Err` when the bundled engine is missing: the app still starts and the UI
@@ -26,6 +30,8 @@ pub struct AppState {
     pub close_confirmed: AtomicBool,
     /// Encoders of the bundled FFmpeg, read once (some formats depend on them).
     pub encoders: tokio::sync::OnceCell<HashSet<String>>,
+    /// Numbers of the private files of picture thumbnails (apart from jobs).
+    pub thumbnails: AtomicU64,
 }
 
 impl AppState {
@@ -57,6 +63,7 @@ impl AppState {
             vibrancy,
             close_confirmed: AtomicBool::new(false),
             encoders: tokio::sync::OnceCell::new(),
+            thumbnails: AtomicU64::new(THUMBNAIL_IDS),
         })
     }
 

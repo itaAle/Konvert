@@ -21,6 +21,7 @@
     "allow-analyze-file",
     "allow-plan-conversion",
     "allow-pdf-thumbnails",
+    "allow-picture-thumbnail",
     "allow-start-conversion",
     "allow-start-combined",
     "allow-cancel-conversion",
