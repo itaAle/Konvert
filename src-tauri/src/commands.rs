@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
+use konvert_core::pdf::Thumbnail;
 use konvert_core::{
     ConversionPlan, ConversionRequest, CoreError, ErrorPayload, MediaInfo, TargetFormat,
     TargetOption, available_targets, formats::supported_targets, plan_conversion as plan,
@@ -233,6 +234,25 @@ pub fn plan_conversion(
     plan(&media, &request, &path).map_err(payload)
 }
 
+/// Small pictures of some pages of a PDF, for choosing, turning and moving
+/// pages. Drawn by Konvert itself on a worker thread; nothing leaves the computer.
+#[tauri::command]
+pub async fn pdf_thumbnails(
+    path: PathBuf,
+    pages: Vec<u32>,
+    size: u32,
+) -> Result<Vec<Thumbnail>, ErrorPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if !konvert_core::pdf::is_pdf(&path) {
+            return Err(CoreError::NotMedia);
+        }
+        konvert_core::pdf::thumbnails(std::fs::read(&path)?, &pages, size)
+    })
+    .await
+    .map_err(io_payload)?
+    .map_err(payload)
+}
+
 /// Queues a conversion; progress arrives through `job-update` events.
 /// The destination comes from the preferences (default: next to the original).
 #[tauri::command]
@@ -414,6 +434,36 @@ mod tests {
             .map(str::to_owned)
             .collect();
         assert_eq!(registered, expected("windows"));
+    }
+
+    /// A command works only if it is handled (`lib.rs`), listed (`build.rs`)
+    /// and allowed (`capabilities/default.json`): the three lists must match.
+    #[test]
+    fn every_command_is_handled_listed_and_allowed() {
+        let handled: BTreeSet<String> = include_str!("lib.rs")
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("commands::")?.strip_suffix(','))
+            .map(str::to_owned)
+            .collect();
+        let build = include_str!("../build.rs");
+        let list = &build[build.find("const COMMANDS").unwrap()..];
+        let listed: BTreeSet<String> = list[..list.find("];").unwrap()]
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix('"')?.strip_suffix("\","))
+            .map(str::to_owned)
+            .collect();
+        let capabilities: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let allowed: BTreeSet<String> = capabilities["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p.as_str()?.strip_prefix("allow-"))
+            .map(|p| p.replace('-', "_"))
+            .collect();
+        assert!(handled.contains("pdf_thumbnails"), "{handled:?}");
+        assert_eq!(handled, listed);
+        assert_eq!(listed, allowed);
     }
 
     #[test]

@@ -20,6 +20,7 @@
     "allow-confirm-close",
     "allow-analyze-file",
     "allow-plan-conversion",
+    "allow-pdf-thumbnails",
     "allow-start-conversion",
     "allow-start-combined",
     "allow-cancel-conversion",

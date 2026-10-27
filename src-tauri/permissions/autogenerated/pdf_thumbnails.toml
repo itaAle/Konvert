@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-pdf-thumbnails"
+description = "Enables the pdf_thumbnails command without any pre-configured scope."
+commands.allow = ["pdf_thumbnails"]
+
+[[permission]]
+identifier = "deny-pdf-thumbnails"
+description = "Denies the pdf_thumbnails command without any pre-configured scope."
+commands.deny = ["pdf_thumbnails"]

@@ -79,6 +79,7 @@ pub fn run() {
             commands::confirm_close,
             commands::analyze_file,
             commands::plan_conversion,
+            commands::pdf_thumbnails,
             commands::start_conversion,
             commands::start_combined,
             commands::cancel_conversion,
