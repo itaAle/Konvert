@@ -76,6 +76,7 @@
   !insertmacro ${OP} "svg"
   !insertmacro ${OP} "svgz"
   !insertmacro ${OP} "pdf"
+  !insertmacro ${OP} "docx"
   !insertmacro ${OP} "jxl"
 !macroend
 

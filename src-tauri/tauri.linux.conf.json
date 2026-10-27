@@ -329,6 +329,13 @@
       },
       {
         "ext": [
+          "docx"
+        ],
+        "name": "Word document",
+        "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      },
+      {
+        "ext": [
           "jxl"
         ],
         "name": "JPEG XL",

@@ -366,6 +366,14 @@
         "name": "PDF document",
         "role": "Viewer",
         "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "docx"
+        ],
+        "name": "Word document",
+        "role": "Viewer",
+        "rank": "Alternate"
       }
     ],
     "macOS": {
