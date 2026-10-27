@@ -207,6 +207,8 @@ pub enum ConversionWarning {
     ChannelsDownmixed,
     /// The photo's EXIF data (camera, date, location) is not kept.
     MetadataDropped,
+    /// The bookmarks and the fillable form of a PDF are not kept.
+    PdfExtrasDropped,
 }
 
 /// Pictures taken from a video.
@@ -228,9 +230,16 @@ pub struct FramePlan {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct DocumentPlan {
-    /// Pages of the PDF, 1-based: the ones to turn into pictures, or every
-    /// page of a PDF merged into another.
+    /// Pages of the PDF, 1-based: the ones to turn into pictures, or the pages
+    /// of the new PDF in their new order.
     pub pages: Vec<u32>,
+    /// PDF to PDF: clockwise turn added to each page of `pages`, in degrees
+    /// (empty: no page is turned).
+    #[serde(default)]
+    pub rotations: Vec<u16>,
+    /// PDF to PDF: pages in each new document, in order (empty: one document).
+    #[serde(default)]
+    pub parts: Vec<u32>,
     /// PDF to pictures: rendering resolution in dots per inch.
     pub dpi: u32,
     /// Picture to PDF: where the picture goes on its page.
@@ -515,6 +524,8 @@ fn plan_document(
             plan.remove_location = false;
             plan.document = Some(DocumentPlan {
                 pages: vec![1],
+                rotations: Vec::new(),
+                parts: Vec::new(),
                 dpi: 0,
                 placement: Some(placement),
             });
@@ -525,6 +536,20 @@ fn plan_document(
                 .document
                 .as_ref()
                 .ok_or_else(|| unsupported("the input is not a PDF".into()))?;
+            let layout = pdf::check_layout(options.layout.as_deref(), info.pages)?;
+            let parts = pdf::split_sizes(
+                options.split,
+                options.split_every,
+                &options.split_after,
+                layout.len() as u32,
+            )?;
+            let rotations = if layout.iter().all(|p| p.rotation == 0) {
+                Vec::new()
+            } else {
+                layout.iter().map(|p| p.rotation).collect()
+            };
+            let pages: Vec<u32> = layout.iter().map(|p| p.number).collect();
+            let kept = pages.len() as u64;
             Ok(ConversionPlan {
                 target: TargetFormat::Pdf,
                 video_stream: None,
@@ -535,15 +560,21 @@ fn plan_document(
                 image: None,
                 frames: None,
                 document: Some(DocumentPlan {
-                    pages: (1..=info.pages).collect(),
+                    pages,
+                    rotations,
+                    parts,
                     dpi: 0,
                     placement: None,
                 }),
                 remove_location: false,
-                warnings: Vec::new(),
-                // The pages are copied as they are.
+                warnings: if info.extras {
+                    vec![W::PdfExtrasDropped]
+                } else {
+                    Vec::new()
+                },
+                // The pages are copied as they are, with what they use.
                 estimate: media.size_bytes.map(|bytes| SizeEstimate {
-                    bytes,
+                    bytes: bytes * kept / u64::from(info.pages.max(1)),
                     approximate: true,
                 }),
             })
@@ -601,6 +632,8 @@ fn plan_pages(
     });
     plan.document = Some(DocumentPlan {
         pages,
+        rotations: Vec::new(),
+        parts: Vec::new(),
         dpi,
         placement: None,
     });
@@ -2111,5 +2144,88 @@ mod tests {
         assert_eq!(enc.sample_rate, Some(48000));
         // Mono: half of the stereo bit rate, but never below 32 kbit/s.
         assert_eq!(enc.rate, AudioRate::Bitrate { kbps: 32 });
+    }
+
+    fn pdf_document(pages: u32, extras: bool) -> MediaInfo {
+        MediaInfo {
+            container: "pdf".into(),
+            kind: MediaKind::Document,
+            duration_secs: None,
+            size_bytes: Some(1_000_000),
+            bit_rate: None,
+            audio: Vec::new(),
+            video: Vec::new(),
+            cover_art: None,
+            subtitle_streams: 0,
+            picture: None,
+            has_tags: false,
+            has_location: false,
+            document: Some(pdf::DocumentInfo {
+                pages,
+                width_pt: 595.0,
+                height_pt: 842.0,
+                extras,
+            }),
+        }
+    }
+
+    #[test]
+    fn a_pdf_is_edited_into_one_or_several_pdfs() {
+        use crate::request::{PdfOptions, PdfPage, PdfSplit};
+        let page = |number, rotation| PdfPage { number, rotation };
+        let edit = |options: PdfOptions, extras: bool| {
+            let request = ConversionRequest {
+                pdf: Some(options),
+                ..req(TargetFormat::Pdf, QualityPreset::Balanced)
+            };
+            plan_conversion(&pdf_document(10, extras), &request, Path::new("a.pdf"))
+        };
+        // Every page as it is: one document, about as large as the source.
+        let p = edit(PdfOptions::default(), false).unwrap();
+        let doc = p.document.unwrap();
+        assert_eq!(doc.pages, (1..=10).collect::<Vec<_>>());
+        assert!(doc.rotations.is_empty() && doc.parts.is_empty());
+        assert_eq!(p.estimate.unwrap().bytes, 1_000_000);
+        assert!(p.warnings.is_empty());
+
+        // Two pages kept, in a new order, one turned; split after the first.
+        let p = edit(
+            PdfOptions {
+                layout: Some(vec![page(4, 0), page(2, 90)]),
+                split: PdfSplit::After,
+                split_after: vec![1],
+                ..PdfOptions::default()
+            },
+            true,
+        )
+        .unwrap();
+        let doc = p.document.as_ref().unwrap();
+        assert_eq!(
+            (doc.pages.clone(), doc.rotations.clone()),
+            (vec![4, 2], vec![0, 90])
+        );
+        assert_eq!(doc.parts, [1, 1]);
+        assert_eq!(p.estimate.unwrap().bytes, 200_000);
+        assert_eq!(p.warnings, [W::PdfExtrasDropped]);
+
+        let p = edit(
+            PdfOptions {
+                split: PdfSplit::Every,
+                split_every: 4,
+                ..PdfOptions::default()
+            },
+            false,
+        )
+        .unwrap();
+        assert_eq!(p.document.unwrap().parts, [4, 4, 2]);
+
+        let wrong = edit(
+            PdfOptions {
+                layout: Some(vec![page(11, 0)]),
+                ..PdfOptions::default()
+            },
+            false,
+        );
+        assert_eq!(wrong.unwrap_err().code(), "invalid_pages");
     }
 }

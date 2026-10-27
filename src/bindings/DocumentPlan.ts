@@ -6,10 +6,19 @@ import type { Placement } from "./Placement";
  */
 export type DocumentPlan = { 
 /**
- * Pages of the PDF, 1-based: the ones to turn into pictures, or every
- * page of a PDF merged into another.
+ * Pages of the PDF, 1-based: the ones to turn into pictures, or the pages
+ * of the new PDF in their new order.
  */
 pages: Array<number>, 
+/**
+ * PDF to PDF: clockwise turn added to each page of `pages`, in degrees
+ * (empty: no page is turned).
+ */
+rotations: Array<number>, 
+/**
+ * PDF to PDF: pages in each new document, in order (empty: one document).
+ */
+parts: Array<number>, 
 /**
  * PDF to pictures: rendering resolution in dots per inch.
  */

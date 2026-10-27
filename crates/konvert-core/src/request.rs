@@ -144,7 +144,34 @@ pub enum PageMargin {
     Normal,
 }
 
-/// Choices for PDF documents: pictures to PDF and PDF to pictures.
+/// A page of a PDF made from another PDF: which page, and how it is turned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PdfPage {
+    /// 1-based page number in the source document.
+    pub number: u32,
+    /// Clockwise turn added to the page's own: 0, 90, 180 or 270 degrees.
+    #[serde(default)]
+    pub rotation: u16,
+}
+
+/// How an edited PDF is saved: one document, or several.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PdfSplit {
+    /// One document.
+    #[default]
+    None,
+    /// A new document every `split_every` pages.
+    Every,
+    /// A new document after each position listed in `split_after`.
+    After,
+}
+
+/// Choices for PDF documents: pictures to PDF, PDF to pictures, and edited
+/// or split PDFs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
 #[ts(export, optional_fields = nullable)]
@@ -158,9 +185,21 @@ pub struct PdfOptions {
     pub dpi: u32,
     /// PDF to pictures: pages such as `"1-3, 5"` (`None`: every page).
     pub pages: Option<String>,
-    /// PDF to pictures: word between the name and the page number in file
-    /// names (`"pagina"`, `"page"`).
+    /// Word between the name and a page number in file names (`"pagina"`,
+    /// `"page"`).
     pub page_label: Option<String>,
+    /// Word between the name and a range of pages in file names (`"pagine"`,
+    /// `"pages"`).
+    pub pages_label: Option<String>,
+    /// PDF to PDF: the pages of the new document, in order and each with its
+    /// turn; pages left out are removed (`None`: every page as it is).
+    pub layout: Option<Vec<PdfPage>>,
+    /// PDF to PDF: one document, or several.
+    pub split: PdfSplit,
+    /// Pages in each document when splitting every few pages.
+    pub split_every: u32,
+    /// Positions (1-based, in the new order) after which a new document starts.
+    pub split_after: Vec<u32>,
 }
 
 impl Default for PdfOptions {
@@ -173,6 +212,11 @@ impl Default for PdfOptions {
             dpi: 150,
             pages: None,
             page_label: None,
+            pages_label: None,
+            layout: None,
+            split: PdfSplit::default(),
+            split_every: 1,
+            split_after: Vec::new(),
         }
     }
 }

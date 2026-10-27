@@ -7,4 +7,8 @@ export type DocumentInfo = { pages: number,
 /**
  * Size of the first page, in points (rotation applied).
  */
-widthPt: number, heightPt: number, };
+widthPt: number, heightPt: number, 
+/**
+ * Bookmarks or a fillable form, which the PDFs Konvert writes do not keep.
+ */
+extras: boolean, };

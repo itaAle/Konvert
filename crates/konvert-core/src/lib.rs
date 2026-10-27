@@ -44,7 +44,7 @@ pub use probe::{MediaInfo, MediaKind, probe};
 pub use progress::Progress;
 pub use request::{
     AdvancedOptions, ChannelLayout, ConversionRequest, FrameMode, FrameOptions, PageMargin,
-    PageOrientation, PageSize, PdfOptions, QualityPreset,
+    PageOrientation, PageSize, PdfOptions, PdfPage, PdfSplit, QualityPreset,
 };
 pub use workspace::Workspace;
 

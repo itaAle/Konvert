@@ -2,9 +2,12 @@
 import type { PageMargin } from "./PageMargin";
 import type { PageOrientation } from "./PageOrientation";
 import type { PageSize } from "./PageSize";
+import type { PdfPage } from "./PdfPage";
+import type { PdfSplit } from "./PdfSplit";
 
 /**
- * Choices for PDF documents: pictures to PDF and PDF to pictures.
+ * Choices for PDF documents: pictures to PDF, PDF to pictures, and edited
+ * or split PDFs.
  */
 export type PdfOptions = { pageSize: PageSize, orientation: PageOrientation, margin: PageMargin, 
 /**
@@ -20,7 +23,29 @@ dpi: number,
  */
 pages?: string | null, 
 /**
- * PDF to pictures: word between the name and the page number in file
- * names (`"pagina"`, `"page"`).
+ * Word between the name and a page number in file names (`"pagina"`,
+ * `"page"`).
  */
-pageLabel?: string | null, };
+pageLabel?: string | null, 
+/**
+ * Word between the name and a range of pages in file names (`"pagine"`,
+ * `"pages"`).
+ */
+pagesLabel?: string | null, 
+/**
+ * PDF to PDF: the pages of the new document, in order and each with its
+ * turn; pages left out are removed (`None`: every page as it is).
+ */
+layout?: Array<PdfPage> | null, 
+/**
+ * PDF to PDF: one document, or several.
+ */
+split: PdfSplit, 
+/**
+ * Pages in each document when splitting every few pages.
+ */
+splitEvery: number, 
+/**
+ * Positions (1-based, in the new order) after which a new document starts.
+ */
+splitAfter: Array<number>, };

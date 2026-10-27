@@ -5,7 +5,7 @@
 //! unique name; on failure or cancellation delete the partial output.
 
 use std::collections::VecDeque;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,11 +24,11 @@ use crate::formats::{self, TargetFormat};
 use crate::metadata;
 use crate::naming;
 use crate::pdf;
-use crate::plan::{ConversionPlan, plan_conversion};
+use crate::plan::{ConversionPlan, DocumentPlan, plan_conversion};
 use crate::probe::{MediaInfo, MediaKind};
 use crate::process;
 use crate::progress::{Progress, ProgressParser};
-use crate::request::{ConversionRequest, FrameMode};
+use crate::request::{ConversionRequest, FrameMode, PdfPage};
 use crate::svg;
 use crate::workspace::Workspace;
 
@@ -89,6 +89,9 @@ pub async fn run_conversion(
     let ext = formats::spec(job.request.target).extension;
     if plan.frames.is_some_and(|f| f.mode == FrameMode::Sequence) {
         return run_series(bins, workspace, job, &plan, cancel, on_progress, started).await;
+    }
+    if job.request.target == TargetFormat::Pdf && job.media.kind == MediaKind::Document {
+        return run_edit(workspace, job, &plan, cancel, on_progress, started).await;
     }
     if job.request.target == TargetFormat::Pdf {
         let inputs = [(job.input.clone(), job.media.clone())];
@@ -331,7 +334,10 @@ async fn run_document(
                             placement,
                         });
                     }
-                    _ => parts.push(pdf::Part::Document(std::fs::read(input)?)),
+                    _ => parts.push(pdf::Part::Pages(
+                        std::fs::read(input)?,
+                        layout_of(&document),
+                    )),
                 }
             }
             Ok(())
@@ -370,6 +376,161 @@ async fn run_document(
         files: 1,
         elapsed: started.elapsed(),
     })
+}
+
+/// Pages of the plan with their turns.
+fn layout_of(document: &DocumentPlan) -> Vec<PdfPage> {
+    document
+        .pages
+        .iter()
+        .enumerate()
+        .map(|(i, &number)| PdfPage {
+            number,
+            rotation: document.rotations.get(i).copied().unwrap_or(0),
+        })
+        .collect()
+}
+
+/// A PDF made from another one: some of its pages, in a new order, turned.
+/// One document goes next to the other outputs; several (a split) go into a
+/// new folder named after the source (`name-pages-01-03.pdf`...). The
+/// documents are built on a worker thread, with cancellation between them.
+async fn run_edit(
+    workspace: &Workspace,
+    job: &ConversionJob,
+    plan: &ConversionPlan,
+    cancel: &CancellationToken,
+    mut on_progress: impl FnMut(Progress) + Send,
+    started: Instant,
+) -> Result<ConversionOutcome, CoreError> {
+    let document = plan
+        .document
+        .clone()
+        .ok_or_else(|| CoreError::UnsupportedConversion {
+            details: "no pages to copy".into(),
+        })?;
+    let temp_dir = workspace.job_dir(job.id);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir)?;
+
+    let data = std::fs::read(&job.input)?;
+    let total = document.parts.len().max(1);
+    let stop = Arc::new(AtomicBool::new(false));
+    let (sender, mut receiver) = tokio::sync::mpsc::channel::<(usize, Vec<u8>)>(1);
+    let editor = {
+        let stop = stop.clone();
+        let (layout, parts) = (layout_of(&document), document.parts.clone());
+        tokio::task::spawn_blocking(move || {
+            pdf::edit(&data, &layout, &parts, &stop, |i, bytes| {
+                sender.blocking_send((i, bytes)).is_ok()
+            })
+        })
+    };
+
+    let result: Result<(), CoreError> = async {
+        let mut done = 0;
+        loop {
+            let part = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(CoreError::Cancelled),
+                part = receiver.recv() => part,
+            };
+            let Some((i, bytes)) = part else {
+                return Ok(());
+            };
+            std::fs::write(temp_dir.join(format!("part-{i:06}.pdf")), &bytes)?;
+            done += 1;
+            on_progress(fraction(done, total));
+        }
+    }
+    .await;
+    // Stop the editor (if still working) and collect its own outcome.
+    stop.store(true, Ordering::Relaxed);
+    drop(receiver);
+    let edited = editor
+        .await
+        .map_err(|e| CoreError::Io(std::io::Error::other(e)))?;
+    let outcome = result.and(match edited {
+        // Stopped by us after an error or a cancellation: already reported.
+        Err(CoreError::Cancelled) if cancel.is_cancelled() => Err(CoreError::Cancelled),
+        other => other,
+    });
+    if let Err(e) = outcome {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Err(e);
+    }
+
+    let stem = output_stem(&job.input);
+    let options = job.request.pdf.clone().unwrap_or_default();
+    let names = part_names(
+        &stem,
+        &document.pages,
+        &document.parts,
+        &label(options.page_label.as_deref(), "page"),
+        &label(options.pages_label.as_deref(), "pages"),
+    );
+    let output_dir = job.output_dir.clone();
+    let temp = temp_dir.clone();
+    let moved = tokio::task::spawn_blocking(move || {
+        if names.is_empty() {
+            let file = temp.join(format!("part-{:06}.pdf", 0));
+            let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+            return naming::move_to_unique(&file, &output_dir, &stem, "pdf")
+                .map(|path| (path, 1, size));
+        }
+        naming::move_series_named(&temp, &output_dir, &stem, "pdf", |i, _| names[i].clone())
+    })
+    .await
+    .map_err(|e| CoreError::Io(std::io::Error::other(e)));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let (output, files, size_bytes) = moved??;
+    Ok(ConversionOutcome {
+        output,
+        size_bytes,
+        files,
+        elapsed: started.elapsed(),
+    })
+}
+
+/// File names of the documents of a split (empty: no split). Each is named
+/// after its first and last page: the page numbers of the source when the
+/// order is unchanged, otherwise positions in the new document.
+fn part_names(
+    stem: &OsStr,
+    pages: &[u32],
+    parts: &[u32],
+    page_label: &str,
+    pages_label: &str,
+) -> Vec<OsString> {
+    if parts.len() < 2 {
+        return Vec::new();
+    }
+    let in_order = pages.is_sorted();
+    let number = |position: usize| {
+        if in_order {
+            pages[position]
+        } else {
+            position as u32 + 1
+        }
+    };
+    let digits = number(pages.len() - 1).to_string().len().max(2);
+    let mut start = 0;
+    parts
+        .iter()
+        .map(|&size| {
+            let (first, last) = (number(start), number(start + size as usize - 1));
+            start += size as usize;
+            let mut name = stem.to_os_string();
+            if size == 1 {
+                name.push(format!("-{page_label}-{first:0digits$}.pdf"));
+            } else {
+                name.push(format!(
+                    "-{pages_label}-{first:0digits$}-{last:0digits$}.pdf"
+                ));
+            }
+            name
+        })
+        .collect()
 }
 
 /// Pages of a PDF as pictures, in a new folder named after the document:
@@ -454,11 +615,12 @@ async fn run_pages(
     }
 
     let stem = output_stem(&job.input);
-    let label = page_label(
+    let label = label(
         job.request
             .pdf
             .as_ref()
             .and_then(|p| p.page_label.as_deref()),
+        "page",
     );
     let numbers = document.pages.clone();
     let digits = document
@@ -496,9 +658,9 @@ async fn run_pages(
     })
 }
 
-/// Word between the name and the number of page pictures: letters only
-/// (the UI sends "pagina" or "page"), "page" otherwise.
-fn page_label(label: Option<&str>) -> String {
+/// Word between the name and page numbers in file names: letters only (the
+/// UI sends "pagina" or "page"), `fallback` otherwise.
+fn label(label: Option<&str>, fallback: &str) -> String {
     let clean: String = label
         .unwrap_or_default()
         .chars()
@@ -506,7 +668,7 @@ fn page_label(label: Option<&str>) -> String {
         .take(20)
         .collect();
     if clean.is_empty() {
-        "page".into()
+        fallback.into()
     } else {
         clean
     }
@@ -731,5 +893,29 @@ mod tests {
             output_stem(Path::new("Musica/Perché sì — live.wav")),
             OsString::from("Perché sì — live")
         );
+    }
+
+    #[test]
+    fn split_documents_are_named_after_their_pages() {
+        let names = |pages: &[u32], parts: &[u32]| -> Vec<String> {
+            part_names(OsStr::new("Atto"), pages, parts, "pagina", "pagine")
+                .into_iter()
+                .map(|n| n.into_string().unwrap())
+                .collect()
+        };
+        assert!(names(&[1, 2, 3], &[]).is_empty());
+        assert_eq!(
+            names(&[1, 2, 3, 5], &[3, 1]),
+            ["Atto-pagine-01-03.pdf", "Atto-pagina-05.pdf"]
+        );
+        // A new order: positions in the new document.
+        assert_eq!(
+            names(&[3, 1, 2], &[1, 2]),
+            ["Atto-pagina-01.pdf", "Atto-pagine-02-03.pdf"]
+        );
+        let long: Vec<u32> = (1..=120).collect();
+        assert_eq!(names(&long, &[100, 20])[1], "Atto-pagine-101-120.pdf");
+        assert_eq!(label(Some("pa/gi..na"), "page"), "pagina");
+        assert_eq!(label(None, "pages"), "pages");
     }
 }

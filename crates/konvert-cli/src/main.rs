@@ -19,6 +19,8 @@
 //!          --page-size a4|letter|fit  --orientation auto|portrait|landscape
 //!          --margin none|small|normal   (pictures to PDF)
 //!          --dpi N  --pages "1-3, 5"   (PDF to pictures)
+//!          --layout "3, 1-2, 5@90"  --rotate 90|180|270
+//!          --split-every N | --split-after "2, 5"   (PDF to PDF)
 //! ```
 //!
 //! The engine directory defaults to `$KONVERT_FFMPEG_DIR`, then to
@@ -31,10 +33,10 @@ use std::process::ExitCode;
 
 use konvert_core::{
     AdvancedOptions, Binaries, ChannelLayout, CombinedJob, ConversionJob, ConversionRequest,
-    CoreError, FrameMode, FrameOptions, PageMargin, PageOrientation, PageSize, PdfOptions,
-    Progress, QualityPreset, TargetFormat, Workspace, available_targets, engine_encoders,
-    engine_version, formats::supported_targets, plan_conversion, probe, run_combined,
-    run_conversion, workspace,
+    CoreError, FrameMode, FrameOptions, MediaInfo, PageMargin, PageOrientation, PageSize,
+    PdfOptions, PdfPage, PdfSplit, Progress, QualityPreset, TargetFormat, Workspace,
+    available_targets, engine_encoders, engine_version, formats::supported_targets,
+    plan_conversion, probe, run_combined, run_conversion, workspace,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -53,7 +55,9 @@ OPTIONS: --preset max|balanced|small  --height N  --fps N
          --remove-location   (erase GPS data and location tags)
          --page-size a4|letter|fit  --orientation auto|portrait|landscape
          --margin none|small|normal   (pictures to PDF)
-         --dpi N  --pages \"1-3, 5\"   (PDF to pictures)";
+         --dpi N  --pages \"1-3, 5\"   (PDF to pictures)
+         --layout \"3, 1-2, 5@90\"  --rotate 90|180|270
+         --split-every N | --split-after \"2, 5\"   (PDF to PDF)";
 
 enum Action {
     Version,
@@ -67,6 +71,57 @@ enum Action {
 struct Cli {
     ffmpeg_dir: PathBuf,
     action: Action,
+    /// `--rotate`: turn every page of the new PDF.
+    rotate: Option<u16>,
+}
+
+/// `"3, 1-2, 5@90"`: pages in this order (a range may go backwards), each
+/// group optionally turned clockwise by 90, 180 or 270 degrees.
+fn parse_layout(text: &str) -> Result<Vec<PdfPage>, String> {
+    let mut pages = Vec::new();
+    for part in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let wrong = || format!("invalid layout \"{part}\"");
+        let (range, rotation) = match part.split_once('@') {
+            Some((range, turn)) => (range, turn.trim().parse().map_err(|_| wrong())?),
+            None => (part, 0),
+        };
+        let number = |s: &str| s.trim().parse::<u32>().map_err(|_| wrong());
+        let (first, last) = match range.split_once('-') {
+            Some((a, b)) => (number(a)?, number(b)?),
+            None => (number(range)?, number(range)?),
+        };
+        let numbers: Vec<u32> = if first <= last {
+            (first..=last).collect()
+        } else {
+            (last..=first).rev().collect()
+        };
+        pages.extend(
+            numbers
+                .into_iter()
+                .map(|number| PdfPage { number, rotation }),
+        );
+    }
+    Ok(pages)
+}
+
+/// Applies `--rotate` to every page of the new PDF (every page of the
+/// document when no `--layout` was given).
+fn rotate_pages(request: &mut ConversionRequest, media: &MediaInfo, rotate: Option<u16>) {
+    let (Some(turn), Some(info)) = (rotate, media.document.as_ref()) else {
+        return;
+    };
+    let pdf = request.pdf.get_or_insert_default();
+    let layout = pdf.layout.get_or_insert_with(|| {
+        (1..=info.pages)
+            .map(|number| PdfPage {
+                number,
+                rotation: 0,
+            })
+            .collect()
+    });
+    for page in layout {
+        page.rotation = (page.rotation + turn) % 360;
+    }
 }
 
 fn parse_args() -> Result<Cli, String> {
@@ -80,6 +135,7 @@ fn parse_args() -> Result<Cli, String> {
     let mut frames: Option<FrameOptions> = None;
     let mut remove_location = false;
     let mut pdf: Option<PdfOptions> = None;
+    let mut rotate = None;
 
     fn number<T: std::str::FromStr>(name: &str, v: OsString) -> Result<T, String> {
         v.to_str()
@@ -169,6 +225,26 @@ fn parse_args() -> Result<Cli, String> {
                 pdf.get_or_insert_default().pages =
                     Some(value("--pages")?.to_string_lossy().into_owned())
             }
+            Some("--layout") => {
+                pdf.get_or_insert_default().layout =
+                    Some(parse_layout(&value("--layout")?.to_string_lossy())?)
+            }
+            Some("--rotate") => rotate = Some(number("--rotate", value("--rotate")?)?),
+            Some("--split-every") => {
+                let pdf = pdf.get_or_insert_default();
+                pdf.split = PdfSplit::Every;
+                pdf.split_every = number("--split-every", value("--split-every")?)?;
+            }
+            Some("--split-after") => {
+                let pdf = pdf.get_or_insert_default();
+                pdf.split = PdfSplit::After;
+                pdf.split_after = value("--split-after")?
+                    .to_string_lossy()
+                    .split(',')
+                    .map(|n| n.trim().parse())
+                    .collect::<Result<_, _>>()
+                    .map_err(|_| "--split-after needs page positions such as \"2, 5\"")?;
+            }
             Some("--mono") => advanced.channels = Some(ChannelLayout::Mono),
             Some("--stereo") => advanced.channels = Some(ChannelLayout::Stereo),
             Some("-h" | "--help") => return Err(String::new()),
@@ -218,7 +294,11 @@ fn parse_args() -> Result<Cli, String> {
         }
         _ => return Err(String::new()),
     };
-    Ok(Cli { ffmpeg_dir, action })
+    Ok(Cli {
+        ffmpeg_dir,
+        action,
+        rotate,
+    })
 }
 
 #[tokio::main]
@@ -265,12 +345,14 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
                 &encoders,
             ));
         }
-        Action::Plan(input, request) => {
+        Action::Plan(input, mut request) => {
             let media = probe(&bins, &input).await?;
+            rotate_pages(&mut request, &media, cli.rotate);
             print_json(&plan_conversion(&media, &request, &input)?);
         }
-        Action::Convert(input, request, out_dir) => {
+        Action::Convert(input, mut request, out_dir) => {
             let media = probe(&bins, &input).await?;
+            rotate_pages(&mut request, &media, cli.rotate);
             let plan = plan_conversion(&media, &request, &input)?;
             for warning in &plan.warnings {
                 eprintln!("warning: {warning:?}");

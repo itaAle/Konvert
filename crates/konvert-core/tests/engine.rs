@@ -1617,6 +1617,133 @@ async fn pdfs_are_merged_in_order_without_personal_metadata() {
     assert!(!String::from_utf8_lossy(&data).contains("Mario Rossi"));
 }
 
+fn pdf_rotations(data: &[u8]) -> Vec<i64> {
+    let doc = lopdf::Document::load_mem(data).unwrap();
+    doc.get_pages()
+        .values()
+        .map(|id| {
+            let page = doc.get_dictionary(*id).unwrap();
+            page.get(b"Rotate")
+                .and_then(lopdf::Object::as_i64)
+                .unwrap_or(0)
+        })
+        .collect()
+}
+
+fn pdf_page(number: u32, rotation: u16) -> konvert_core::PdfPage {
+    konvert_core::PdfPage { number, rotation }
+}
+
+#[tokio::test]
+async fn pages_of_a_pdf_are_extracted_reordered_and_turned() {
+    let bins = engine();
+    let tmp = TempDir::new("pdf-edit");
+    let path = tmp.path("Atto è.pdf");
+    std::fs::write(
+        &path,
+        fixtures::pdf(&[A4, (A4.1, A4.0), (200.0, 100.0), A4]),
+    )
+    .unwrap();
+    let mut request = req(TargetFormat::Pdf, QualityPreset::Balanced);
+    request.pdf = Some(konvert_core::PdfOptions {
+        layout: Some(vec![pdf_page(3, 90), pdf_page(1, 0), pdf_page(4, 180)]),
+        ..Default::default()
+    });
+    let (outcome, edited) = convert(&bins, &tmp, &path, request).await;
+    assert_eq!(outcome.files, 1);
+    assert!(
+        outcome.output.ends_with("out/Atto è.pdf"),
+        "{:?}",
+        outcome.output
+    );
+    // The first page is the small one, turned a quarter.
+    let doc = edited.document.unwrap();
+    assert_eq!((doc.pages, doc.width_pt, doc.height_pt), (3, 100.0, 200.0));
+    let data = std::fs::read(&outcome.output).unwrap();
+    assert_eq!(pdf_page_sizes(&data), [(200.0, 100.0), A4, A4]);
+    assert_eq!(pdf_rotations(&data), [90, 0, 180]);
+    let info = pdf_info(&data);
+    assert!(
+        !info.contains("Mario") && !info.contains("D:2026"),
+        "{info}"
+    );
+}
+
+#[tokio::test]
+async fn a_pdf_is_split_into_a_folder_of_pdfs() {
+    let bins = engine();
+    let tmp = TempDir::new("pdf-split");
+    let path = tmp.path("Diviso.pdf");
+    std::fs::write(&path, fixtures::pdf(&[A4; 5])).unwrap();
+    let mut request = req(TargetFormat::Pdf, QualityPreset::Balanced);
+    request.pdf = Some(konvert_core::PdfOptions {
+        split: konvert_core::PdfSplit::Every,
+        split_every: 2,
+        page_label: Some("pagina".into()),
+        pages_label: Some("pagine".into()),
+        ..Default::default()
+    });
+    let (outcome, _) = convert_series(&bins, &tmp, &path, request).await;
+    assert_eq!(outcome.files, 3);
+    assert!(outcome.output.ends_with("out/Diviso"));
+    let names = files_in(&outcome.output);
+    assert_eq!(
+        names,
+        [
+            "Diviso-pagina-05.pdf",
+            "Diviso-pagine-01-02.pdf",
+            "Diviso-pagine-03-04.pdf"
+        ]
+    );
+    let mut pages = Vec::new();
+    for name in &names {
+        let part = probe(&bins, &outcome.output.join(name)).await.unwrap();
+        pages.push(part.document.unwrap().pages);
+    }
+    assert_eq!(pages, [1, 2, 2]);
+    let total: u64 = names
+        .iter()
+        .map(|n| std::fs::metadata(outcome.output.join(n)).unwrap().len())
+        .sum();
+    assert_eq!(outcome.size_bytes, total);
+}
+
+#[tokio::test]
+async fn cancelling_a_split_leaves_nothing_behind() {
+    let bins = engine();
+    let tmp = TempDir::new("pdf-split-cancel");
+    let path = tmp.path("Lungo.pdf");
+    std::fs::write(&path, fixtures::pdf(&vec![A4; 300])).unwrap();
+    let media = probe(&bins, &path).await.unwrap();
+    let out_dir = tmp.path("uscita");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ws = Workspace::create(&tmp.path("ws")).unwrap();
+    let mut request = req(TargetFormat::Pdf, QualityPreset::Balanced);
+    request.pdf = Some(konvert_core::PdfOptions {
+        split: konvert_core::PdfSplit::Every,
+        split_every: 1,
+        ..Default::default()
+    });
+    let job = ConversionJob {
+        id: 2,
+        input: path,
+        media,
+        request,
+        output_dir: out_dir.clone(),
+    };
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    let result = run_conversion(&bins, &ws, &job, &cancel, move |p| {
+        if p.fraction.is_some_and(|f| f > 0.0) {
+            trigger.cancel();
+        }
+    })
+    .await;
+    assert!(matches!(result, Err(CoreError::Cancelled)), "{result:?}");
+    assert!(files_in(&out_dir).is_empty(), "no folder must be created");
+    assert_eq!(files_in(ws.dir()), [".lock"]);
+}
+
 #[tokio::test]
 async fn pages_of_different_sizes_become_pictures_of_matching_sizes() {
     let bins = engine();
