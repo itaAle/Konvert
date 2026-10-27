@@ -16,7 +16,7 @@ import type { Progress } from "../bindings/Progress";
 import type { QualityPreset } from "../bindings/QualityPreset";
 import type { TargetFormat } from "../bindings/TargetFormat";
 import type { TargetOption } from "../bindings/TargetOption";
-import { cutPositions, isEdited, keptCount, layoutOf, type EditorPage } from "./pages";
+import { cutPositions, isEdited, keptCount, layoutOf, moveFile, reconcile, type EditorPage, type PageSource } from "./pages";
 
 export type ItemStatus =
   | "analyzing"
@@ -61,10 +61,11 @@ export interface QueueState {
   removeLocation: boolean;
   /** Pictures to PDF and PDF to pictures. */
   pdf: PdfOptions;
-  /** A single PDF made into a new one: its pages as edited (`null`: untouched). */
+  /** The pages of the PDF being made (a lone PDF, or files combined), as
+   * edited (`null`: untouched). */
   pages: EditorPage[] | null;
-  /** Page numbers after which a split starts a new document (split "after"). */
-  cuts: number[];
+  /** Pages (their `pageId`) after which a split starts a new document (split "after"). */
+  cuts: string[];
   /** The running or finished conversion made one PDF out of every file. */
   combined: boolean;
   /** Bumped whenever the request changes: answers for older requests are discarded. */
@@ -88,7 +89,7 @@ export type QueueAction =
   | { type: "setFrames"; frames: FrameOptions }
   | { type: "setRemoveLocation"; removeLocation: boolean }
   | { type: "setPdf"; pdf: PdfOptions }
-  | { type: "setPages"; pages: EditorPage[] | null; cuts: number[] }
+  | { type: "setPages"; pages: EditorPage[] | null; cuts: string[] }
   | { type: "defaultPreset"; preset: QualityPreset }
   | { type: "planned"; key: number; version: number; plan: ConversionPlan }
   | { type: "planFailed"; key: number; version: number; error: ErrorPayload }
@@ -198,31 +199,66 @@ export function lonePdf(items: QueueItem[]): QueueItem | null {
   return files.length === 1 && files[0].file!.media.kind === "document" ? files[0] : null;
 }
 
-/** A single PDF made into one or more new PDFs (page editor and split). */
+/**
+ * Files combined into one PDF whose pages can be arranged one by one: PDFs
+ * and photos (a Word document has pages only once it is laid out).
+ */
+export function arrangesPages(state: QueueState): boolean {
+  return combines(state) && readyItems(state).every((i) => ["document", "image"].includes(i.file!.media.kind));
+}
+
+/** The PDF being made can be edited page by page: a lone PDF, or files combined. */
 export function editsPdf(state: QueueState): boolean {
-  return state.target === "pdf" && lonePdf(state.items) != null;
+  return state.target === "pdf" && (lonePdf(state.items) != null || arrangesPages(state));
+}
+
+/** Files whose pages are in the page editor, in list order (a photo is one page). */
+export function pageSources(state: QueueState): PageSource[] {
+  return readyItems(state).map((i) => ({
+    key: i.key,
+    count: i.file!.media.kind === "document" ? (i.file!.media.document?.pages ?? 1) : 1,
+  }));
+}
+
+/** The edited pages for the files now in the list (`null`: untouched). */
+function currentPages(state: QueueState): EditorPage[] | null {
+  return state.pages && reconcile(state.pages, pageSources(state));
 }
 
 export function requestOf(state: QueueState): ConversionRequest | null {
   if (!state.target) return null;
   const edit = editsPdf(state);
-  const count = lonePdf(state.items)?.file?.media.document?.pages ?? 0;
+  const sources = pageSources(state);
+  const pages = currentPages(state);
   return {
     target: state.target,
     preset: state.preset,
     advanced: state.advanced,
     frames: state.frames,
     removeLocation: state.removeLocation,
-    // Page edits and splits belong to a single PDF: never to merged files.
+    // Page edits and splits: a lone PDF, or files combined page by page.
     pdf: edit
-      ? { ...state.pdf, layout: layoutOf(state.pages), splitAfter: cutPositions(state.pages, state.cuts, count) }
+      ? { ...state.pdf, layout: layoutOf(pages, sources), splitAfter: cutPositions(pages, state.cuts, sources) }
       : { ...state.pdf, layout: null, split: "none", splitAfter: [] },
   };
 }
 
-/** The request for one file: the shared choices, or a smaller copy in the file's own format. */
+/**
+ * The request for one file: the shared choices (for files combined page by
+ * page, with the pages of that file only: its warnings, its share of the
+ * size; `null` when none of its pages is kept), or a smaller copy in the
+ * format of the file.
+ */
 export function requestFor(state: QueueState, item: QueueItem): ConversionRequest | null {
-  if (!state.compress) return requestOf(state);
+  if (!state.compress) {
+    const request = requestOf(state);
+    if (!request?.pdf || !arrangesPages(state)) return request;
+    const index = pageSources(state).findIndex((s) => s.key === item.key);
+    const own = request.pdf.layout?.filter((p) => p.file === index).map((p) => ({ ...p, file: 0 })) ?? null;
+    if (own && own.length === 0) return null;
+    const photo = item.file?.media.kind === "image";
+    return { ...request, pdf: { ...request.pdf, layout: photo ? null : own, split: "none", splitAfter: [] } };
+  }
   const target = item.file?.compress;
   if (!target) return null;
   return {
@@ -236,18 +272,24 @@ export function requestFor(state: QueueState, item: QueueItem): ConversionReques
   };
 }
 
+/** Items that take part in the conversion: ready, and not left out of the PDF being made. */
+export function plannedItems(state: QueueState): QueueItem[] {
+  return readyItems(state).filter((i) => requestFor(state, i) != null);
+}
+
 /** Documents an edited PDF becomes, by the same rules as the core. */
 export function editedDocuments(state: QueueState): number {
-  const count = lonePdf(state.items)?.file?.media.document?.pages ?? 0;
-  const kept = state.pages ? keptCount(state.pages) : count;
+  const sources = pageSources(state);
+  const pages = currentPages(state);
+  const kept = pages ? keptCount(pages) : sources.reduce((n, s) => n + s.count, 0);
   if (state.pdf.split === "every") return Math.max(1, Math.ceil(kept / Math.max(1, state.pdf.splitEvery)));
-  if (state.pdf.split === "after") return cutPositions(state.pages, state.cuts, count).length + 1;
+  if (state.pdf.split === "after") return cutPositions(pages, state.cuts, sources).length + 1;
   return 1;
 }
 
 /** The edited PDF differs from the original: pages changed, or several documents. */
 export function pdfChanged(state: QueueState): boolean {
-  return isEdited(state.pages) || editedDocuments(state) > 1;
+  return isEdited(currentPages(state), pageSources(state)) || editedDocuments(state) > 1;
 }
 
 /**
@@ -272,14 +314,15 @@ export function resultItems(state: QueueState): QueueItem[] {
 
 export function canStart(state: QueueState): boolean {
   const ready = readyItems(state);
+  const planned = plannedItems(state);
   return (
     state.phase === "setup" &&
     (state.target != null || (state.compress && canCompress(ready))) &&
-    ready.length > 0 &&
+    planned.length > 0 &&
     !state.items.some((i) => i.status === "analyzing") &&
-    ready.every((i) => i.plan && !i.planError) &&
-    // A copy of a PDF with nothing changed would be pointless.
-    (!editsPdf(state) || pdfChanged(state))
+    planned.every((i) => i.plan && !i.planError) &&
+    // A copy of a lone PDF with nothing changed would be pointless.
+    (!editsPdf(state) || combines(state) || pdfChanged(state))
   );
 }
 
@@ -422,23 +465,25 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
 
     case "remove": {
       if (state.phase !== "setup") return state;
-      const removed = state.items.find((i) => i.key === action.key);
       const next = withoutItems(state, state.items.filter((i) => i.key !== action.key));
-      // Page edits belong to the PDF they were made on.
-      return removed?.file?.media.kind === "document" && next.pages
-        ? invalidate({ ...next, pages: null, cuts: [] })
-        : next;
+      // The pages of the file go with it; edits are forgotten once no PDF is made of the files left.
+      if (!next.pages) return next;
+      return invalidate(editsPdf(next) ? next : { ...next, pages: null, cuts: [] });
     }
 
     case "move": {
-      // Order of the pages in a combined PDF.
+      // Order of the files in a combined PDF: edited pages move with their file.
       if (state.phase !== "setup") return state;
       const from = state.items.findIndex((i) => i.key === action.key);
       const to = from + action.delta;
       if (from < 0 || to < 0 || to >= state.items.length) return state;
       const items = [...state.items];
       [items[from], items[to]] = [items[to], items[from]];
-      return { ...state, items };
+      const next = { ...state, items };
+      const order = pageSources(state).map((s) => s.key);
+      const moved = pageSources(next).map((s) => s.key);
+      if (!state.pages || order.indexOf(action.key) === moved.indexOf(action.key)) return next;
+      return invalidate({ ...next, pages: moveFile(currentPages(state)!, order, action.key, action.delta) });
     }
 
     case "selectTarget":

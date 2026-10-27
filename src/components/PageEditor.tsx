@@ -6,15 +6,16 @@ import type { PdfSplit } from "../bindings/PdfSplit";
 import type { Thumbnail } from "../bindings/Thumbnail";
 import { intlLocale, t } from "../i18n";
 import { spring } from "../lib/motion";
-import { useThumbnails } from "../lib/useThumbnails";
+import { useThumbnails, type ThumbnailSource } from "../lib/useThumbnails";
 import {
   everyPositions,
-  initialPages,
   isEdited,
   keepOnly,
   keptCount,
   movePage,
+  pageId,
   parseRange,
+  reconcile,
   rotateAll,
   rotatePage,
   toggleCut,
@@ -29,19 +30,27 @@ const COLUMNS = 5;
 const THUMBNAIL_SIZE = 224;
 /** Beyond this many pages, moving pages is not animated. */
 const ANIMATED_PAGES = 150;
+/** Colors telling the files apart (system colors, readable in both themes). */
+const FILE_COLORS = ["#0a84ff", "#ff9f0a", "#30d158", "#bf5af2", "#ff375f", "#40c8e0", "#ffcc00", "#ac8e68"];
+
+/** A file whose pages are in the editor. */
+export interface EditorSource extends ThumbnailSource {
+  name: string;
+  /** Its pages (a photo is one page). */
+  count: number;
+  /** Size of its first page in points, shown until each thumbnail arrives. */
+  firstPage: { widthPt: number; heightPt: number };
+}
 
 interface PageEditorProps {
-  path: string;
-  /** Pages of the document. */
-  count: number;
-  /** Size of the first page in points, shown until each thumbnail arrives. */
-  firstPage: { widthPt: number; heightPt: number };
+  /** The files, in list order: one PDF, or PDFs and photos combined. */
+  sources: EditorSource[];
   pages: EditorPage[] | null;
-  cuts: number[];
+  cuts: string[];
   split: PdfSplit;
   splitEvery: number;
   /** `pages` is `null` when nothing is changed. */
-  onChange: (pages: EditorPage[] | null, cuts: number[]) => void;
+  onChange: (pages: EditorPage[] | null, cuts: string[]) => void;
 }
 
 interface Drag {
@@ -57,13 +66,14 @@ interface Drag {
 }
 
 /**
- * Pages of a PDF as thumbnails: drag to move a page, buttons (or keys) to turn
- * it or take it out, scissors between pages to choose where a split starts a
- * new document. Thumbnails are drawn locally, only for the pages in view.
+ * Pages of a PDF, or of several files combined into one, as thumbnails: drag
+ * to move a page (also between files), buttons (or keys) to turn it or take
+ * it out, scissors between pages to choose where a split starts a new
+ * document. Thumbnails are drawn locally, only for the pages in view.
  */
-export function PageEditor({ path, count, firstPage, pages, cuts, split, splitEvery, onChange }: PageEditorProps) {
-  const list = useMemo(() => pages ?? initialPages(count), [pages, count]);
-  const { thumbnails, visible } = useThumbnails(path, THUMBNAIL_SIZE);
+export function PageEditor({ sources, pages, cuts, split, splitEvery, onChange }: PageEditorProps) {
+  const list = useMemo(() => reconcile(pages, sources), [pages, sources]);
+  const { thumbnails, visible } = useThumbnails(sources, THUMBNAIL_SIZE);
   const reduceMotion = useReducedMotion();
   const hintId = useId();
   const keepId = useId();
@@ -73,78 +83,85 @@ export function PageEditor({ path, count, firstPage, pages, cuts, split, splitEv
   const [keep, setKeep] = useState("");
   const [keepInvalid, setKeepInvalid] = useState(false);
   const number = (n: number) => new Intl.NumberFormat(intlLocale()).format(n);
+  const many = sources.length > 1;
+  const byKey = useMemo(() => new Map(sources.map((s, i) => [s.key, { ...s, color: FILE_COLORS[i % FILE_COLORS.length] }])), [sources]);
 
   const kept = keptCount(list);
-  const update = (next: EditorPage[], nextCuts = cuts) => onChange(isEdited(next) ? next : null, nextCuts);
+  const update = (next: EditorPage[], nextCuts = cuts) => onChange(isEdited(next, sources) ? next : null, nextCuts);
 
-  // Where a new document starts: after these page numbers.
+  // Where a new document starts: after these pages.
   const cutAfter = useMemo(() => {
     const keptPages = list.filter((p) => !p.removed);
     const positions =
       split === "every"
         ? everyPositions(keptPages.length, splitEvery)
         : split === "after"
-          ? keptPages.flatMap((p, i) => (cuts.includes(p.number) && i < keptPages.length - 1 ? [i + 1] : []))
+          ? keptPages.flatMap((p, i) => (cuts.includes(pageId(p)) && i < keptPages.length - 1 ? [i + 1] : []))
           : [];
-    return new Set(positions.map((position) => keptPages[position - 1].number));
+    return new Set(positions.map((position) => pageId(keptPages[position - 1])));
   }, [list, cuts, split, splitEvery]);
   // First page of each new document, with its number ("PDF 2").
   const partStarts = useMemo(() => {
-    const starts = new Map<number, number>();
+    const starts = new Map<string, number>();
     if (cutAfter.size === 0) return starts;
     let part = 1;
     let starting = true;
     for (const page of list) {
       if (page.removed) continue;
-      if (starting) starts.set(page.number, part++);
-      starting = cutAfter.has(page.number);
+      if (starting) starts.set(pageId(page), part++);
+      starting = cutAfter.has(pageId(page));
     }
     return starts;
   }, [list, cutAfter]);
-  const lastKept = [...list].reverse().find((p) => !p.removed)?.number;
+  const last = [...list].reverse().find((p) => !p.removed);
+  const lastKept = last ? pageId(last) : null;
 
   // --- Thumbnails of the pages in view ----------------------------------------------
-  const elements = useRef(new Map<number, HTMLDivElement>());
-  const refs = useRef(new Map<number, (el: HTMLDivElement | null) => void>());
+  const elements = useRef(new Map<string, HTMLDivElement>());
+  const refs = useRef(new Map<string, (el: HTMLDivElement | null) => void>());
   const observer = useRef<IntersectionObserver | null>(null);
   useEffect(() => {
     const io = new IntersectionObserver(
-      (entries) => entries.forEach((e) => visible(Number((e.target as HTMLElement).dataset.page), e.isIntersecting)),
+      (entries) =>
+        entries.forEach((e) => {
+          const { file, page } = (e.target as HTMLElement).dataset;
+          visible({ file: Number(file), number: Number(page) }, e.isIntersecting);
+        }),
       { rootMargin: "320px 0px" },
     );
     observer.current = io;
     elements.current.forEach((el) => io.observe(el));
     return () => io.disconnect();
   }, [visible]);
-  const refFor = (pageNumber: number) => {
-    let ref = refs.current.get(pageNumber);
+  const refFor = (id: string) => {
+    let ref = refs.current.get(id);
     if (!ref) {
       ref = (el) => {
-        const old = elements.current.get(pageNumber);
+        const old = elements.current.get(id);
         if (old && old !== el) observer.current?.unobserve(old);
         if (el) {
-          elements.current.set(pageNumber, el);
+          elements.current.set(id, el);
           observer.current?.observe(el);
         } else {
-          elements.current.delete(pageNumber);
+          elements.current.delete(id);
         }
       };
-      refs.current.set(pageNumber, ref);
+      refs.current.set(id, ref);
     }
     return ref;
   };
   /** Focuses a page, which will be at `index` once a move is applied. */
-  const focusPage = (index: number, pageNumber: number) => {
+  const focusPage = (index: number, id: string) => {
     setFocus(index);
-    requestAnimationFrame(() => elements.current.get(pageNumber)?.focus());
+    requestAnimationFrame(() => elements.current.get(id)?.focus());
   };
 
   // Turns animate the short way round (270° → 0° turns a quarter, not three).
-  const angles = useRef(new Map<number, { rotation: number; angle: number }>());
+  const angles = useRef(new Map<string, { rotation: number; angle: number }>());
   const angleOf = (page: EditorPage) => {
-    const shown = angles.current.get(page.number);
+    const shown = angles.current.get(pageId(page));
     if (!shown) {
-      angles.current.set(page.number, { rotation: page.rotation, angle: page.rotation });
+      angles.current.set(pageId(page), { rotation: page.rotation, angle: page.rotation });
       return page.rotation;
     }
     if (shown.rotation !== page.rotation) {
@@ -160,7 +177,7 @@ export function PageEditor({ path, count, firstPage, pages, cuts, split, splitEv
   const insertionAt = (x: number, y: number) => {
     let best: { index: number; distance: number; after: boolean } | null = null;
     list.forEach((page, index) => {
-      const rect = elements.current.get(page.number)?.getBoundingClientRect();
+      const rect = elements.current.get(pageId(page))?.getBoundingClientRect();
       if (!rect) return;
       const cx = rect.left + rect.width / 2;
       const cy = rect.top + rect.height / 2;
@@ -216,11 +233,11 @@ export function PageEditor({ path, count, firstPage, pages, cuts, split, splitEv
     if (!drop || !d.active || d.before == null) return;
     const to = d.before > d.from ? d.before - 1 : d.before;
     if (to !== d.from) update(movePage(list, d.from, to));
-    focusPage(to, list[d.from].number);
+    focusPage(to, pageId(list[d.from]));
   };
 
   // --- Keyboard: the same actions as the pointer -------------------------------------
-  const toggleCutAfter = (page: EditorPage) => onChange(pages, toggleCut(cuts, page.number));
+  const toggleCutAfter = (page: EditorPage) => onChange(pages, toggleCut(cuts, pageId(page)));
   const onKeyDown = (e: KeyboardEvent, index: number) => {
     const page = list[index];
     const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -COLUMNS, ArrowDown: COLUMNS }[e.key];
@@ -231,33 +248,41 @@ export function PageEditor({ path, count, firstPage, pages, cuts, split, splitEv
       const moving = (e.ctrlKey || e.metaKey) && target !== index;
       if (moving) update(movePage(list, index, target));
       // A moved page keeps the focus; otherwise it goes to the page there.
-      focusPage(target, moving ? page.number : list[target].number);
+      focusPage(target, pageId(moving ? page : list[target]));
     } else if (e.key === "r" || e.key === "R") {
       e.preventDefault();
       if (!page.removed) update(rotatePage(list, index, e.shiftKey ? -90 : 90));
     } else if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault();
       update(toggleRemoved(list, index));
-    } else if ((e.key === "s" || e.key === "S") && split === "after" && !page.removed && page.number !== lastKept) {
+    } else if ((e.key === "s" || e.key === "S") && split === "after" && !page.removed && pageId(page) !== lastKept) {
       e.preventDefault();
       toggleCutAfter(page);
     }
   };
 
+  const single = sources.length === 1 ? sources[0] : null;
   const applyKeep = () => {
-    const numbers = parseRange(keep, count);
+    const numbers = parseRange(keep, single?.count ?? 0);
     setKeepInvalid(numbers == null);
     if (numbers) update(keepOnly(list, numbers));
   };
 
   const animate = !reduceMotion && list.length <= ANIMATED_PAGES;
   const dragged = drag?.active ? list[drag.from] : null;
+  const fallback = (page: EditorPage) => {
+    const source = byKey.get(page.file);
+    if (source?.picture) return { widthPt: source.picture.width, heightPt: source.picture.height };
+    return source?.firstPage ?? { widthPt: 595, heightPt: 842 };
+  };
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-1 px-1">
         <p className="min-w-0 flex-1 truncate text-[13px] text-label-secondary" aria-live="polite">
-          {kept === count ? t("pdf.pages", { n: number(count) }) : t("pdf.pagesKept", { kept: number(kept), n: number(count) })}
+          {kept === list.length
+            ? t("pdf.pages", { n: number(list.length) })
+            : t("pdf.pagesKept", { kept: number(kept), n: number(list.length) })}
         </p>
         <IconButton label={t("pdf.rotateAllLeft")} onClick={() => update(rotateAll(list, -90))}>
           <RotateCcw size={16} aria-hidden />
@@ -265,10 +290,21 @@ export function PageEditor({ path, count, firstPage, pages, cuts, split, splitEv
         <IconButton label={t("pdf.rotateAllRight")} onClick={() => update(rotateAll(list, 90))}>
           <RotateCw size={16} aria-hidden />
         </IconButton>
-        <Button variant="plain" size="sm" disabled={!isEdited(list) && cuts.length === 0} onClick={() => onChange(null, [])}>
+        <Button variant="plain" size="sm" disabled={!isEdited(list, sources) && cuts.length === 0} onClick={() => onChange(null, [])}>
           {t("pdf.restoreAll")}
         </Button>
       </div>
+
+      {many && (
+        <ul aria-label={t("pdf.files")} className="flex flex-wrap gap-x-4 gap-y-1 px-1">
+          {[...byKey.values()].map((source) => (
+            <li key={source.key} className="flex min-w-0 max-w-full items-center gap-1.5 text-[12px] text-label-secondary">
+              <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ backgroundColor: source.color }} />
+              <span className="truncate">{source.name}</span>
+            </li>
+          ))}
+        </ul>
+      )}
 
       <ul
         aria-label={t("pdf.editTitle")}
@@ -276,14 +312,22 @@ export function PageEditor({ path, count, firstPage, pages, cuts, split, splitEv
         className={`grid grid-cols-5 gap-x-3 gap-y-2 ${drag?.active ? "cursor-grabbing" : ""}`}
       >
         {list.map((page, index) => {
-          const thumbnail = thumbnails.get(page.number);
-          const cut = cutAfter.has(page.number);
-          const part = partStarts.get(page.number);
-          const canCut = split === "after" && !page.removed && page.number !== lastKept;
+          const id = pageId(page);
+          const source = byKey.get(page.file);
+          const photo = source?.picture != null;
+          const thumbnail = thumbnails.get(id);
+          const cut = cutAfter.has(id);
+          const part = partStarts.get(id);
+          const canCut = split === "after" && !page.removed && id !== lastKept;
           const insertBefore = drag?.active && drag.before === index && drag.before !== drag.from && drag.before !== drag.from + 1;
           const insertAfter = drag?.active && index === list.length - 1 && drag.before === list.length && drag.from !== list.length - 1;
+          const name = photo
+            ? t("pdf.photoOf", { file: source!.name })
+            : many
+              ? t("pdf.pageOf", { n: page.number, file: source?.name ?? "" })
+              : t("pdf.page", { n: page.number });
           const label = [
-            t("pdf.page", { n: page.number }),
+            name,
             page.rotation ? t("pdf.pageTurned", { n: page.rotation }) : null,
             page.removed ? t("pdf.pageRemoved") : null,
             cut ? t("pdf.pageCut") : null,
@@ -291,13 +335,15 @@ export function PageEditor({ path, count, firstPage, pages, cuts, split, splitEv
             .filter(Boolean)
             .join(", ");
           return (
-            <motion.li key={page.number} layout={animate ? "position" : false} transition={spring} className="relative min-w-0">
+            <motion.li key={id} layout={animate ? "position" : false} transition={spring} className="relative min-w-0">
               <div
-                ref={refFor(page.number)}
+                ref={refFor(id)}
+                data-file={page.file}
                 data-page={page.number}
                 role="group"
                 aria-label={label}
                 aria-describedby={hintId}
+                title={many ? source?.name : undefined}
                 tabIndex={index === focus ? 0 : -1}
                 onFocus={() => setFocus(index)}
                 onKeyDown={(e) => onKeyDown(e, index)}
@@ -311,7 +357,7 @@ export function PageEditor({ path, count, firstPage, pages, cuts, split, splitEv
               >
                 <PageImage
                   thumbnail={thumbnail}
-                  fallback={firstPage}
+                  fallback={fallback(page)}
                   rotation={page.rotation}
                   angle={angleOf(page)}
                   removed={page.removed}
@@ -346,9 +392,12 @@ export function PageEditor({ path, count, firstPage, pages, cuts, split, splitEv
                   </PageButton>
                 </div>
               </div>
-              <p className="mt-1 truncate text-center text-[12px] text-label-secondary tabular-nums">
-                {page.number}
-                {page.rotation ? ` · ${page.rotation}°` : ""}
+              <p className="mt-1 flex items-center justify-center gap-1 truncate text-center text-[12px] text-label-secondary tabular-nums">
+                {many && <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={{ backgroundColor: source?.color }} />}
+                <span className="truncate">
+                  {photo ? t("pdf.photo") : page.number}
+                  {page.rotation ? ` · ${page.rotation}°` : ""}
+                </span>
               </p>
               {(insertBefore || insertAfter) && (
                 <span
@@ -361,7 +410,11 @@ export function PageEditor({ path, count, firstPage, pages, cuts, split, splitEv
                 <CutMark
                   active={cut}
                   editable={canCut}
-                  label={cut ? t("pdf.uncutAfter", { n: page.number }) : t("pdf.cutAfter", { n: page.number })}
+                  label={
+                    many
+                      ? t(cut ? "pdf.uncutAfterPage" : "pdf.cutAfterPage", { page: name })
+                      : t(cut ? "pdf.uncutAfter" : "pdf.cutAfter", { n: page.number })
+                  }
                   onClick={() => toggleCutAfter(page)}
                 />
               )}
@@ -375,7 +428,7 @@ export function PageEditor({ path, count, firstPage, pages, cuts, split, splitEv
         <span className="sr-only"> {t("pdf.keyboardHint")}</span>
       </p>
 
-      {count > 1 && (
+      {single && single.count > 1 && (
         <div className="flex flex-col gap-1.5 px-1">
           <label htmlFor={keepId} className="px-1 text-[12px] font-medium text-label-secondary">
             {t("pdf.keep")}
@@ -419,8 +472,8 @@ export function PageEditor({ path, count, firstPage, pages, cuts, split, splitEv
         >
           <div className="relative aspect-square">
             <PageImage
-              thumbnail={thumbnails.get(dragged.number)}
-              fallback={firstPage}
+              thumbnail={thumbnails.get(pageId(dragged))}
+              fallback={fallback(dragged)}
               rotation={dragged.rotation}
               angle={dragged.rotation}
               removed={dragged.removed}

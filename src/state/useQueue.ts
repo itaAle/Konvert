@@ -21,6 +21,7 @@ import {
   queueReducer,
   readyItems,
   requestFor,
+  requestOf,
   totalEstimate,
   type QueueItem,
 } from "./queue";
@@ -163,7 +164,8 @@ export function useQueue() {
     // The backend runs one job at a time; queue them all now, in order.
     for (const group of groups) {
       if (cancelling.current) break;
-      const base = requestFor(s, group[0]);
+      // A combined PDF gets the pages of every file (each file was planned with its own).
+      const base = group.length > 1 ? requestOf(s) : requestFor(s, group[0]);
       if (!base) continue;
       const request = labelled(base);
       try {
@@ -222,7 +224,7 @@ export function useQueue() {
     setFrames: (frames: FrameOptions) => dispatch({ type: "setFrames", frames }),
     setRemoveLocation: (removeLocation: boolean) => dispatch({ type: "setRemoveLocation", removeLocation }),
     setPdf: (pdf: PdfOptions) => dispatch({ type: "setPdf", pdf }),
-    setPages: (pages: EditorPage[] | null, cuts: number[]) => dispatch({ type: "setPages", pages, cuts }),
+    setPages: (pages: EditorPage[] | null, cuts: string[]) => dispatch({ type: "setPages", pages, cuts }),
     start,
     cancelAll,
     back: () => dispatch({ type: "back" }),

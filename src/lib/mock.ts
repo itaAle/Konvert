@@ -198,6 +198,33 @@ function mockPage(number: number, widthPt: number, heightPt: number, size: numbe
   return canvas.toDataURL("image/png");
 }
 
+/** A photo for the page editor: sky, sun and hills, in the photo's proportions. */
+function mockPhoto(path: string, width: number, height: number, size: number): string {
+  const scale = size / Math.max(width, height);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(width * scale);
+  canvas.height = Math.round(height * scale);
+  const g = canvas.getContext("2d")!;
+  const hue = [...path].reduce((h, c) => h + c.charCodeAt(0), 0) % 360;
+  const sky = g.createLinearGradient(0, 0, 0, canvas.height);
+  sky.addColorStop(0, `hsl(${hue} 70% 70%)`);
+  sky.addColorStop(1, `hsl(${(hue + 40) % 360} 60% 88%)`);
+  g.fillStyle = sky;
+  g.fillRect(0, 0, canvas.width, canvas.height);
+  g.fillStyle = "#ffd60a";
+  g.beginPath();
+  g.arc(canvas.width * 0.72, canvas.height * 0.3, canvas.width * 0.09, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = `hsl(${(hue + 120) % 360} 35% 38%)`;
+  g.beginPath();
+  g.moveTo(0, canvas.height);
+  g.quadraticCurveTo(canvas.width * 0.3, canvas.height * 0.45, canvas.width * 0.6, canvas.height * 0.8);
+  g.quadraticCurveTo(canvas.width * 0.85, canvas.height * 0.6, canvas.width, canvas.height * 0.75);
+  g.lineTo(canvas.width, canvas.height);
+  g.fill();
+  return canvas.toDataURL("image/png");
+}
+
 function analysis(path: string): FileAnalysis {
   const name = path.split(/[\\/]/).pop() ?? path;
   if (/\.pdf$/i.test(name)) {
@@ -393,6 +420,11 @@ export const mockBackend: Backend = {
         const [widthPt, heightPt] = number === 3 ? [841.9, 595.3] : [595.3, 841.9];
         return { number, widthPt, heightPt, dataUrl: mockPage(number, widthPt, heightPt, size) };
       });
+  },
+  async pictureThumbnail(path, size) {
+    await sleep(300);
+    const shown = analysis(path).media.video[0];
+    return mockPhoto(path, shown?.width ?? 3, shown?.height ?? 4, size);
   },
   async planConversion(_path, media, request) {
     if (request.compress) {

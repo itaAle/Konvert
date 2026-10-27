@@ -1,48 +1,72 @@
-// Thumbnails of the pages of a PDF, drawn by the backend a few at a time and
-// only for the pages that come into view. Nothing here leaves the computer:
-// each batch is one local IPC call.
+// Thumbnails of the pages in the page editor, drawn by the backend a few at a
+// time and only for the pages that come into view: pages of PDFs, and photos
+// (one page each). Nothing here leaves the computer: each batch is one local
+// IPC call.
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { Thumbnail } from "../bindings/Thumbnail";
+import { pageId } from "../state/pages";
 import { backend } from "./api";
 
 /** Pages drawn per call (the backend accepts up to 48). */
 const BATCH = 12;
 
-export function useThumbnails(path: string, size: number) {
-  const [thumbnails, setThumbnails] = useState<ReadonlyMap<number, Thumbnail>>(new Map());
+/** A file whose pages are shown. */
+export interface ThumbnailSource {
+  key: number;
+  path: string;
+  /** A photo: its size in pixels, as shown (one page). */
+  picture: { width: number; height: number } | null;
+}
+
+export function useThumbnails(sources: ThumbnailSource[], size: number) {
+  const [thumbnails, setThumbnails] = useState<ReadonlyMap<string, Thumbnail>>(new Map());
   // Pages in view and not drawn yet, pages already asked for, one call at a time.
-  const wanted = useRef(new Set<number>());
-  const asked = useRef(new Set<number>());
+  const wanted = useRef(new Map<string, { file: number; number: number }>());
+  const asked = useRef(new Set<string>());
   const busy = useRef(false);
-  const current = useRef(path);
+  const files = useRef(new Map<number, ThumbnailSource>());
+  files.current = new Map(sources.map((s) => [s.key, s]));
 
   useEffect(() => {
-    current.current = path;
     wanted.current.clear();
     asked.current.clear();
     setThumbnails(new Map());
-  }, [path, size]);
+  }, [size]);
 
   const pump = useCallback(() => {
     if (busy.current) return;
-    const batch = [...wanted.current].slice(0, BATCH);
-    if (batch.length === 0) return;
-    batch.forEach((n) => {
-      wanted.current.delete(n);
-      asked.current.add(n);
+    const first = wanted.current.values().next().value;
+    if (!first) return;
+    const source = files.current.get(first.file);
+    // The pages of one file at a time.
+    const batch = [...wanted.current.values()].filter((p) => p.file === first.file).slice(0, source?.picture ? 1 : BATCH);
+    batch.forEach((p) => {
+      wanted.current.delete(pageId(p));
+      asked.current.add(pageId(p));
     });
+    if (!source) {
+      pump();
+      return;
+    }
     busy.current = true;
-    const forPath = path;
-    backend
-      .pdfThumbnails(path, batch, size)
+    const picture = source.picture;
+    const drawn: Promise<Thumbnail[]> = picture
+      ? backend
+          .pictureThumbnail(source.path, size)
+          .then((dataUrl) => [{ number: 1, widthPt: picture.width, heightPt: picture.height, dataUrl }])
+      : backend.pdfThumbnails(
+          source.path,
+          batch.map((p) => p.number),
+          size,
+        );
+    drawn
       // A page that cannot be drawn shows a placeholder instead of a picture.
-      .catch((): Thumbnail[] => batch.map((number) => ({ number, widthPt: 0, heightPt: 0, dataUrl: "" })))
-      .then((drawn) => {
-        if (current.current !== forPath) return;
+      .catch((): Thumbnail[] => batch.map(({ number }) => ({ number, widthPt: 0, heightPt: 0, dataUrl: "" })))
+      .then((pages) => {
         setThumbnails((previous) => {
           const next = new Map(previous);
-          drawn.forEach((t) => next.set(t.number, t));
+          pages.forEach((t) => next.set(pageId({ file: source.key, number: t.number }), t));
           return next;
         });
       })
@@ -50,17 +74,18 @@ export function useThumbnails(path: string, size: number) {
         busy.current = false;
         pump();
       });
-  }, [path, size]);
+  }, [size]);
 
   /** A page came into view (`true`) or left it before being drawn (`false`). */
   const visible = useCallback(
-    (number: number, inView: boolean) => {
+    (page: { file: number; number: number }, inView: boolean) => {
+      const id = pageId(page);
       if (!inView) {
-        wanted.current.delete(number);
+        wanted.current.delete(id);
         return;
       }
-      if (asked.current.has(number)) return;
-      wanted.current.add(number);
+      if (asked.current.has(id)) return;
+      wanted.current.set(id, page);
       // Gather the pages that appear together into one call.
       setTimeout(pump, 0);
     },

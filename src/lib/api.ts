@@ -37,6 +37,8 @@ export interface Backend {
   planConversion(path: string, media: MediaInfo, request: ConversionRequest): Promise<ConversionPlan>;
   /** Small pictures of some pages of a PDF (longest side `size` pixels), drawn locally. */
   pdfThumbnails(path: string, pages: number[], size: number): Promise<Thumbnail[]>;
+  /** A small picture of a photo (longest side `size` pixels at most) as a `data:` URL, drawn locally. */
+  pictureThumbnail(path: string, size: number): Promise<string>;
   startConversion(path: string, request: ConversionRequest): Promise<number>;
   /** One job that turns every file, in order, into a single PDF. */
   startCombined(paths: string[], request: ConversionRequest): Promise<number>;
@@ -87,6 +89,7 @@ const tauriBackend: Backend = {
   analyzeFile: (path) => call("analyze_file", { path }),
   planConversion: (path, media, request) => call("plan_conversion", { path, media, request }),
   pdfThumbnails: (path, pages, size) => call("pdf_thumbnails", { path, pages, size }),
+  pictureThumbnail: (path, size) => call("picture_thumbnail", { path, size }),
   startConversion: (path, request) => call("start_conversion", { path, request }),
   startCombined: (paths, request) => call("start_combined", { paths, request }),
   cancelConversion: (jobId) => call("cancel_conversion", { jobId }),

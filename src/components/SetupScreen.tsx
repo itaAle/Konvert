@@ -1,6 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Info, Plus } from "lucide-react";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import type { TargetFormat } from "../bindings/TargetFormat";
 import { t } from "../i18n";
@@ -15,6 +15,7 @@ import {
   editsPdf,
   lonePdf,
   pdfChanged,
+  plannedItems,
   readyItems,
   totalEstimate,
 } from "../state/queue";
@@ -28,7 +29,7 @@ import { FileList } from "./FileList";
 import { FormatGrid } from "./FormatGrid";
 import { FramesPanel } from "./FramesPanel";
 import { LocationRow } from "./LocationRow";
-import { PageEditor } from "./PageEditor";
+import { PageEditor, type EditorSource } from "./PageEditor";
 import { PagesPanel } from "./PagesPanel";
 import { PdfPanel } from "./PdfPanel";
 import { PlanFooterInfo, PlanSummary, hasStrongWarning, isRemux } from "./PlanSummary";
@@ -53,11 +54,13 @@ export function SetupScreen({ q }: { q: QueueController }) {
   const ready = readyItems(state);
   const analyzing = state.items.some((i) => i.status === "analyzing");
   const option = targets.find((o) => o.format === state.target) ?? null;
-  const warnings = allWarnings(ready);
-  const planError = ready.find((i) => i.planError)?.planError ?? null;
-  const allPlanned = ready.length > 0 && ready.every((i) => i.plan);
-  const estimate = allPlanned ? totalEstimate(ready) : null;
-  const remux = allPlanned && ready.every((i) => isRemux(i.plan!));
+  // Files left out of the PDF being made are not planned.
+  const planned = plannedItems(state);
+  const warnings = allWarnings(planned);
+  const planError = planned.find((i) => i.planError)?.planError ?? null;
+  const allPlanned = planned.length > 0 && planned.every((i) => i.plan);
+  const estimate = allPlanned ? totalEstimate(planned) : null;
+  const remux = allPlanned && planned.every((i) => isRemux(i.plan!));
   // Pictures from videos: the moment must exist in every video.
   const durations = ready.map((i) => i.file?.media.durationSecs ?? null);
   const shortest = durations.every((d) => d != null) && durations.length > 0 ? Math.min(...(durations as number[])) : null;
@@ -74,11 +77,32 @@ export function SetupScreen({ q }: { q: QueueController }) {
   const pagePictures = allPlanned && pageCounts.every((n) => n != null) ? (pageCounts as number[]).reduce((a, b) => a + b, 0) : null;
   const invalidPages = planError?.code === "invalid_pages";
   const together = combines(state);
-  // A lone PDF made into new PDFs: its pages are edited, maybe split.
+  // A lone PDF made into new PDFs, or PDFs and photos combined: their pages
+  // are edited, maybe split.
   const lone = lonePdf(state.items);
-  const editing = editsPdf(state) && lone != null;
+  const editing = editsPdf(state);
   const documentCount = editing ? editedDocuments(state) : null;
-  const unchanged = editing && !pdfChanged(state);
+  const unchanged = editing && !together && !pdfChanged(state);
+  const editorSources = useMemo<EditorSource[]>(
+    () =>
+      editing
+        ? state.items
+            .filter((i) => i.status === "ready" && i.file)
+            .map((i) => {
+              const media = i.file!.media;
+              const photo = media.kind === "image" ? media.video[0] : null;
+              return {
+                key: i.key,
+                path: i.path,
+                name: i.name,
+                count: media.kind === "document" ? (media.document?.pages ?? 1) : 1,
+                picture: photo ? { width: photo.width ?? 1, height: photo.height ?? 1 } : null,
+                firstPage: media.document ?? { widthPt: 595, heightPt: 842 },
+              };
+            })
+        : [],
+    [editing, state.items],
+  );
   // Smaller copies, each file in its own format.
   const compressible = canCompress(state.items);
   const compressing = state.compress && compressible;
@@ -113,10 +137,10 @@ export function SetupScreen({ q }: { q: QueueController }) {
           ? ready.length > 1
             ? t("actions.compressAll", { n: ready.length })
             : t("actions.compress")
-          : editing
-          ? documentCount != null && documentCount > 1
-            ? t("actions.splitPdf")
-            : t("actions.savePdf")
+          : documentCount != null && documentCount > 1
+          ? t("actions.splitPdf")
+          : editing && !together
+            ? t("actions.savePdf")
           : together || (state.target === "pdf" && ready.length === 1)
           ? t("actions.makePdf")
           : ready.length > 1
@@ -246,10 +270,7 @@ export function SetupScreen({ q }: { q: QueueController }) {
                   <section>
                     <SectionTitle>{t("pdf.editTitle")}</SectionTitle>
                     <PageEditor
-                      key={lone.path}
-                      path={lone.path}
-                      count={lone.file!.media.document?.pages ?? 1}
-                      firstPage={lone.file!.media.document ?? { widthPt: 595, heightPt: 842 }}
+                      sources={editorSources}
                       pages={state.pages}
                       cuts={state.cuts}
                       split={state.pdf.split}

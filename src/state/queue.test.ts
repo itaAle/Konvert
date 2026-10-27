@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   allWarnings,
+  arrangesPages,
   canCompress,
   canStart,
   combines,
@@ -12,6 +13,8 @@ import {
   editsPdf,
   initialQueue,
   overallProgress,
+  pageSources,
+  plannedItems,
   queueReducer as reduce,
   requestFor,
   requestOf,
@@ -336,7 +339,8 @@ describe("queue state machine", () => {
     expect(editsPdf(s)).toBe(true);
     s = run(s, { type: "add", paths: ["b.jpg"] }, { type: "analyzed", key: 2, file: file("b.jpg", "image", null) });
     expect(commonTargets(s.items).map((t) => [t.format, t.group])).toEqual([["pdf", "document"]]);
-    expect(editsPdf(s)).toBe(false);
+    // The PDF and the photo combined: their pages are edited together.
+    expect(editsPdf(s)).toBe(true);
   });
 
   it("edits the pages of a lone PDF, and only of that PDF", () => {
@@ -355,8 +359,8 @@ describe("queue state machine", () => {
     expect(requestOf(s)?.pdf).toMatchObject({ layout: null, split: "none", splitAfter: [] });
 
     // Page 4 moves to the front turned, page 2 goes; a cut after page 4.
-    const pages = toggleRemoved(rotatePage(movePage(initialPages(4), 3, 0), 0, 90), 2);
-    s = run(s, { type: "setPages", pages, cuts: [4] }, { type: "setPdf", pdf: { ...s.pdf, split: "after" } });
+    const pages = toggleRemoved(rotatePage(movePage(initialPages([{ key: 1, count: 4 }]), 3, 0), 0, 90), 2);
+    s = run(s, { type: "setPages", pages, cuts: ["1:4"] }, { type: "setPdf", pdf: { ...s.pdf, split: "after" } });
     expect(s.items[0].plan).toBeNull();
     expect(requestOf(s)?.pdf).toMatchObject({
       layout: [
@@ -373,11 +377,96 @@ describe("queue state machine", () => {
     s = planned(s, [1, 2]);
     expect(canStart(s)).toBe(true);
 
-    // With another file the edits are not sent; removing the PDF forgets them.
+    // Another PDF: the edits stay, its pages come after.
     s = run(s, { type: "add", paths: ["b.pdf"] }, { type: "analyzed", key: 2, file: file("b.pdf", "document", null) });
-    expect(requestOf(s)?.pdf).toMatchObject({ layout: null, split: "none", splitAfter: [] });
+    expect(requestOf(s)?.pdf?.layout?.map((p) => [p.file, p.number])).toEqual([
+      [0, 4],
+      [0, 1],
+      [0, 3],
+      [1, 1],
+      [1, 2],
+      [1, 3],
+      [1, 4],
+    ]);
+    // Removing the first PDF takes its pages and its cut away.
     s = reduce(s, { type: "remove", key: 1 });
+    expect(requestOf(s)?.pdf).toMatchObject({ layout: null, splitAfter: [] });
+    expect(editedDocuments(s)).toBe(1);
+    // Removing every PDF forgets the edits.
+    s = run(s, { type: "add", paths: ["c.jpg"] }, { type: "analyzed", key: 3, file: file("c.jpg", "image", null) });
+    s = reduce(s, { type: "remove", key: 2 });
     expect(s).toMatchObject({ pages: null, cuts: [] });
+  });
+
+  it("arranges the pages of PDFs and photos combined, file by file", () => {
+    let s = run(initialQueue(), { type: "add", paths: ["a.pdf", "b.jpg", "c.pdf"] });
+    s = run(
+      s,
+      { type: "analyzed", key: 1, file: file("a.pdf", "document", null) },
+      { type: "analyzed", key: 2, file: file("b.jpg", "image", null) },
+      { type: "analyzed", key: 3, file: file("c.pdf", "document", null) },
+      { type: "selectTarget", target: "pdf" },
+    );
+    expect(arrangesPages(s) && editsPdf(s)).toBe(true);
+    expect(pageSources(s)).toEqual([
+      { key: 1, count: 4 },
+      { key: 2, count: 1 },
+      { key: 3, count: 4 },
+    ]);
+    // Combining is a change of its own: no edit needed to start.
+    for (const key of [1, 2, 3]) s = reduce(s, { type: "planned", key, version: s.planVersion, plan: plan("pdf", 100) });
+    expect(canStart(s)).toBe(true);
+
+    // The photo goes first; every page of a.pdf but the second is left out.
+    let pages = movePage(initialPages(pageSources(s)), 4, 0);
+    for (const index of [1, 3, 4]) pages = toggleRemoved(pages, index);
+    s = run(s, { type: "setPages", pages, cuts: ["1:2"] }, { type: "setPdf", pdf: { ...s.pdf, split: "after" } });
+    expect(requestOf(s)?.pdf?.layout?.map((p) => [p.file, p.number])).toEqual([
+      [1, 1],
+      [0, 2],
+      [2, 1],
+      [2, 2],
+      [2, 3],
+      [2, 4],
+    ]);
+    expect(requestOf(s)?.pdf?.splitAfter).toEqual([2]);
+    expect(editedDocuments(s)).toBe(2);
+    // Each file is planned with its own pages, never split.
+    expect(requestFor(s, s.items[0])?.pdf).toMatchObject({ layout: [{ file: 0, number: 2, rotation: 0 }], split: "none" });
+    expect(requestFor(s, s.items[1])?.pdf).toMatchObject({ layout: null, split: "none" });
+
+    // a.pdf goes after c.pdf: its page follows, behind the last page of c.pdf.
+    s = run(s, { type: "move", key: 1, delta: 1 }, { type: "move", key: 1, delta: 1 });
+    expect(s.items.map((i) => i.key)).toEqual([2, 3, 1]);
+    expect(requestOf(s)?.pdf?.layout?.map((p) => [p.file, p.number])).toEqual([
+      [0, 1],
+      [1, 1],
+      [1, 2],
+      [1, 3],
+      [1, 4],
+      [2, 2],
+    ]);
+
+    // A file left out entirely takes no part.
+    pages = toggleRemoved(movePage(initialPages(pageSources(s)), 0, 0), 0);
+    s = reduce(s, { type: "setPages", pages, cuts: [] });
+    expect(requestFor(s, s.items[0])).toBeNull();
+    expect(plannedItems(s).map((i) => i.key)).toEqual([3, 1]);
+    for (const key of [3, 1]) s = reduce(s, { type: "planned", key, version: s.planVersion, plan: plan("pdf", 100) });
+    expect(canStart(s)).toBe(true);
+  });
+
+  it("does not arrange the pages of a Word document", () => {
+    let s = run(initialQueue(), { type: "add", paths: ["a.pdf", "b.docx"] });
+    s = run(
+      s,
+      { type: "analyzed", key: 1, file: file("a.pdf", "document", null) },
+      { type: "analyzed", key: 2, file: file("b.docx", "text", null) },
+      { type: "selectTarget", target: "pdf" },
+    );
+    expect(combines(s)).toBe(true);
+    expect(arrangesPages(s) || editsPdf(s)).toBe(false);
+    expect(requestOf(s)?.pdf).toMatchObject({ layout: null, split: "none" });
   });
 
   it("combines every file into one job, in the order chosen", () => {
