@@ -10,7 +10,7 @@ Apple Silicon and Linux (x86_64 and arm64).
 It uses Tauri 2.11, React 19 with TypeScript, and bundles FFmpeg/FFprobe.
 It works **entirely offline, on the user's computer**.
 **Public** repository: https://github.com/itaAle/Konvert (branch `main`).
-Releases ship a Windows NSIS installer, macOS/Linux packages and a `.sha256` file for each: `v0.1.0` to `v0.4.0` are published (0.4.0: more formats, EXIF, SVG, PDF; first release with Linux arm64).
+Releases ship a Windows NSIS installer, macOS/Linux packages and a `.sha256` file for each: `v0.1.0` to `v0.4.0` are published (0.4.0: more formats, EXIF, SVG, PDF; first release with Linux arm64); `v0.5.0` (PDF page tools) is next.
 The `ffmpeg-n9.0.2-36` pre-release mirrors the FFmpeg build and its sources (required by the LGPL).
 
 ## Binding rules (from the owner)
@@ -173,6 +173,7 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
 - 2026-10-27: **PDF page tools** on `main` (local commits, not pushed): choosing PDF for a single PDF opens a page editor (thumbnails drawn locally; drag, turn, take out, keep only `1-3, 5`; keyboard shortcuts) and a "Result" section (one PDF, or split at every page, every N pages or at the scissors between pages, into a folder). Pages are copied without re-compression and only with what they use; links to left-out pages are removed, named destinations kept; bookmarks and forms dropped with a warning. No new dependency; no network (thumbnails are local IPC returning `data:` URLs).
   - Green tests (Windows): 40 Vitest, 185 core unit tests, 34 integration tests, 18 app tests.
   - Verified: the UI in the browser preview with the mock (light and dark), the CLI on real PDFs (layout, rotation, split), and the real debug app with UI Automation and a real mouse: thumbnails over IPC (9 and 126 pages, lazy loading), drag inside WebView2, buttons, keys (R, Ctrl+arrows, Home/End), "keep only", split at scissors into a folder (pages, turns and metadata checked), no socket from Konvert or WebView2 (`monitor-network.ps1` logic). Not verified yet: real-world PDFs with forms/bookmarks/links, 1000+ page PDFs.
+- 2026-10-27: **v0.5.0** (PDF page tools, readable drop-down lists in the dark theme): version bumped in `package.json`, `package-lock.json`, `Cargo.toml`/`Cargo.lock` and `tauri.conf.json`, licenses regenerated. The Windows installer comes from `npm run release` locally; the macOS/Linux packages from the **Release packages** workflow run on the pushed version commit; the owner creates the `v0.5.0` tag and the GitHub release.
 
 ## Backlog (next work, by priority)
 1. **PDF**: page tools done (see Current status). Possible next steps, only after the owner's OK: keep bookmarks when pages are only turned or reordered, page tools on several PDFs combined (pages of every file in one editor).
