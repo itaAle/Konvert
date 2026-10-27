@@ -2208,3 +2208,200 @@ async fn pdf_pages_become_pictures_only_when_allowed() {
     let doc = info.document.unwrap();
     assert!((doc.width_pt - 595.0).abs() < 1.0 && (doc.height_pt - 842.0).abs() < 1.0);
 }
+
+// --- Word documents ----------------------------------------------------------------
+
+/// The text of a DOCX main document, without the markup.
+fn docx_text(path: &Path) -> String {
+    let file = std::fs::File::open(path).unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml)
+        .unwrap();
+    let mut text = String::new();
+    let mut inside = false;
+    for c in xml.chars() {
+        match c {
+            '<' => inside = true,
+            '>' => inside = false,
+            c if !inside => text.push(c),
+            _ => {}
+        }
+    }
+    text
+}
+
+fn docx_parts(path: &Path) -> Vec<String> {
+    let file = std::fs::File::open(path).unwrap();
+    let zip = zip::ZipArchive::new(file).unwrap();
+    zip.file_names()
+        .filter_map(Result::ok)
+        .map(|n| n.into_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn word_documents_become_pdfs_and_back() {
+    let bins = engine();
+    let tmp = TempDir::new("docx-pdf");
+    let input = tmp.path("Relazione annuale.docx");
+    std::fs::write(
+        &input,
+        fixtures::docx(&fixtures::noisy_png(300, 200), (216.0, 144.0)),
+    )
+    .unwrap();
+    let media = probe(&bins, &input).await.unwrap();
+    assert_eq!(media.kind, MediaKind::Text);
+    let info = media.text.clone().unwrap();
+    assert_eq!(info.pictures, 1);
+    assert!((info.width_pt - 595.3).abs() < 0.5 && !info.simplified);
+    let targets = formats::is_offered(&media, &input, TargetFormat::Pdf);
+    assert!(targets);
+    let plan = plan_conversion(
+        &media,
+        &req(TargetFormat::Pdf, QualityPreset::Balanced),
+        &input,
+    )
+    .unwrap();
+    assert_eq!(plan.warnings, [konvert_core::ConversionWarning::DocxLayout]);
+
+    let (pdf, pdf_media) = convert(
+        &bins,
+        &tmp,
+        &input,
+        req(TargetFormat::Pdf, QualityPreset::Balanced),
+    )
+    .await;
+    assert!(pdf.output.ends_with("Relazione annuale.pdf"));
+    // The page break gives a second page.
+    assert_eq!(pdf_media.document.unwrap().pages, 2);
+    let data = std::fs::read(&pdf.output).unwrap();
+    assert!(!pdf_info(&data).contains("Creat"));
+
+    // And back: the text is found again, ready to edit.
+    let (word, word_media) = convert(
+        &bins,
+        &tmp,
+        &pdf.output,
+        req(TargetFormat::Docx, QualityPreset::Balanced),
+    )
+    .await;
+    assert!(word.output.ends_with("Relazione annuale.docx"));
+    assert_eq!(word_media.kind, MediaKind::Text);
+    let text = docx_text(&word.output);
+    for expected in [
+        "Relazione annuale",
+        "grassetto",
+        "Primo punto",
+        "Cella unita",
+        "Seconda pagina",
+        "Pagina 1",
+        "Testo della nota.",
+    ] {
+        assert!(
+            text.contains(expected),
+            "{expected:?} missing from {text:?}"
+        );
+    }
+    assert!(
+        docx_parts(&word.output)
+            .iter()
+            .any(|p| p.starts_with("word/media/"))
+    );
+    assert!(
+        !docx_parts(&word.output)
+            .iter()
+            .any(|p| p.starts_with("docProps"))
+    );
+}
+
+#[tokio::test]
+async fn pdfs_become_word_documents_with_their_pictures() {
+    let bins = engine();
+    let tmp = TempDir::new("pdf-docx");
+    let input = tmp.path("Relazione con foto.pdf");
+    std::fs::write(&input, fixtures::pdf_with_photo()).unwrap();
+    let media = probe(&bins, &input).await.unwrap();
+    let plan = plan_conversion(
+        &media,
+        &req(TargetFormat::Docx, QualityPreset::Balanced),
+        &input,
+    )
+    .unwrap();
+    assert_eq!(plan.warnings, [konvert_core::ConversionWarning::PdfToDocx]);
+    let (word, _) = convert(
+        &bins,
+        &tmp,
+        &input,
+        req(TargetFormat::Docx, QualityPreset::Balanced),
+    )
+    .await;
+    assert!(docx_text(&word.output).contains("Relazione"));
+    let pictures: Vec<String> = docx_parts(&word.output)
+        .into_iter()
+        .filter(|p| p.starts_with("word/media/"))
+        .collect();
+    assert_eq!(pictures.len(), 1, "{pictures:?}");
+}
+
+#[tokio::test]
+async fn word_documents_get_smaller_and_join_other_files_in_one_pdf() {
+    let bins = engine();
+    let tmp = TempDir::new("docx-compress");
+    let input = tmp.path("Relazione.docx");
+    // A 1500×1000 photo shown 3×2 inches.
+    std::fs::write(
+        &input,
+        fixtures::docx(&fixtures::noisy_png(1500, 1000), (216.0, 144.0)),
+    )
+    .unwrap();
+    let (smaller, info) = compress(&bins, &tmp, &input, CompressLevel::Strong, None).await;
+    assert!(smaller.output.ends_with("Relazione-compresso.docx"));
+    assert!(
+        smaller.size_bytes < size(&input) / 3,
+        "{} of {}",
+        smaller.size_bytes,
+        size(&input)
+    );
+    assert_eq!(info.kind, MediaKind::Text);
+    let parts = docx_parts(&smaller.output);
+    assert!(!parts.iter().any(|p| p.contains("thumbnail")), "{parts:?}");
+    let file = std::fs::File::open(&smaller.output).unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
+    let mut picture = Vec::new();
+    std::io::Read::read_to_end(
+        &mut zip.by_name("word/media/image1.png").unwrap(),
+        &mut picture,
+    )
+    .unwrap();
+    let picture = image::load_from_memory(&picture).unwrap();
+    // 144 dots per inch over 3 inches.
+    assert!(picture.width() <= 432, "{}", picture.width());
+
+    // A Word document and a photo make one PDF, in order.
+    let photo = sample_jpeg(&bins, &tmp, "Foto.jpg", None);
+    let mut probed = Vec::new();
+    for path in [&input, &photo] {
+        probed.push((path.to_path_buf(), probe(&bins, path).await.unwrap()));
+    }
+    let out_dir = tmp.path("combined");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ws = Workspace::create(&tmp.path("ws-combined")).unwrap();
+    let job = konvert_core::CombinedJob {
+        id: 9,
+        inputs: probed,
+        request: req(TargetFormat::Pdf, QualityPreset::Balanced),
+        output_dir: out_dir,
+    };
+    let outcome = konvert_core::run_combined(&bins, &ws, &job, &CancellationToken::new(), |_| {})
+        .await
+        .unwrap();
+    assert!(outcome.output.ends_with("Relazione.pdf"));
+    let pages = probe(&bins, &outcome.output)
+        .await
+        .unwrap()
+        .document
+        .unwrap()
+        .pages;
+    assert_eq!(pages, 3);
+}

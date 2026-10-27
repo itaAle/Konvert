@@ -30,6 +30,8 @@ pub enum MediaKind {
     Image,
     /// A PDF document.
     Document,
+    /// A Word document (DOCX).
+    Text,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -128,6 +130,10 @@ pub struct MediaInfo {
     /// Document details, for [`MediaKind::Document`] only.
     #[serde(default)]
     pub document: Option<crate::pdf::DocumentInfo>,
+    /// Word document details, for [`MediaKind::Text`] only.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub text: Option<crate::docx::TextInfo>,
 }
 
 impl MediaInfo {
@@ -154,6 +160,13 @@ pub async fn probe(bins: &Binaries, input: &Path) -> Result<MediaInfo, CoreError
         // Read by Konvert, not by FFmpeg (see `pdf.rs`).
         let path = input.to_path_buf();
         return tokio::task::spawn_blocking(move || crate::pdf::probe(&path))
+            .await
+            .map_err(|e| CoreError::Io(std::io::Error::other(e)))?;
+    }
+    if crate::docx::is_docx(input) {
+        // Read by Konvert, not by FFmpeg (see `docx/`).
+        let path = input.to_path_buf();
+        return tokio::task::spawn_blocking(move || crate::docx::probe(&path))
             .await
             .map_err(|e| CoreError::Io(std::io::Error::other(e)))?;
     }
@@ -344,6 +357,7 @@ pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
         has_tags,
         has_location,
         document: None,
+        text: None,
     })
 }
 
@@ -489,6 +503,7 @@ fn parse_picture(
         has_tags: false,
         has_location: false,
         document: None,
+        text: None,
     })
 }
 

@@ -75,6 +75,8 @@ pub enum TargetFormat {
     Jxl,
     /// PDF document: pictures as pages, or several PDFs merged.
     Pdf,
+    /// Word document: from a PDF (its text and pictures, to edit).
+    Docx,
 }
 
 impl TargetFormat {
@@ -924,6 +926,16 @@ pub static FORMATS: &[FormatSpec] = &[
         kind: FormatKind::Document,
         ..SPEC
     },
+    FormatSpec {
+        format: TargetFormat::Docx,
+        label: "DOCX (Word)",
+        extension: "docx",
+        input_extensions: &["docx", "docm", "dotx"],
+        // Written by Konvert (`docx/`), not by FFmpeg.
+        muxer: "",
+        kind: FormatKind::Document,
+        ..SPEC
+    },
 ];
 
 /// Catalog entry of a format.
@@ -997,6 +1009,8 @@ pub struct Rule {
     pub image: &'static [TargetFormat],
     /// Document outputs (PDF).
     pub document: &'static [TargetFormat],
+    /// Word document outputs (DOCX).
+    pub text: &'static [TargetFormat],
 }
 
 /// Proposal rules. Audio inputs never get video outputs; pictures only get
@@ -1008,6 +1022,7 @@ pub static RULES: &[Rule] = &[
         audio: AUDIO_TARGETS,
         image: &[],
         document: &[],
+        text: &[],
     },
     Rule {
         input: MediaKind::Video,
@@ -1015,6 +1030,7 @@ pub static RULES: &[Rule] = &[
         audio: &[],
         image: FRAME_TARGETS,
         document: &[],
+        text: &[],
     },
     Rule {
         input: MediaKind::VideoWithAudio,
@@ -1022,6 +1038,7 @@ pub static RULES: &[Rule] = &[
         audio: AUDIO_TARGETS,
         image: FRAME_TARGETS,
         document: &[],
+        text: &[],
     },
     Rule {
         input: MediaKind::Image,
@@ -1029,6 +1046,7 @@ pub static RULES: &[Rule] = &[
         audio: &[],
         image: IMAGE_TARGETS,
         document: &[TargetFormat::Pdf],
+        text: &[],
     },
     Rule {
         input: MediaKind::Document,
@@ -1036,6 +1054,15 @@ pub static RULES: &[Rule] = &[
         audio: &[],
         image: PAGE_TARGETS,
         document: &[TargetFormat::Pdf],
+        text: &[TargetFormat::Docx],
+    },
+    Rule {
+        input: MediaKind::Text,
+        video: &[],
+        audio: &[],
+        image: &[],
+        document: &[TargetFormat::Pdf],
+        text: &[],
     },
 ];
 
@@ -1056,8 +1083,10 @@ pub enum TargetGroup {
     Frames,
     /// PDF → pictures, one per page.
     Pages,
-    /// Pictures or PDFs → a PDF document.
+    /// Pictures, PDFs or Word documents → a PDF document.
     Document,
+    /// PDF → a Word document.
+    Text,
 }
 
 /// A conversion proposed to the user.
@@ -1182,6 +1211,7 @@ pub fn available_targets(media: &MediaInfo, input: &Path) -> Vec<TargetOption> {
         (rule.audio, audio_group),
         (rule.image, image_group),
         (rule.document, TargetGroup::Document),
+        (rule.text, TargetGroup::Text),
     ];
 
     groups
@@ -1307,6 +1337,7 @@ mod tests {
         TargetFormat::Ico,
         TargetFormat::Jxl,
         TargetFormat::Pdf,
+        TargetFormat::Docx,
     ];
 
     fn media(json: &str) -> MediaInfo {
@@ -1521,6 +1552,7 @@ mod tests {
                     .chain(r.audio)
                     .chain(r.image)
                     .chain(r.document)
+                    .chain(r.text)
             })
             .copied()
             .collect();

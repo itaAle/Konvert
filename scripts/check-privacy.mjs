@@ -25,6 +25,12 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /** URLs that may appear in code: opened in the system browser only on user click. */
 const ALLOWED_URL_PREFIXES = ["https://github.com/itaAle/Konvert/releases"];
+/**
+ * XML namespace names of the Office Open XML format (ECMA-376), written into the
+ * DOCX files Konvert makes. They are identifiers that every DOCX must carry, not
+ * addresses: nothing ever opens them. Allowed only in the DOCX writer.
+ */
+const XML_NAMESPACES = { prefix: "http://schemas.openxmlformats.org/", file: "crates/konvert-core/src/docx/write.rs" };
 
 const DESKTOP_TARGETS = [
   "x86_64-pc-windows-msvc",
@@ -262,6 +268,7 @@ function checkSources() {
       for (const m of line.matchAll(URL_RE)) {
         if (inComment(line, m.index)) continue;
         if (ALLOWED_URL_PREFIXES.some((p) => m[0].startsWith(p))) { urls++; continue; }
+        if (rel === XML_NAMESPACES.file && m[0].startsWith(XML_NAMESPACES.prefix)) { urls++; continue; }
         fail(`${rel}:${i + 1}: external URL ${m[0]}`);
       }
       const api = isRust ? RUST_NET_API : FRONTEND_NET_API;

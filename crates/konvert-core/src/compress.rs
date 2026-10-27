@@ -25,8 +25,10 @@ use crate::request::{
 /// Format of a smaller copy of this input: its own, when Konvert knows how to
 /// make it smaller (`None` otherwise: BMP, TIFF, icons, HEIC, SVG...).
 pub fn compress_format(media: &MediaInfo, input: &Path) -> Option<TargetFormat> {
-    if media.kind == MediaKind::Document {
-        return Some(TargetFormat::Pdf);
+    match media.kind {
+        MediaKind::Document => return Some(TargetFormat::Pdf),
+        MediaKind::Text => return Some(TargetFormat::Docx),
+        _ => {}
     }
     let format = formats::source_format(media, input)?;
     let spec = formats::spec(format);
@@ -65,7 +67,7 @@ pub(crate) fn plan(
                 formats::spec(request.target).label
             ),
         })?;
-    if format == TargetFormat::Pdf {
+    if format == TargetFormat::Pdf || format == TargetFormat::Docx {
         return Ok(ConversionPlan {
             target: TargetFormat::Pdf,
             video_stream: None,
@@ -78,7 +80,7 @@ pub(crate) fn plan(
             document: None,
             remove_location: false,
             compress: Some(options.clone()),
-            warnings: if options.pages_as_pictures {
+            warnings: if options.pages_as_pictures && format == TargetFormat::Pdf {
                 vec![ConversionWarning::PdfPagesAsPictures]
             } else {
                 Vec::new()
@@ -767,6 +769,7 @@ mod tests {
             has_tags: false,
             has_location: false,
             document: None,
+            text: None,
         }
     }
 

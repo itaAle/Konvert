@@ -112,6 +112,7 @@ pub fn probe(path: &Path) -> Result<MediaInfo, CoreError> {
             height_pt,
             extras,
         }),
+        text: None,
     })
 }
 

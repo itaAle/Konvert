@@ -124,6 +124,16 @@ const PAGE_STEPS: [Shrink; 6] = [
     },
 ];
 
+/// The steps of a level: its own, then the stronger ones when there is a size limit.
+pub(crate) fn steps(level: CompressLevel, limited: bool) -> Vec<Shrink> {
+    let first = first_step(level);
+    if limited {
+        STEPS[first..].to_vec()
+    } else {
+        vec![STEPS[first]]
+    }
+}
+
 fn first_step(level: CompressLevel) -> usize {
     match level {
         CompressLevel::Light => 0,
@@ -152,11 +162,7 @@ pub fn compress(
 ) -> Result<Vec<u8>, CoreError> {
     let fits = |size: usize| options.max_bytes.is_none_or(|max| size as u64 <= max);
     let first = first_step(options.level);
-    let steps: Vec<Shrink> = if options.max_bytes.is_some() {
-        STEPS[first..].to_vec()
-    } else {
-        vec![STEPS[first]]
-    };
+    let steps = steps(options.level, options.max_bytes.is_some());
     let pages_steps: Vec<Shrink> = match (options.pages_as_pictures, options.max_bytes) {
         (false, _) => Vec::new(),
         (true, Some(_)) => PAGE_STEPS[first..].to_vec(),
@@ -691,7 +697,7 @@ fn indexed(indices: &[u8], width: u32, height: u32, colors: &[[u8; 3]], gray: bo
 
 /// PNG filtering (PDF predictor 15): each row gets the filter whose output
 /// is smallest in absolute value, a good guess of what Deflate packs best.
-fn png_filter(pixels: &[u8], bpp: usize, width: usize) -> Vec<u8> {
+pub(crate) fn png_filter(pixels: &[u8], bpp: usize, width: usize) -> Vec<u8> {
     let stride = width * bpp;
     if stride == 0 {
         return Vec::new();
@@ -755,7 +761,7 @@ fn paeth(a: u8, b: u8, c: u8) -> u8 {
 
 /// Median cut: at most `max` colors standing for an RGB picture, and each
 /// pixel's color among them. Colors are grouped 6 bits per channel.
-fn quantize(rgb: &[u8], max: usize) -> (Vec<[u8; 3]>, Vec<u8>) {
+pub(crate) fn quantize(rgb: &[u8], max: usize) -> (Vec<[u8; 3]>, Vec<u8>) {
     const BINS: usize = 1 << 18;
     let bin =
         |p: &[u8]| (p[0] as usize >> 2) << 12 | (p[1] as usize >> 2) << 6 | p[2] as usize >> 2;
@@ -1153,7 +1159,7 @@ impl Base {
 
 /// Saves a document with its small objects packed into object streams and a
 /// compressed cross-reference stream.
-fn save(doc: &mut Document) -> Result<Vec<u8>, CoreError> {
+pub(crate) fn save(doc: &mut Document) -> Result<Vec<u8>, CoreError> {
     let mut bytes = Vec::new();
     doc.save_with_options(
         &mut bytes,
@@ -1265,7 +1271,7 @@ fn drop_metadata(doc: &mut Document) {
 }
 
 /// Keeps only the objects the document reaches from its trailer.
-fn keep_reachable(doc: &mut Document) {
+pub(crate) fn keep_reachable(doc: &mut Document) {
     let mut seen: HashSet<ObjectId> = HashSet::new();
     let mut stack: Vec<ObjectId> = Vec::new();
     collect_references(&Object::Dictionary(doc.trailer.clone()), &mut stack);

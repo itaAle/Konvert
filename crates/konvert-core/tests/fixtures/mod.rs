@@ -457,3 +457,118 @@ pub fn pdf_with_drawing() -> Vec<u8> {
     doc.save_to(&mut bytes).unwrap();
     bytes
 }
+
+/// A Word document as Word writes them: theme fonts, styles with
+/// inheritance, a numbered list, a table with merged cells, a header with
+/// the page number, a footnote, a page break, and `picture` (PNG) shown
+/// `shown_pt` points wide and high.
+pub fn docx(picture: &[u8], shown_pt: (f32, f32)) -> Vec<u8> {
+    use std::io::Write;
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    const WP: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+    const A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+    const PIC: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
+    const PR: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
+    let (cx, cy) = ((shown_pt.0 * 12700.0) as i64, (shown_pt.1 * 12700.0) as i64);
+    let ns = format!(
+        "xmlns:w=\"{W}\" xmlns:r=\"{R}\" xmlns:wp=\"{WP}\" xmlns:a=\"{A}\" xmlns:pic=\"{PIC}\""
+    );
+    let document = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document {ns}><w:body>
+<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Relazione annuale</w:t></w:r></w:p>
+<w:p><w:r><w:t xml:space="preserve">Testo con </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>grassetto</w:t></w:r><w:r><w:t xml:space="preserve"> e una nota</w:t></w:r><w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="1"/></w:r><w:r><w:t>.</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Primo punto</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Secondo punto</w:t></w:r></w:p>
+<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/></w:tblPr>
+<w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid>
+<w:tr><w:tc><w:tcPr><w:vMerge w:val="restart"/><w:shd w:val="clear" w:fill="D9E2F3"/></w:tcPr><w:p><w:r><w:t>Alta</w:t></w:r></w:p></w:tc>
+<w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr><w:p><w:r><w:t>Cella unita</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>C</w:t></w:r></w:p></w:tc></w:tr>
+</w:tbl>
+<w:p><w:r><w:br w:type="page"/></w:r><w:r><w:t>Seconda pagina</w:t></w:r></w:p>
+<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing><wp:inline><wp:extent cx="{cx}" cy="{cy}"/><wp:docPr id="1" name="Foto"/><a:graphic><a:graphicData uri="{PIC}"><pic:pic><pic:blipFill><a:blip r:embed="rIdPicture"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>
+<w:sectPr><w:headerReference w:type="default" r:id="rIdHeader"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1417" w:right="1134" w:bottom="1134" w:left="1134" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>
+</w:body></w:document>"#
+    );
+    let styles = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="{W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi"/><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="259" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="240" w:after="0"/><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:rFonts w:asciiTheme="majorHAnsi" w:hAnsiTheme="majorHAnsi"/><w:color w:val="2F5496"/><w:sz w:val="32"/></w:rPr></w:style>
+<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:color="auto"/><w:left w:val="single" w:sz="4" w:color="auto"/><w:bottom w:val="single" w:sz="4" w:color="auto"/><w:right w:val="single" w:sz="4" w:color="auto"/><w:insideH w:val="single" w:sz="4" w:color="auto"/><w:insideV w:val="single" w:sz="4" w:color="auto"/></w:tblBorders></w:tblPr></w:style>
+</w:styles>"#
+    );
+    let numbering = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="{W}"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>"#
+    );
+    let header = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:hdr xmlns:w="{W}"><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t xml:space="preserve">Pagina </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:hdr>"#
+    );
+    let footnotes = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:footnotes xmlns:w="{W}"><w:footnote w:type="separator" w:id="-1"><w:p/></w:footnote><w:footnote w:id="1"><w:p><w:r><w:t>Testo della nota.</w:t></w:r></w:p></w:footnote></w:footnotes>"#
+    );
+    let theme = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="{A}" name="Office"><a:themeElements><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Calibri Light"/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#
+    );
+    let rels = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="{PR}"><Relationship Id="rIdStyles" Type="{R}/styles" Target="styles.xml"/><Relationship Id="rIdNumbering" Type="{R}/numbering" Target="numbering.xml"/><Relationship Id="rIdHeader" Type="{R}/header" Target="header1.xml"/><Relationship Id="rIdFootnotes" Type="{R}/footnotes" Target="footnotes.xml"/><Relationship Id="rIdTheme" Type="{R}/theme" Target="theme/theme1.xml"/><Relationship Id="rIdPicture" Type="{R}/image" Target="media/image1.png"/></Relationships>"#
+    );
+    let package_rels = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="{PR}"><Relationship Id="rId1" Type="{R}/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="{R}/metadata/thumbnail" Target="docProps/thumbnail.jpeg"/></Relationships>"#
+    );
+    let types = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpeg" ContentType="image/jpeg"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let parts: [(&str, &[u8]); 11] = [
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", package_rels.as_bytes()),
+        ("docProps/thumbnail.jpeg", &[0xFF, 0xD8, 0xFF, 0xD9]),
+        ("word/document.xml", document.as_bytes()),
+        ("word/_rels/document.xml.rels", rels.as_bytes()),
+        ("word/styles.xml", styles.as_bytes()),
+        ("word/numbering.xml", numbering.as_bytes()),
+        ("word/header1.xml", header.as_bytes()),
+        ("word/footnotes.xml", footnotes.as_bytes()),
+        ("word/theme/theme1.xml", theme.as_bytes()),
+        ("word/media/image1.png", picture),
+    ];
+    for (name, data) in parts {
+        zip.start_file(name, options).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+/// A photo-like PNG (gradients and grain): large when stored without loss.
+pub fn noisy_png(width: u32, height: u32) -> Vec<u8> {
+    let mut seed = 99u32;
+    let pixels: Vec<u8> = (0..width * height)
+        .flat_map(|i| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            let grain = ((seed >> 16) % 25) as i32 - 12;
+            let (x, y) = (i % width, i / width);
+            [x * 255 / width, y * 255 / height, (x + y) % 256]
+                .map(|v| (v as i32 + grain).clamp(0, 255) as u8)
+        })
+        .collect();
+    let mut png = Vec::new();
+    image::ImageEncoder::write_image(
+        image::codecs::png::PngEncoder::new(&mut png),
+        &pixels,
+        width,
+        height,
+        image::ExtendedColorType::Rgb8,
+    )
+    .unwrap();
+    png
+}

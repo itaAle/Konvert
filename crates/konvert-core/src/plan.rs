@@ -214,6 +214,12 @@ pub enum ConversionWarning {
     PdfExtrasDropped,
     /// Compressed PDF: its pages may become pictures (text, links and forms lost).
     PdfPagesAsPictures,
+    /// Word document laid out by Konvert: page breaks may differ from Word's.
+    DocxLayout,
+    /// Text boxes, charts, equations or objects of a Word document are left out.
+    DocxSimplified,
+    /// PDF to Word: text and pictures to edit; layout, tables and drawings simplified.
+    PdfToDocx,
 }
 
 /// Pictures taken from a video.
@@ -502,6 +508,39 @@ fn plan_document(
 ) -> Result<ConversionPlan, CoreError> {
     use ConversionWarning as W;
     let options = request.pdf.clone().unwrap_or_default();
+    // Word documents, laid out by Konvert; PDFs made into Word documents.
+    let document_plan = |warnings: Vec<ConversionWarning>| ConversionPlan {
+        target: request.target,
+        video_stream: None,
+        video: None,
+        audio_stream: None,
+        audio: None,
+        cover_art_stream: None,
+        image: None,
+        frames: None,
+        document: None,
+        remove_location: false,
+        compress: None,
+        warnings,
+        estimate: None,
+    };
+    match (media.kind, request.target) {
+        (MediaKind::Text, TargetFormat::Pdf) => {
+            let simplified = media.text.as_ref().is_some_and(|t| t.simplified);
+            let mut warnings = vec![W::DocxLayout];
+            if simplified {
+                warnings.push(W::DocxSimplified);
+            }
+            return Ok(document_plan(warnings));
+        }
+        (MediaKind::Document, TargetFormat::Docx) => {
+            return Ok(document_plan(vec![W::PdfToDocx]));
+        }
+        (_, TargetFormat::Docx) => {
+            return Err(unsupported("only PDFs become Word documents".into()));
+        }
+        _ => {}
+    }
     match media.kind {
         MediaKind::Image => {
             let src = media
@@ -2192,6 +2231,7 @@ mod tests {
                 height_pt: 842.0,
                 extras,
             }),
+            text: None,
         }
     }
 

@@ -19,6 +19,7 @@ pub mod command;
 pub mod compress;
 pub mod convert;
 pub mod disk;
+pub mod docx;
 pub mod error;
 pub mod estimate;
 pub mod exif;

@@ -6,8 +6,8 @@ members = ["crates/konvert-core", "crates/konvert-cli", "src-tauri"]
 version = "0.5.0"
 edition = "2024"
 license = "MIT"
-# `File::try_lock` (used for crash-safe temp-dir cleanup) is stable since 1.89.
-rust-version = "1.89"
+# Typst (DOCX to PDF) needs 1.92.
+rust-version = "1.92"
 repository = "https://github.com/itaAle/Konvert"
 
 [workspace.dependencies]
@@ -29,6 +29,18 @@ lopdf = { version = "0.46", default-features = false }
 # recompressed with Deflate (already used by lopdf; pure Rust backend, MIT OR Apache-2.0).
 jpeg-encoder = "0.7"
 flate2 = "1"
+# Word documents (DOCX): read and written as ZIP archives of XML parts (MIT; Deflate only,
+# through flate2), parsed with roxmltree (MIT OR Apache-2.0, already used by the SVG renderer).
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+roxmltree = "0.21"
+# Pictures inside Word documents, decoded to be stored smaller (MIT OR Apache-2.0).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# DOCX to PDF: the Typst typesetting engine as a library (Apache-2.0, pure Rust). Only its
+# system font discovery is used from typst-kit: no package or file downloads.
+typst = "0.15"
+typst-layout = "0.15"
+typst-pdf = "0.15"
+typst-kit = { version = "0.15", default-features = false, features = ["scan-fonts"] }
 
 # Release profile shared by every crate of the workspace (Tauri reads it from the root).
 # See https://tauri.app/concept/size/#cargo-configuration

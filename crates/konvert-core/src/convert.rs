@@ -19,6 +19,7 @@ use ts_rs::TS;
 use crate::binaries::Binaries;
 use crate::command::{build_from_plan, build_from_plan_with, file_url};
 use crate::compress;
+use crate::docx;
 use crate::error::CoreError;
 use crate::exif;
 use crate::formats::{self, TargetFormat};
@@ -97,6 +98,11 @@ pub async fn run_conversion(
     }
     if job.request.target == TargetFormat::Pdf && job.media.kind == MediaKind::Document {
         return run_edit(workspace, job, &plan, cancel, on_progress, started).await;
+    }
+    if job.request.target == TargetFormat::Docx
+        || (job.request.target == TargetFormat::Pdf && job.media.kind == MediaKind::Text)
+    {
+        return run_document_conversion(workspace, job, cancel, on_progress, started).await;
     }
     if job.request.target == TargetFormat::Pdf {
         let inputs = [(job.input.clone(), job.media.clone())];
@@ -219,8 +225,8 @@ async fn run_compress(
     let input_size = std::fs::metadata(&job.input)?.len();
     let ext = formats::spec(job.request.target).extension;
     let temp_output = workspace.job_output(job.id, ext);
-    let result = if job.media.kind == MediaKind::Document {
-        compress_pdf(job, options, &temp_output, cancel, &mut on_progress).await
+    let result = if matches!(job.media.kind, MediaKind::Document | MediaKind::Text) {
+        compress_document(job, options, &temp_output, cancel, &mut on_progress).await
     } else {
         compress_media(
             bins,
@@ -271,23 +277,23 @@ async fn run_compress(
     })
 }
 
-/// Compresses a PDF on a worker thread into `output`; gives its size.
-async fn compress_pdf(
-    job: &ConversionJob,
-    options: &CompressOptions,
-    output: &Path,
+/// Work that Konvert does itself (PDF and Word documents) on a worker thread,
+/// with progress and cancellation: `work` gets a stop flag and a progress
+/// callback, and gives the bytes of the new file.
+async fn on_worker(
+    work: impl FnOnce(&AtomicBool, &mut dyn FnMut(f64)) -> Result<Vec<u8>, CoreError> + Send + 'static,
     cancel: &CancellationToken,
     on_progress: &mut (impl FnMut(Progress) + Send),
-) -> Result<u64, CoreError> {
-    let data = std::fs::read(&job.input)?;
+) -> Result<Vec<u8>, CoreError> {
     let stop = Arc::new(AtomicBool::new(false));
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<f64>();
     let worker = {
-        let (stop, options) = (stop.clone(), options.clone());
+        let stop = stop.clone();
         tokio::task::spawn_blocking(move || {
-            pdf_compress::compress(&data, &options, &stop, |done| {
+            let mut report = |done: f64| {
                 let _ = sender.send(done);
-            })
+            };
+            work(&stop, &mut report)
         })
     };
     let cancelled = loop {
@@ -308,11 +314,102 @@ async fn compress_pdf(
         let _ = worker.await;
         return Err(CoreError::Cancelled);
     }
-    let bytes = worker
+    worker
         .await
-        .map_err(|e| CoreError::Io(std::io::Error::other(e)))??;
+        .map_err(|e| CoreError::Io(std::io::Error::other(e)))?
+}
+
+/// Compresses a PDF or a Word document on a worker thread into `output`;
+/// gives its size.
+async fn compress_document(
+    job: &ConversionJob,
+    options: &CompressOptions,
+    output: &Path,
+    cancel: &CancellationToken,
+    on_progress: &mut (impl FnMut(Progress) + Send),
+) -> Result<u64, CoreError> {
+    let data = std::fs::read(&job.input)?;
+    let options = options.clone();
+    let word = job.media.kind == MediaKind::Text;
+    let bytes = on_worker(
+        move |stop, progress| {
+            if word {
+                docx::compress::compress_docx(&data, &options, stop, progress)
+            } else {
+                pdf_compress::compress(&data, &options, stop, progress)
+            }
+        },
+        cancel,
+        on_progress,
+    )
+    .await?;
     std::fs::write(output, &bytes)?;
     Ok(bytes.len() as u64)
+}
+
+/// A Word document laid out as PDF (Typst; blocking).
+fn typeset(data: &[u8]) -> Result<Vec<u8>, CoreError> {
+    let package = docx::Package::open(data)?;
+    let document = docx::read::read(&package)?;
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        docx::typeset::to_pdf(&document)
+    }))
+    .unwrap_or_else(|_| {
+        Err(CoreError::EngineFailed {
+            details: "the layout of the document failed".into(),
+        })
+    })
+}
+
+/// A file made by Konvert itself: a Word document laid out as PDF, or a PDF
+/// made into a Word document, next to the other outputs.
+async fn run_document_conversion(
+    workspace: &Workspace,
+    job: &ConversionJob,
+    cancel: &CancellationToken,
+    mut on_progress: impl FnMut(Progress) + Send,
+    started: Instant,
+) -> Result<ConversionOutcome, CoreError> {
+    let data = std::fs::read(&job.input)?;
+    let to_word = job.request.target == TargetFormat::Docx;
+    let bytes = on_worker(
+        move |stop, progress| {
+            if to_word {
+                docx::from_pdf::pdf_to_docx(&data, stop, progress).map(|(bytes, _)| bytes)
+            } else {
+                progress(0.1);
+                let pdf = typeset(&data)?;
+                progress(1.0);
+                Ok(pdf)
+            }
+        },
+        cancel,
+        &mut on_progress,
+    )
+    .await?;
+    let ext = formats::spec(job.request.target).extension;
+    let temp_output = workspace.job_output(job.id, ext);
+    std::fs::write(&temp_output, &bytes)?;
+    let stem = output_stem(&job.input);
+    let output_dir = job.output_dir.clone();
+    let temp = temp_output.clone();
+    let moved =
+        tokio::task::spawn_blocking(move || naming::move_to_unique(&temp, &output_dir, &stem, ext))
+            .await
+            .map_err(|e| CoreError::Io(std::io::Error::other(e)))?;
+    let output = match moved {
+        Ok(path) => path,
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp_output);
+            return Err(e.into());
+        }
+    };
+    Ok(ConversionOutcome {
+        output,
+        size_bytes: bytes.len() as u64,
+        files: 1,
+        elapsed: started.elapsed(),
+    })
 }
 
 /// Converts a media file into its own format with the settings of each
@@ -505,6 +602,14 @@ async fn run_document(
                     return Err(CoreError::Cancelled);
                 }
                 on_progress(fraction(i, inputs.len() + 1));
+                if media.kind == MediaKind::Text {
+                    let data = std::fs::read(input)?;
+                    let laid_out = tokio::task::spawn_blocking(move || typeset(&data))
+                        .await
+                        .map_err(|e| CoreError::Io(std::io::Error::other(e)))??;
+                    parts.push(pdf::Part::Document(laid_out));
+                    continue;
+                }
                 let plan = plan_conversion(media, &job.request, input)?;
                 let document =
                     plan.document

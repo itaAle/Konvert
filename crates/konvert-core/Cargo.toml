@@ -24,6 +24,14 @@ lopdf = { workspace = true }
 # Smaller PDFs: pictures stored again as JPEG, streams recompressed.
 jpeg-encoder = { workspace = true }
 flate2 = { workspace = true }
+# Word documents: DOCX read and written, typeset into PDF by Typst.
+zip = { workspace = true }
+roxmltree = { workspace = true }
+image = { workspace = true }
+typst = { workspace = true }
+typst-layout = { workspace = true }
+typst-pdf = { workspace = true }
+typst-kit = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
