@@ -10,6 +10,7 @@
 //! konvert-cli [--ffmpeg-dir DIR] plan    <FILE> --to <FORMAT> [OPTIONS]
 //! konvert-cli [--ffmpeg-dir DIR] convert <FILE> --to <FORMAT> [OPTIONS] [--out-dir DIR]
 //! konvert-cli [--ffmpeg-dir DIR] combine <FILE>... [OPTIONS] [--out-dir DIR]   (one PDF)
+//! konvert-cli fonts <FILE.pdf>   (embedded fonts and how much Compress reduces them)
 //!
 //! OPTIONS: --preset max|balanced|small  --height N  --fps N
 //!          --audio-bitrate KBPS  --sample-rate HZ  --mono | --stereo
@@ -51,6 +52,7 @@ const USAGE: &str = "usage:
   konvert-cli [--ffmpeg-dir DIR] plan    <FILE> --to <FORMAT> [OPTIONS]
   konvert-cli [--ffmpeg-dir DIR] convert <FILE> --to <FORMAT> [OPTIONS] [--out-dir DIR]
   konvert-cli [--ffmpeg-dir DIR] combine <FILE>... [OPTIONS] [--out-dir DIR]   (one PDF)
+  konvert-cli fonts <FILE.pdf>   (embedded fonts and how much Compress reduces them)
 
 OPTIONS: --preset max|balanced|small  --height N  --fps N
          --audio-bitrate KBPS  --sample-rate HZ  --mono | --stereo
@@ -69,6 +71,7 @@ OPTIONS: --preset max|balanced|small  --height N  --fps N
 enum Action {
     Version,
     Probe(PathBuf),
+    Fonts(PathBuf),
     Targets(PathBuf),
     Plan(PathBuf, ConversionRequest),
     Convert(PathBuf, ConversionRequest, Option<PathBuf>),
@@ -117,6 +120,34 @@ fn parse_layout(text: &str) -> Result<Vec<PdfPage>, String> {
         }));
     }
     Ok(pages)
+}
+
+/// Lists the fonts embedded in a PDF, the largest first, with the size of
+/// each program and what Compress would make of it.
+fn print_fonts(input: &std::path::Path) -> Result<(), CoreError> {
+    let data = std::fs::read(input)?;
+    let mut doc = lopdf::Document::load_mem(&data).map_err(|e| CoreError::CorruptInput {
+        details: e.to_string(),
+    })?;
+    let reports = konvert_core::pdf_fonts::subset_fonts(&mut doc);
+    let (mut before, mut after) = (0, 0);
+    for font in &reports {
+        let reduced = font.reduced.map_or("kept as it is".to_string(), |n| {
+            format!("-> {:>9} bytes", n)
+        });
+        println!(
+            "{:>10} bytes  {:<9} {:<40} {reduced}",
+            font.bytes, font.kind, font.name
+        );
+        before += font.bytes;
+        after += font.reduced.unwrap_or(font.bytes);
+    }
+    println!(
+        "{} fonts: {before} -> {after} bytes (uncompressed), file {} bytes",
+        reports.len(),
+        data.len()
+    );
+    Ok(())
 }
 
 /// Applies `--rotate` to every page of the new PDF (every page of the
@@ -335,6 +366,7 @@ fn parse_args() -> Result<Cli, String> {
     let action = match command.as_ref().and_then(|c| c.to_str()) {
         Some("version") => Action::Version,
         Some("probe") => Action::Probe(file()?),
+        Some("fonts") => Action::Fonts(file()?),
         Some("targets") => Action::Targets(file()?),
         Some("plan") => Action::Plan(file()?, request()?),
         Some("convert") => Action::Convert(file()?, request()?, out_dir),
@@ -390,6 +422,7 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
     match cli.action {
         Action::Version => println!("{}", engine_version(&bins).await?),
         Action::Probe(input) => print_json(&probe(&bins, &input).await?),
+        Action::Fonts(input) => print_fonts(&input)?,
         Action::Targets(input) => {
             let media = probe(&bins, &input).await?;
             let encoders = engine_encoders(&bins).await.unwrap_or_default();

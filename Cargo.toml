@@ -32,6 +32,9 @@ flate2 = "1"
 # Random keys for password-protected PDFs, from the operating system (MIT OR Apache-2.0;
 # already used by lopdf).
 getrandom = "0.4"
+# Character maps and glyph names of TrueType fonts embedded in PDFs (MIT OR Apache-2.0;
+# already used by the SVG renderer and Typst).
+ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
 # Word documents (DOCX): read and written as ZIP archives of XML parts (MIT; Deflate only,
 # through flate2), parsed with roxmltree (MIT OR Apache-2.0, already used by the SVG renderer).
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }

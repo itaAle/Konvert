@@ -26,6 +26,8 @@ jpeg-encoder = { workspace = true }
 flate2 = { workspace = true }
 # Password-protected PDFs: random encryption keys.
 getrandom = { workspace = true }
+# Smaller PDFs: glyphs reached by the codes of embedded TrueType fonts.
+ttf-parser = { workspace = true }
 # Word documents: DOCX read and written, typeset into PDF by Typst.
 zip = { workspace = true }
 roxmltree = { workspace = true }

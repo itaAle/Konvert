@@ -28,6 +28,7 @@ pub mod metadata;
 pub mod naming;
 pub mod pdf;
 pub mod pdf_compress;
+pub mod pdf_fonts;
 pub mod plan;
 pub mod probe;
 pub mod progress;

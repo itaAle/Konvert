@@ -7,7 +7,8 @@
 //!    gray pictures without color channels. A new picture replaces the old
 //!    one only when it is smaller.
 //! 3. What the document does not use, metadata, page thumbnails and duplicate
-//!    streams go; streams are recompressed with the strongest Deflate setting
+//!    streams go; embedded TrueType fonts keep only the glyphs the document
+//!    shows (see [`crate::pdf_fonts`]); streams are recompressed with the strongest Deflate setting
 //!    and small objects are packed into object streams.
 //! 4. Only if the user allows it, pages become JPEG pictures when that is
 //!    smaller (their text can no longer be selected).
@@ -1045,6 +1046,8 @@ impl Base {
         drop_metadata(&mut doc);
         keep_reachable(&mut doc);
         merge_duplicates(&mut doc);
+        // Lossless: every level keeps only the glyphs the document shows.
+        crate::pdf_fonts::subset_fonts(&mut doc);
         recompress_streams(&mut doc);
         Ok(Self { doc })
     }

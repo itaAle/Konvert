@@ -2960,6 +2960,7 @@ name = "konvert-cli"
 version = "0.6.0"
 dependencies = [
  "konvert-core",
+ "lopdf",
  "serde",
  "serde_json",
  "tokio",
@@ -2985,6 +2986,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "ts-rs",
+ "ttf-parser",
  "typst",
  "typst-kit",
  "typst-layout",

@@ -9,6 +9,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# Only to list the fonts of a PDF (`fonts`).
+lopdf = { workspace = true }
 konvert-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
