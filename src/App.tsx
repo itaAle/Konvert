@@ -8,6 +8,7 @@ import { BatchDoneScreen, DoneScreen } from "./components/DoneScreen";
 import { DropOverlay } from "./components/DropOverlay";
 import { DropScreen } from "./components/DropScreen";
 import { ErrorScreen } from "./components/ErrorScreen";
+import { UnlockScreen } from "./components/Unlock";
 import { itemProblem } from "./components/FileList";
 import { SettingsSheet } from "./components/SettingsSheet";
 import { SetupScreen } from "./components/SetupScreen";
@@ -77,6 +78,18 @@ function Main() {
       if (only?.status === "analyzing") {
         key = "analyzing";
         screen = <AnalyzingScreen path={only.path} />;
+      } else if (only?.status === "invalid" && only.error?.code === "pdf_encrypted") {
+        key = "locked";
+        screen = (
+          <UnlockScreen
+            name={only.name}
+            onUnlock={(password) => q.unlock(only.key, password)}
+            onChooseAnother={() => {
+              q.reset();
+              void chooseFiles();
+            }}
+          />
+        );
       } else if (only?.status === "invalid") {
         key = "invalid";
         screen = (

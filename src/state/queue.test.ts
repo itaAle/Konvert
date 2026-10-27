@@ -83,7 +83,7 @@ function file(name: string, kind: "audio" | "videoWithAudio" | "image" | "docume
       hasTags: false,
       picture: kind === "image" ? { alpha: false, alphaStream: null, gridGroup: null, exif: false, exifCopyable: false } : null,
       hasLocation: false,
-      document: kind === "document" ? { pages: 4, widthPt: 595, heightPt: 842, bookmarkPages: [], form: "none" } : null,
+      document: kind === "document" ? { pages: 4, widthPt: 595, heightPt: 842, bookmarkPages: [], form: "none", locked: false } : null,
     },
     targets,
     // Like the core: every file keeps its own format, except HEIC photos.
@@ -454,6 +454,33 @@ describe("queue state machine", () => {
     expect(plannedItems(s).map((i) => i.key)).toEqual([3, 1]);
     for (const key of [3, 1]) s = reduce(s, { type: "planned", key, version: s.planVersion, plan: plan("pdf", 100) });
     expect(canStart(s)).toBe(true);
+  });
+
+  it("opens a PDF with its password and protects the new one with another", () => {
+    let s = run(initialQueue(), { type: "add", paths: ["a.pdf"] });
+    const error = { code: "pdf_encrypted", details: null };
+    s = reduce(s, { type: "analyzeFailed", key: 1, error });
+    expect(s.items[0]).toMatchObject({ status: "invalid", error });
+    const opened = file("a.pdf", "document", null);
+    s = reduce(s, { type: "unlocked", key: 1, file: { ...opened, media: { ...opened.media, document: { ...opened.media.document!, locked: true } } } });
+    expect(s.items[0]).toMatchObject({ status: "ready", error: null });
+    s = reduce(s, { type: "selectTarget", target: "pdf" });
+    s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("pdf", 100) });
+    // Nothing changed but the password: a copy without it is worth saving.
+    expect(canStart(s)).toBe(true);
+
+    // Protection chosen, the two passwords not typed yet (or different).
+    const protection = { password: "", allowPrint: false, allowCopy: true };
+    s = reduce(s, { type: "setPdf", pdf: { ...s.pdf, protection } });
+    s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("pdf", 100) });
+    expect(canStart(s)).toBe(false);
+    s = reduce(s, { type: "setPdf", pdf: { ...s.pdf, protection: { ...protection, password: "nuova" } } });
+    s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("pdf", 100) });
+    expect(canStart(s)).toBe(true);
+    expect(requestOf(s)?.pdf?.protection).toEqual({ password: "nuova", allowPrint: false, allowCopy: true });
+    // Pictures of the pages are never protected.
+    s = reduce(s, { type: "selectTarget", target: "png" });
+    expect(requestOf(s)?.pdf?.protection).toBeNull();
   });
 
   it("does not arrange the pages of a Word document", () => {

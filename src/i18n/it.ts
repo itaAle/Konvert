@@ -88,6 +88,30 @@ export const it = {
       "Solo se rende il PDF più piccolo. Il testo non sarà più selezionabile né ricercabile, e link e moduli andranno persi.",
     fileLabel: "compresso",
   },
+  unlock: {
+    title: "PDF protetto",
+    hint: "«{name}» si apre solo con la sua password.",
+    password: "Password di «{name}»",
+    placeholder: "Password",
+    open: "Apri",
+    show: "Mostra la password",
+    hide: "Nascondi la password",
+    locked: "Protetto da password",
+    privacy:
+      "La password resta solo in memoria mentre il file è nell'elenco: non viene salvata né scritta nei registri.",
+  },
+  protect: {
+    title: "Proteggi con una password",
+    hint: "Il PDF si aprirà solo con la password (cifratura AES a 256 bit).",
+    password: "Password",
+    again: "Ripeti la password",
+    mismatch: "Le due password non coincidono.",
+    allowPrint: "Consenti la stampa",
+    allowCopy: "Consenti di copiare il testo",
+    forget: "Konvert non conserva la password: se la dimentichi, il PDF non si potrà più aprire.",
+    limits:
+      "I limiti di stampa e copia sono rispettati dai lettori PDF più diffusi. Konvert non conserva la password: se la dimentichi, il PDF non si potrà più aprire.",
+  },
   location: {
     remove: "Rimuovi la posizione",
     hint: "Questo file registra il luogo in cui è stato creato (GPS). Attiva per non conservarlo nel file convertito.",
@@ -247,6 +271,7 @@ export const it = {
     pdfBookmarksDropped:
       "Alcuni segnalibri portano a pagine tolte: spariranno, oppure porteranno alla prima pagina rimasta della loro sezione.",
     pdfFormFixed: "Il modulo di questo PDF (XFA o firmato digitalmente) resterà visibile ma non sarà più compilabile.",
+    pdfUnlocked: "Il nuovo PDF non sarà protetto da password, a meno che tu non ne scelga una.",
     pdfPagesAsPictures:
       "Se serve a ridurre il peso, le pagine diventeranno immagini: il testo non sarà più selezionabile, link e moduli andranno persi.",
     docxLayout:
@@ -358,7 +383,8 @@ export const it = {
     corrupt_input: "Il file sembra danneggiato o in un formato non supportato.",
     unsupported_conversion: "Questa conversione non è supportata per questo file.",
     invalid_pages: "Le pagine indicate non esistono nel documento. Scrivi ad esempio 1-3, 5 oppure lascia vuoto per tutte.",
-    pdf_encrypted: "Questo PDF è protetto da una password. Konvert non apre i PDF protetti: rimuovi la protezione con il programma con cui è stato creato e riprova.",
+    pdf_encrypted: "Questo PDF è protetto da una password: scrivila per aprirlo.",
+    pdf_wrong_password: "La password non è corretta. Controlla maiuscole e minuscole e riprova.",
     disk_full: "Spazio su disco insufficiente per salvare il file convertito.",
     permission_denied:
       "Accesso negato: Konvert non può leggere il file o scrivere nella cartella di destinazione.",

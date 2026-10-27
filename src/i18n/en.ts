@@ -89,6 +89,29 @@ export const en: Messages = {
       "Only if it makes the PDF smaller. The text can no longer be selected or searched, and links and forms are lost.",
     fileLabel: "compressed",
   },
+  unlock: {
+    title: "Protected PDF",
+    hint: "“{name}” opens only with its password.",
+    password: "Password of “{name}”",
+    placeholder: "Password",
+    open: "Open",
+    show: "Show the password",
+    hide: "Hide the password",
+    locked: "Protected by a password",
+    privacy: "The password stays in memory only while the file is in the list: it is never saved or written to logs.",
+  },
+  protect: {
+    title: "Protect with a password",
+    hint: "The PDF will open only with the password (256-bit AES encryption).",
+    password: "Password",
+    again: "Repeat the password",
+    mismatch: "The two passwords do not match.",
+    allowPrint: "Allow printing",
+    allowCopy: "Allow copying the text",
+    forget: "Konvert does not keep the password: if you forget it, the PDF can no longer be opened.",
+    limits:
+      "The printing and copying limits are honored by the most common PDF readers. Konvert does not keep the password: if you forget it, the PDF can no longer be opened.",
+  },
   location: {
     remove: "Remove the location",
     hint: "This file records where it was made (GPS). Turn this on to leave it out of the converted file.",
@@ -243,6 +266,7 @@ export const en: Messages = {
     pdfBookmarksDropped:
       "Some bookmarks lead to pages you left out: they will go, or lead to the first page left in their section.",
     pdfFormFixed: "This PDF's form (XFA or digitally signed) will stay visible but can no longer be filled in.",
+    pdfUnlocked: "The new PDF will not be protected by a password, unless you choose one.",
     pdfPagesAsPictures:
       "If it helps to reduce the size, the pages will become pictures: the text can no longer be selected, links and forms are lost.",
     docxLayout:
@@ -351,7 +375,8 @@ export const en: Messages = {
     corrupt_input: "The file seems damaged or in an unsupported format.",
     unsupported_conversion: "This conversion is not supported for this file.",
     invalid_pages: "Those pages do not exist in the document. Write for example 1-3, 5, or leave it empty for all of them.",
-    pdf_encrypted: "This PDF is protected by a password. Konvert does not open protected PDFs: remove the protection with the program that created it and try again.",
+    pdf_wrong_password: "The password is not right. Check upper and lower case and try again.",
+    pdf_encrypted: "This PDF is protected by a password: type it to open the file.",
     disk_full: "Not enough disk space to save the converted file.",
     permission_denied: "Access denied: Konvert cannot read the file or write to the destination folder.",
     cancelled: "Conversion cancelled.",

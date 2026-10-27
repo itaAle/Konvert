@@ -198,6 +198,9 @@ function mockPage(number: number, widthPt: number, heightPt: number, size: numbe
   return canvas.toDataURL("image/png");
 }
 
+/** PDFs opened with their password in this session. */
+const mockUnlocked = new Set<string>();
+
 /** A photo for the page editor: sky, sun and hills, in the photo's proportions. */
 function mockPhoto(path: string, width: number, height: number, size: number): string {
   const scale = size / Math.max(width, height);
@@ -244,7 +247,7 @@ function analysis(path: string): FileAnalysis {
         hasTags: false,
         picture: null,
         hasLocation: false,
-        document: { pages: MOCK_PAGES, widthPt: 595.3, heightPt: 841.9, bookmarkPages: [1, 3, 9], form: "fillable" },
+        document: { pages: MOCK_PAGES, widthPt: 595.3, heightPt: 841.9, bookmarkPages: [1, 3, 9], form: "fillable", locked: false },
       },
       targets: [...PAGES, PDF, DOCX],
       compress: "pdf",
@@ -406,10 +409,24 @@ export const mockBackend: Backend = {
   async confirmClose() {},
   async analyzeFile(path) {
     await sleep(600);
+    // "protetto" in the name: a PDF that opens with the password "segreta".
+    if (/protett|protected/i.test(path) && !mockUnlocked.has(path)) {
+      throw { code: "pdf_encrypted", details: null };
+    }
     if (params.get("mock") === "error") {
       throw { code: "corrupt_input", details: "x.wav: Invalid data found when processing input" };
     }
     return analysis(path);
+  },
+  async unlockPdf(path, password) {
+    await sleep(400);
+    if (password !== "segreta") throw { code: "pdf_wrong_password", details: null };
+    mockUnlocked.add(path);
+    const found = analysis(path);
+    return { ...found, media: { ...found.media, document: found.media.document && { ...found.media.document, locked: true } } };
+  },
+  async forgetPdfPassword(path) {
+    mockUnlocked.delete(path);
   },
   async pdfThumbnails(_path, pages, size) {
     await sleep(250);
@@ -500,6 +517,7 @@ export const mockBackend: Backend = {
           ? [
               ...(media.document?.bookmarkPages.some((p) => !pages.includes(p)) ? (["pdfBookmarksDropped"] as const) : []),
               ...(media.document?.form === "fixed" ? (["pdfFormFixed"] as const) : []),
+              ...(media.document?.locked && !request.pdf?.protection ? (["pdfUnlocked"] as const) : []),
             ]
           : toPdf && media.picture?.exif
             ? ["metadataDropped"]

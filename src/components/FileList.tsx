@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronDown, ChevronUp, Plus, TriangleAlert, X } from "lucide-react";
+import { ChevronDown, ChevronUp, LockKeyhole, Plus, TriangleAlert, X } from "lucide-react";
 
 import { errorMessage, t } from "../i18n";
 import { formatBytes, formatDuration, formatPages } from "../lib/format";
@@ -8,6 +8,7 @@ import { NO_TARGETS, type QueueItem } from "../state/queue";
 import { formatEstimate } from "./PlanSummary";
 import { Button } from "./ui/Button";
 import { Spinner } from "./ui/Spinner";
+import { UnlockForm, type UnlockAttempt } from "./Unlock";
 
 interface FileListProps {
   items: QueueItem[];
@@ -16,7 +17,11 @@ interface FileListProps {
   onClear?: () => void;
   /** Files combined into one PDF: their order is the order of the pages. */
   onMove?: (key: number, delta: -1 | 1) => void;
+  /** A PDF that needs a password is opened with it. */
+  onUnlock?: (key: number, password: string) => ReturnType<UnlockAttempt>;
 }
+
+const locked = (item: QueueItem) => item.status === "invalid" && item.error?.code === "pdf_encrypted";
 
 export function itemProblem(item: QueueItem): string | null {
   if (item.status !== "invalid" || !item.error) return null;
@@ -28,6 +33,13 @@ function ItemIcon({ item }: { item: QueueItem }) {
     return (
       <span className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-fill">
         <Spinner size={18} label={t("files.analyzing")} />
+      </span>
+    );
+  }
+  if (locked(item)) {
+    return (
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-accent-soft text-accent">
+        <LockKeyhole size={17} aria-hidden />
       </span>
     );
   }
@@ -49,7 +61,7 @@ function ItemIcon({ item }: { item: QueueItem }) {
 }
 
 /** Compact list of the files to convert (two or more). */
-export function FileList({ items, onRemove, onAdd, onClear, onMove }: FileListProps) {
+export function FileList({ items, onRemove, onAdd, onClear, onMove, onUnlock }: FileListProps) {
   const title = onMove ? t("files.titleCombine") : t("files.title");
   const moveButton = "flex size-7 shrink-0 items-center justify-center rounded-full text-label-tertiary transition-colors enabled:hover:bg-fill enabled:hover:text-label disabled:opacity-30";
   return (
@@ -73,7 +85,8 @@ export function FileList({ items, onRemove, onAdd, onClear, onMove }: FileListPr
       <ul className="max-h-[248px] divide-y divide-separator overflow-y-auto rounded-[20px] bg-surface shadow-card">
         <AnimatePresence initial={false}>
           {items.map((item, index) => {
-            const problem = itemProblem(item);
+            const needsPassword = locked(item) && onUnlock != null;
+            const problem = needsPassword ? null : itemProblem(item);
             const media = item.file?.media;
             const facts = media
               ? [
@@ -98,9 +111,15 @@ export function FileList({ items, onRemove, onAdd, onClear, onMove }: FileListPr
                   <p className="truncate text-[14px] font-medium" title={item.name}>
                     {item.name}
                   </p>
-                  <p className={`truncate text-[12px] ${problem ? "text-warning" : "text-label-secondary"}`}>
-                    {item.status === "analyzing" ? t("files.analyzing") : (problem ?? facts)}
-                  </p>
+                  {needsPassword ? (
+                    <div className="mt-1">
+                      <UnlockForm name={item.name} onUnlock={(password) => onUnlock(item.key, password)} compact />
+                    </div>
+                  ) : (
+                    <p className={`truncate text-[12px] ${problem ? "text-warning" : "text-label-secondary"}`}>
+                      {item.status === "analyzing" ? t("files.analyzing") : (problem ?? facts)}
+                    </p>
+                  )}
                 </div>
                 {item.plan && (
                   <span className="shrink-0 text-[12px] text-label-tertiary tabular-nums">

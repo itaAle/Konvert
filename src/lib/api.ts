@@ -34,6 +34,10 @@ export interface Backend {
   clearLog(): Promise<void>;
   confirmClose(): Promise<void>;
   analyzeFile(path: string): Promise<FileAnalysis>;
+  /** Opens a PDF protected by a password (kept in memory by the backend while the file is listed). */
+  unlockPdf(path: string, password: string): Promise<FileAnalysis>;
+  /** Forgets the password of a PDF that left the list. */
+  forgetPdfPassword(path: string): Promise<void>;
   planConversion(path: string, media: MediaInfo, request: ConversionRequest): Promise<ConversionPlan>;
   /** Small pictures of some pages of a PDF (longest side `size` pixels), drawn locally. */
   pdfThumbnails(path: string, pages: number[], size: number): Promise<Thumbnail[]>;
@@ -87,6 +91,8 @@ const tauriBackend: Backend = {
   clearLog: () => call("clear_log"),
   confirmClose: () => call("confirm_close"),
   analyzeFile: (path) => call("analyze_file", { path }),
+  unlockPdf: (path, password) => call("unlock_pdf", { path, password }),
+  forgetPdfPassword: (path) => call("forget_pdf_password", { path }),
   planConversion: (path, media, request) => call("plan_conversion", { path, media, request }),
   pdfThumbnails: (path, pages, size) => call("pdf_thumbnails", { path, pages, size }),
   pictureThumbnail: (path, size) => call("picture_thumbnail", { path, size }),

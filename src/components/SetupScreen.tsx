@@ -33,6 +33,7 @@ import { PageEditor, type EditorSource } from "./PageEditor";
 import { PagesPanel } from "./PagesPanel";
 import { PdfPanel } from "./PdfPanel";
 import { PlanFooterInfo, PlanSummary, hasStrongWarning, isRemux } from "./PlanSummary";
+import { ProtectPanel } from "./ProtectPanel";
 import { QualityPicker } from "./QualityPicker";
 import { SplitPanel } from "./SplitPanel";
 import { Button } from "./ui/Button";
@@ -169,6 +170,7 @@ export function SetupScreen({ q }: { q: QueueController }) {
             onAdd={() => void q.chooseFiles()}
             onClear={q.reset}
             onMove={together ? q.move : undefined}
+            onUnlock={q.unlock}
           />
         )}
 
@@ -283,6 +285,9 @@ export function SetupScreen({ q }: { q: QueueController }) {
                     <SplitPanel value={state.pdf} onChange={q.setPdf} documents={documentCount} unchanged={unchanged} />
                   </section>
                 </>
+              )}
+              {option?.format === "pdf" && (
+                <ProtectPanel value={state.pdf.protection ?? null} onChange={(protection) => q.setPdf({ ...state.pdf, protection })} />
               )}
               {option?.group === "document" && documents.length > 0 && !editing && (
                 <p className="-mt-2 flex items-start gap-2 px-1 text-[13px] text-label-secondary">

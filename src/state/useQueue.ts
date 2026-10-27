@@ -5,6 +5,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { AdvancedOptions } from "../bindings/AdvancedOptions";
 import type { CompressOptions } from "../bindings/CompressOptions";
 import type { ConversionRequest } from "../bindings/ConversionRequest";
+import type { ErrorPayload } from "../bindings/ErrorPayload";
 import type { FrameOptions } from "../bindings/FrameOptions";
 import type { JobEvent } from "../bindings/JobEvent";
 import type { PdfOptions } from "../bindings/PdfOptions";
@@ -82,7 +83,10 @@ export function useQueue() {
       const id = `${version}:${item.key}`;
       if (!request || item.plan || item.planError || planRequested.current.has(id)) continue;
       planRequested.current.add(id);
-      backend.planConversion(item.path, item.file!.media, request).then(
+      // A plan does not need the password that will protect the PDF.
+      const protection = request.pdf?.protection;
+      const planned = protection ? { ...request, pdf: { ...request.pdf!, protection: { ...protection, password: "" } } } : request;
+      backend.planConversion(item.path, item.file!.media, planned).then(
         (plan) => dispatch({ type: "planned", key: item.key, version, plan }),
         (error) => dispatch({ type: "planFailed", key: item.key, version, error: toErrorPayload(error) }),
       );
@@ -200,6 +204,30 @@ export function useQueue() {
     jobs.forEach((jobId) => void backend.cancelConversion(jobId));
   }, []);
 
+  // --- PDFs opened with a password ------------------------------------------------
+  // The backend keeps each password in memory while its file is in the list.
+  const unlockedPaths = useRef(new Set<string>());
+  const unlock = useCallback(async (key: number, password: string): Promise<ErrorPayload | null> => {
+    const item = stateRef.current.items.find((i) => i.key === key);
+    if (!item) return null;
+    try {
+      const file = await backend.unlockPdf(item.path, password);
+      unlockedPaths.current.add(item.path);
+      dispatch({ type: "unlocked", key, file });
+      return null;
+    } catch (error) {
+      return toErrorPayload(error);
+    }
+  }, []);
+  useEffect(() => {
+    const listed = new Set(state.items.map((i) => i.path));
+    for (const path of unlockedPaths.current) {
+      if (listed.has(path)) continue;
+      unlockedPaths.current.delete(path);
+      void backend.forgetPdfPassword(path).catch(() => {});
+    }
+  }, [state.items]);
+
   const chooseFiles = useCallback(async () => {
     const paths = await backend.pickFiles(t("drop.pickerTitle"), t("drop.pickerFilter"));
     if (paths && paths.length > 0) dispatch({ type: "add", paths });
@@ -215,6 +243,7 @@ export function useQueue() {
     addFiles: (paths: string[]) => dispatch({ type: "add", paths }),
     chooseFiles,
     remove: (key: number) => dispatch({ type: "remove", key }),
+    unlock,
     move: (key: number, delta: -1 | 1) => dispatch({ type: "move", key, delta }),
     selectTarget: (target: TargetFormat) => dispatch({ type: "selectTarget", target }),
     selectCompress: () => dispatch({ type: "selectCompress" }),

@@ -79,6 +79,8 @@ export type QueueAction =
   | { type: "add"; paths: string[] }
   | { type: "analyzed"; key: number; file: FileAnalysis }
   | { type: "analyzeFailed"; key: number; error: ErrorPayload }
+  /** A PDF that needed a password was opened with it. */
+  | { type: "unlocked"; key: number; file: FileAnalysis }
   | { type: "remove"; key: number }
   | { type: "move"; key: number; delta: -1 | 1 }
   | { type: "selectTarget"; target: TargetFormat }
@@ -123,6 +125,7 @@ export const DEFAULT_PDF: PdfOptions = {
   split: "none",
   splitEvery: 1,
   splitAfter: [],
+  protection: null,
 };
 
 /** Strong compression, no size limit, text kept as text. */
@@ -237,9 +240,14 @@ export function requestOf(state: QueueState): ConversionRequest | null {
     frames: state.frames,
     removeLocation: state.removeLocation,
     // Page edits and splits: a lone PDF, or files combined page by page.
-    pdf: edit
-      ? { ...state.pdf, layout: layoutOf(pages, sources), splitAfter: cutPositions(pages, state.cuts, sources) }
-      : { ...state.pdf, layout: null, split: "none", splitAfter: [] },
+    // A password protects new PDFs only.
+    pdf: {
+      ...state.pdf,
+      ...(edit
+        ? { layout: layoutOf(pages, sources), splitAfter: cutPositions(pages, state.cuts, sources) }
+        : { layout: null, split: "none", splitAfter: [] }),
+      protection: state.target === "pdf" ? state.pdf.protection : null,
+    },
   };
 }
 
@@ -321,8 +329,11 @@ export function canStart(state: QueueState): boolean {
     planned.length > 0 &&
     !state.items.some((i) => i.status === "analyzing") &&
     planned.every((i) => i.plan && !i.planError) &&
-    // A copy of a lone PDF with nothing changed would be pointless.
-    (!editsPdf(state) || combines(state) || pdfChanged(state))
+    // A copy of a lone PDF with nothing changed would be pointless (unless
+    // it was opened with a password: the copy has none).
+    (!editsPdf(state) || combines(state) || pdfChanged(state) || lonePdf(state.items)?.file?.media.document?.locked === true) &&
+    // A password is typed twice, the same.
+    (state.target !== "pdf" || state.pdf.protection?.password !== "")
   );
 }
 
@@ -447,6 +458,19 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
     case "analyzed": {
       const item = state.items.find((i) => i.key === action.key);
       if (!item || item.status !== "analyzing") return state;
+      const usable = action.file.targets.length > 0;
+      const next = update(state, action.key, {
+        file: action.file,
+        name: action.file.name,
+        status: usable ? "ready" : "invalid",
+        error: usable ? null : { code: NO_TARGETS, details: null },
+      });
+      return revalidateTarget(next);
+    }
+
+    case "unlocked": {
+      const item = state.items.find((i) => i.key === action.key);
+      if (!item || item.status !== "invalid" || state.phase !== "setup") return state;
       const usable = action.file.targets.length > 0;
       const next = update(state, action.key, {
         file: action.file,
