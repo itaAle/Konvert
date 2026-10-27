@@ -2,8 +2,8 @@
 Convert audio, video, images and PDFs entirely on your computer, with a modern interface.
 
 Konvert converts between many audio, video and image formats, takes frames from videos,
-turns photos into PDFs and PDF pages into pictures, and lets you keep or remove EXIF data
-and locations. Everything happens **on your computer**: no network connections, no
+turns photos into PDFs and PDF pages into pictures, splits, turns and rearranges the pages
+of a PDF, and lets you keep or remove EXIF data and locations. Everything happens **on your computer**: no network connections, no
 telemetry, no account.
 
 Platforms: Windows 10/11 (64-bit), macOS 11 or later on Apple Silicon (M1 and later),
@@ -40,7 +40,7 @@ Konvert only offers the conversions that make sense for the file you give it:
 | Video with audio | MP4, MKV, MOV, WebM, AVI, GIF, animated WebP; more formats: TS, MPG (MPEG-2), 3GP, FLV, APNG. Also **audio only** in every audio format and **frames** as JPG, PNG or WebP |
 | Video without audio | The same, without the audio formats |
 | Picture (JPG/JPEG, PNG, WebP, AVIF, HEIC/HEIF, BMP, TIFF, ICO, SVG, JPEG XL¹) | JPG, PNG, WebP, AVIF, **PDF**; more formats: BMP, TIFF, GIF, ICO, JPEG XL¹ |
-| PDF document | Its **pages as pictures** (PNG, JPG, WebP); together with other PDFs or pictures, **one PDF** |
+| PDF document | Its **pages as pictures** (PNG, JPG, WebP); a **new PDF** with pages taken out, turned or moved, or **split** into several PDFs; together with other PDFs or pictures, **one PDF** |
 
 ¹ JPEG XL needs FFmpeg's libjxl, which the Windows and Linux builds have and the macOS
 build does not: Konvert checks the engine and offers JPEG XL only where it works.
@@ -107,17 +107,28 @@ PDF documents:
   600 dpi, drawn on white. One page is saved next to the PDF (`Report-page-05.png`),
   several go into a new folder (`Report/Report-page-01.png`, …); the word between name and
   number follows the language of the interface (`page`, `pagina`).
+- **Edit a PDF** (choose **PDF** for a single PDF): its pages appear as thumbnails, drawn on
+  your computer. Drag a page to move it, turn it left or right, take it out (or put it
+  back), or keep only some pages (`1-3, 5, 8-`); the keyboard works too (arrow keys,
+  Ctrl + arrow keys to move, R to turn, Delete to take out, S to split after a page).
+  The result is a new PDF; the original is never changed.
+- **Split a PDF**: one new PDF at every page, every 2, 3, 4, 5, 10 or 20 pages, or where you
+  click the scissors between two pages, saved in a new folder named after the document
+  (`Report/Report-pages-01-03.pdf`, `Report/Report-page-04.pdf`, …). Edits and splits
+  combine: take out, turn and move pages, then split the result.
 - **Combine**: PDFs and pictures become one PDF, in the order of the list (move the files
-  up and down), named after the first file. Pages keep their size and rotation;
-  bookmarks, form fields, attachments and the document properties of the original PDFs
-  are not carried over.
+  up and down), named after the first file. Pages keep their size and rotation.
+- Pages are copied as they are, never re-compressed: only what they use (fonts, pictures)
+  goes into the new PDF, so a few pages taken from a large document make a small file.
+  Links to pages that are left out are removed. Bookmarks, form fields, attachments and
+  the document properties of the original PDFs are not carried over (Konvert says so
+  when a PDF has bookmarks or a form).
 - PDFs created by Konvert contain no author, title, dates, file names or paths: only
   "Konvert" as the producing program.
 - PDFs that need a password to be opened are not supported: Konvert says so and does not
   ask for passwords.
 - Pages are drawn by hayro, a PDF renderer written in Rust: very unusual PDFs may look
   slightly different than in other readers.
-- Splitting a PDF, extracting, rotating or reordering pages are not available yet.
 
 The format table is declarative: `crates/konvert-core/src/formats.rs`.
 
@@ -285,7 +296,6 @@ Ideas collected for upcoming updates:
 - FFmpeg built **without any network support** on Windows and Linux too (today the network
   is blocked at runtime there; the macOS build already has no network protocol).
 - **Signed** installer with a code-signing certificate (no SmartScreen warning).
-- **PDF page tools**: split a PDF, extract, rotate and reorder pages.
 
 ## Development
 
