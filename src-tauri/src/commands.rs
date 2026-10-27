@@ -11,7 +11,8 @@ use std::sync::atomic::Ordering;
 use konvert_core::pdf::Thumbnail;
 use konvert_core::{
     ConversionPlan, ConversionRequest, CoreError, ErrorPayload, MediaInfo, TargetFormat,
-    TargetOption, available_targets, formats::supported_targets, plan_conversion as plan,
+    TargetOption, available_targets, compress::compress_format, formats::supported_targets,
+    plan_conversion as plan,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State, WebviewWindow};
@@ -192,6 +193,8 @@ pub struct FileAnalysis {
     pub media: MediaInfo,
     /// Output formats that make sense for this file.
     pub targets: Vec<TargetOption>,
+    /// Format of a smaller copy of the file (its own), when Konvert can make one.
+    pub compress: Option<TargetFormat>,
 }
 
 /// Analyses a local media file and lists the sensible output formats.
@@ -212,6 +215,11 @@ pub async fn analyze_file(
         })
         .await;
     let targets = supported_targets(available_targets(&media, &path), encoders);
+    let compress = compress_format(&media, &path).filter(|format| {
+        konvert_core::formats::spec(*format)
+            .requires_encoder
+            .is_none_or(|encoder| encoders.contains(encoder))
+    });
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -221,6 +229,7 @@ pub async fn analyze_file(
         name,
         media,
         targets,
+        compress,
     })
 }
 
