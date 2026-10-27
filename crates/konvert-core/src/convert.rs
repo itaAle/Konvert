@@ -18,17 +18,19 @@ use ts_rs::TS;
 
 use crate::binaries::Binaries;
 use crate::command::{build_from_plan, build_from_plan_with, file_url};
+use crate::compress;
 use crate::error::CoreError;
 use crate::exif;
 use crate::formats::{self, TargetFormat};
 use crate::metadata;
 use crate::naming;
 use crate::pdf;
+use crate::pdf_compress;
 use crate::plan::{ConversionPlan, DocumentPlan, plan_conversion};
 use crate::probe::{MediaInfo, MediaKind};
 use crate::process;
 use crate::progress::{Progress, ProgressParser};
-use crate::request::{ConversionRequest, FrameMode, PdfPage};
+use crate::request::{CompressOptions, ConversionRequest, FrameMode, PdfPage};
 use crate::svg;
 use crate::workspace::Workspace;
 
@@ -87,6 +89,9 @@ pub async fn run_conversion(
     }
     let plan = plan_conversion(&job.media, &job.request, &job.input)?;
     let ext = formats::spec(job.request.target).extension;
+    if let Some(options) = &plan.compress {
+        return run_compress(bins, workspace, job, options, cancel, on_progress, started).await;
+    }
     if plan.frames.is_some_and(|f| f.mode == FrameMode::Sequence) {
         return run_series(bins, workspace, job, &plan, cancel, on_progress, started).await;
     }
@@ -101,54 +106,16 @@ pub async fn run_conversion(
         return run_pages(bins, workspace, job, &plan, cancel, on_progress, started).await;
     }
     let temp_output = workspace.job_output(job.id, ext);
-    let cover_comment = prepare_cover_comment(bins, workspace, job, &plan).await;
-    // A vector picture is drawn first; FFmpeg then encodes the drawing.
-    let drawing = match plan.image.as_ref().and_then(|i| i.render) {
-        Some((width, height)) => Some(render_drawing(workspace, job, width, height).await?),
-        None => None,
-    };
-    let source = drawing.as_deref().unwrap_or(&job.input);
-    let command = build_from_plan_with(&plan, source, cover_comment.as_deref(), &temp_output);
-
-    let result = run_ffmpeg(
+    encode(
         bins,
-        &command.args,
-        job.media.duration_secs,
+        workspace,
+        job,
+        &plan,
+        &temp_output,
         cancel,
         &mut on_progress,
     )
-    .await;
-    for temporary in [&cover_comment, &drawing].into_iter().flatten() {
-        let _ = std::fs::remove_file(temporary);
-    }
-    let result = result.and_then(|()| {
-        // FFmpeg can succeed without writing anything (e.g. no frame there).
-        match std::fs::metadata(&temp_output) {
-            Ok(m) if m.len() > 0 => Ok(()),
-            _ => Err(nothing_written()),
-        }
-    });
-
-    if let Err(e) = result {
-        let _ = std::fs::remove_file(&temp_output);
-        return Err(e);
-    }
-
-    if let Some(image) = plan
-        .image
-        .as_ref()
-        .filter(|i| i.copy_exif || plan.remove_location)
-    {
-        let (input, output) = (job.input.clone(), temp_output.clone());
-        let (copy, remove, size) = (
-            image.copy_exif,
-            plan.remove_location,
-            image.width.zip(image.height),
-        );
-        let _ =
-            tokio::task::spawn_blocking(move || finish_exif(&input, &output, copy, remove, size))
-                .await;
-    }
+    .await?;
 
     let stem = output_stem(&job.input);
     let output_dir = job.output_dir.clone();
@@ -172,6 +139,244 @@ pub async fn run_conversion(
         files: 1,
         elapsed: started.elapsed(),
     })
+}
+
+/// One file made by FFmpeg (after Konvert drew an SVG picture, or prepared an
+/// Ogg cover), written to `output` in the private workspace, EXIF data
+/// copied. On failure nothing is left behind.
+async fn encode(
+    bins: &Binaries,
+    workspace: &Workspace,
+    job: &ConversionJob,
+    plan: &ConversionPlan,
+    output: &Path,
+    cancel: &CancellationToken,
+    on_progress: &mut (impl FnMut(Progress) + Send),
+) -> Result<(), CoreError> {
+    let cover_comment = prepare_cover_comment(bins, workspace, job, plan).await;
+    // A vector picture is drawn first; FFmpeg then encodes the drawing.
+    let drawing = match plan.image.as_ref().and_then(|i| i.render) {
+        Some((width, height)) => Some(render_drawing(workspace, job, width, height).await?),
+        None => None,
+    };
+    let source = drawing.as_deref().unwrap_or(&job.input);
+    let command = build_from_plan_with(plan, source, cover_comment.as_deref(), output);
+
+    let result = run_ffmpeg(
+        bins,
+        &command.args,
+        job.media.duration_secs,
+        cancel,
+        on_progress,
+    )
+    .await;
+    for temporary in [&cover_comment, &drawing].into_iter().flatten() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    let result = result.and_then(|()| {
+        // FFmpeg can succeed without writing anything (e.g. no frame there).
+        match std::fs::metadata(output) {
+            Ok(m) if m.len() > 0 => Ok(()),
+            _ => Err(nothing_written()),
+        }
+    });
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(output);
+        return Err(e);
+    }
+
+    if let Some(image) = plan
+        .image
+        .as_ref()
+        .filter(|i| i.copy_exif || plan.remove_location)
+    {
+        let (input, output) = (job.input.clone(), output.to_path_buf());
+        let (copy, remove, size) = (
+            image.copy_exif,
+            plan.remove_location,
+            image.width.zip(image.height),
+        );
+        let _ =
+            tokio::task::spawn_blocking(move || finish_exif(&input, &output, copy, remove, size))
+                .await;
+    }
+    Ok(())
+}
+
+/// A smaller copy in the same format, named `name-compressed.ext` (with the
+/// word the UI sends). A media file is converted as many times as its size
+/// limit needs ([`compress::Search`]); a PDF is compressed by Konvert. The
+/// copy must be smaller than the file, or nothing is written.
+async fn run_compress(
+    bins: &Binaries,
+    workspace: &Workspace,
+    job: &ConversionJob,
+    options: &CompressOptions,
+    cancel: &CancellationToken,
+    mut on_progress: impl FnMut(Progress) + Send,
+    started: Instant,
+) -> Result<ConversionOutcome, CoreError> {
+    let input_size = std::fs::metadata(&job.input)?.len();
+    let ext = formats::spec(job.request.target).extension;
+    let temp_output = workspace.job_output(job.id, ext);
+    let result = if job.media.kind == MediaKind::Document {
+        compress_pdf(job, options, &temp_output, cancel, &mut on_progress).await
+    } else {
+        compress_media(
+            bins,
+            workspace,
+            job,
+            options,
+            &temp_output,
+            cancel,
+            &mut on_progress,
+        )
+        .await
+    };
+    let size = match result {
+        Ok(size) if size < input_size => size,
+        Ok(_) => {
+            let _ = std::fs::remove_file(&temp_output);
+            return Err(CoreError::NoGain);
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp_output);
+            return Err(e);
+        }
+    };
+
+    let mut stem = output_stem(&job.input);
+    stem.push(format!(
+        "-{}",
+        label(options.label.as_deref(), "compressed")
+    ));
+    let output_dir = job.output_dir.clone();
+    let temp = temp_output.clone();
+    let moved =
+        tokio::task::spawn_blocking(move || naming::move_to_unique(&temp, &output_dir, &stem, ext))
+            .await
+            .map_err(|e| CoreError::Io(std::io::Error::other(e)))?;
+    let output = match moved {
+        Ok(path) => path,
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp_output);
+            return Err(e.into());
+        }
+    };
+    Ok(ConversionOutcome {
+        output,
+        size_bytes: size,
+        files: 1,
+        elapsed: started.elapsed(),
+    })
+}
+
+/// Compresses a PDF on a worker thread into `output`; gives its size.
+async fn compress_pdf(
+    job: &ConversionJob,
+    options: &CompressOptions,
+    output: &Path,
+    cancel: &CancellationToken,
+    on_progress: &mut (impl FnMut(Progress) + Send),
+) -> Result<u64, CoreError> {
+    let data = std::fs::read(&job.input)?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<f64>();
+    let worker = {
+        let (stop, options) = (stop.clone(), options.clone());
+        tokio::task::spawn_blocking(move || {
+            pdf_compress::compress(&data, &options, &stop, |done| {
+                let _ = sender.send(done);
+            })
+        })
+    };
+    let cancelled = loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => break true,
+            done = receiver.recv() => match done {
+                Some(done) => on_progress(Progress {
+                    fraction: Some(done.clamp(0.0, 1.0)),
+                    ..fraction(0, 1)
+                }),
+                None => break false,
+            },
+        }
+    };
+    if cancelled {
+        stop.store(true, Ordering::Relaxed);
+        let _ = worker.await;
+        return Err(CoreError::Cancelled);
+    }
+    let bytes = worker
+        .await
+        .map_err(|e| CoreError::Io(std::io::Error::other(e)))??;
+    std::fs::write(output, &bytes)?;
+    Ok(bytes.len() as u64)
+}
+
+/// Converts a media file into its own format with the settings of each
+/// attempt, until one fits under the limit (or nothing is left to try): the
+/// first that fits, else the smallest, ends up in `output`; gives its size.
+async fn compress_media(
+    bins: &Binaries,
+    workspace: &Workspace,
+    job: &ConversionJob,
+    options: &CompressOptions,
+    output: &Path,
+    cancel: &CancellationToken,
+    on_progress: &mut (impl FnMut(Progress) + Send),
+) -> Result<u64, CoreError> {
+    let ext = formats::spec(job.request.target).extension;
+    let mut search = compress::Search::new(
+        &job.media,
+        options,
+        job.request.target,
+        job.request.remove_location,
+    );
+    let mut attempt = search.first();
+    let mut kept: Option<(PathBuf, u64)> = None;
+    let forget = |kept: &Option<(PathBuf, u64)>| {
+        if let Some((file, _)) = kept {
+            let _ = std::fs::remove_file(file);
+        }
+    };
+    for n in 0.. {
+        let plan = match attempt.plan(&job.media, &job.input) {
+            Ok(plan) => plan,
+            Err(e) => {
+                forget(&kept);
+                return Err(e);
+            }
+        };
+        let file = workspace
+            .dir()
+            .join(format!("job-{}-try-{n}.{ext}", job.id));
+        if let Err(e) = encode(bins, workspace, job, &plan, &file, cancel, on_progress).await {
+            forget(&kept);
+            return Err(e);
+        }
+        let size = std::fs::metadata(&file)
+            .map(|m| m.len())
+            .unwrap_or(u64::MAX);
+        let fits = search.fits(size);
+        if fits || kept.as_ref().is_none_or(|(_, best)| size < *best) {
+            forget(&kept);
+            kept = Some((file, size));
+        } else {
+            let _ = std::fs::remove_file(&file);
+        }
+        match search.next(&attempt, size) {
+            Some(next) if !fits => attempt = next,
+            _ => break,
+        }
+    }
+    let (file, size) = kept.ok_or_else(nothing_written)?;
+    if let Err(e) = std::fs::rename(&file, output) {
+        let _ = std::fs::remove_file(&file);
+        return Err(e.into());
+    }
+    Ok(size)
 }
 
 /// A series of pictures: FFmpeg writes them into a private folder, then they

@@ -309,7 +309,7 @@ pub fn render_pages(
 
 /// Draws a page on white at `scale` pixels per point. A renderer bug on one
 /// strange page must not take the app down: it gives `None`.
-fn draw<'a>(
+pub(crate) fn draw<'a>(
     page: &'a Page<'a>,
     cache: &RenderCache<'a>,
     settings: &InterpreterSettings,

@@ -21,6 +21,9 @@ resvg = { workspace = true }
 # PDF documents: pages rendered by hayro, files read and written by lopdf.
 hayro = { workspace = true }
 lopdf = { workspace = true }
+# Smaller PDFs: pictures stored again as JPEG, streams recompressed.
+jpeg-encoder = { workspace = true }
+flate2 = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [

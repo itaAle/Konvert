@@ -12,9 +12,9 @@ use std::process::Command;
 
 use konvert_core::formats;
 use konvert_core::{
-    AdvancedOptions, Binaries, ChannelLayout, ConversionJob, ConversionOutcome, ConversionRequest,
-    CoreError, FrameMode, FrameOptions, MediaInfo, MediaKind, QualityPreset, TargetFormat,
-    Workspace, plan_conversion, probe, run_conversion,
+    AdvancedOptions, Binaries, ChannelLayout, CompressLevel, CompressOptions, ConversionJob,
+    ConversionOutcome, ConversionRequest, CoreError, FrameMode, FrameOptions, MediaInfo, MediaKind,
+    QualityPreset, TargetFormat, Workspace, plan_conversion, probe, run_conversion,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -566,6 +566,7 @@ async fn advanced_options_are_applied() {
         frames: None,
         remove_location: false,
         pdf: None,
+        compress: None,
     };
     let (_, out) = convert(&bins, &tmp, &input, request).await;
     let video = out.primary_video().unwrap();
@@ -1901,4 +1902,309 @@ async fn damaged_files_are_reported_clearly() {
         matches!(err, CoreError::CorruptInput { .. } | CoreError::NotMedia),
         "{err:?}"
     );
+}
+
+// --- Smaller copies ("Comprimi") -------------------------------------------------
+
+/// A smaller copy of `input` in its own format, named with "compresso".
+fn compress_request(
+    media: &MediaInfo,
+    input: &Path,
+    level: CompressLevel,
+    max_bytes: Option<u64>,
+) -> ConversionRequest {
+    let target = konvert_core::compress::compress_format(media, input).expect("compressible");
+    ConversionRequest {
+        compress: Some(CompressOptions {
+            level,
+            max_bytes,
+            pages_as_pictures: false,
+            label: Some("compresso".into()),
+        }),
+        ..req(target, QualityPreset::Balanced)
+    }
+}
+
+async fn compress(
+    bins: &Binaries,
+    tmp: &TempDir,
+    input: &Path,
+    level: CompressLevel,
+    max_bytes: Option<u64>,
+) -> (ConversionOutcome, MediaInfo) {
+    let media = probe(bins, input).await.unwrap();
+    let request = compress_request(&media, input, level, max_bytes);
+    let plan = plan_conversion(&media, &request, input).unwrap();
+    assert_eq!(plan.compress, request.compress);
+    convert(bins, tmp, input, request).await
+}
+
+fn size(path: &Path) -> u64 {
+    std::fs::metadata(path).unwrap().len()
+}
+
+#[tokio::test]
+async fn photos_videos_and_sounds_get_smaller_in_their_own_format() {
+    let bins = engine();
+    let tmp = TempDir::new("compress");
+
+    // A large, finely compressed photo: lower quality, and smaller at "Massima".
+    let photo = tmp.path("Foto grande.jpg");
+    generate(
+        &bins,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=2400x1800",
+            "-frames:v",
+            "1",
+            "-q:v",
+            "2",
+        ],
+        &photo,
+    );
+    let (strong, info) = compress(&bins, &tmp, &photo, CompressLevel::Strong, None).await;
+    assert!(strong.output.ends_with("Foto grande-compresso.jpg"));
+    assert!(
+        strong.size_bytes < size(&photo) / 2,
+        "{} of {}",
+        strong.size_bytes,
+        size(&photo)
+    );
+    assert_eq!(size_of(&info), (Some(2400), Some(1800)));
+    let (max, info) = compress(&bins, &tmp, &photo, CompressLevel::Max, None).await;
+    assert!(max.output.ends_with("Foto grande-compresso (1).jpg"));
+    assert_eq!(size_of(&info), (Some(1600), Some(1200)));
+    assert!(max.size_bytes < strong.size_bytes);
+
+    // A screenshot-like PNG: 256 colors at most.
+    let png = tmp.path("Schermata.png");
+    generate(
+        &bins,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=640x480",
+            "-frames:v",
+            "1",
+        ],
+        &png,
+    );
+    let (smaller, info) = compress(&bins, &tmp, &png, CompressLevel::Strong, None).await;
+    assert!(smaller.size_bytes < size(&png));
+    assert_eq!(
+        info.primary_video().unwrap().pix_fmt.as_deref(),
+        Some("pal8")
+    );
+
+    // A video with a generous bit rate.
+    let video = tmp.path("Filmato.mp4");
+    generate(
+        &bins,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=640x480:rate=25:duration=4",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=330:duration=4",
+            "-c:v",
+            "libopenh264",
+            "-b:v",
+            "3000k",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+        ],
+        &video,
+    );
+    let (smaller, info) = compress(&bins, &tmp, &video, CompressLevel::Strong, None).await;
+    assert!(smaller.output.ends_with("Filmato-compresso.mp4"));
+    assert!(
+        smaller.size_bytes < size(&video) / 2,
+        "{} of {}",
+        smaller.size_bytes,
+        size(&video)
+    );
+    assert_eq!(info.primary_video().unwrap().codec, "h264");
+    assert_duration(&info, 4.0);
+
+    // Lossless audio stays lossless: mono and 22.05 kHz at "Massima".
+    let wav = sample_wav(&bins, &tmp);
+    let (smaller, info) = compress(&bins, &tmp, &wav, CompressLevel::Max, None).await;
+    let audio = info.primary_audio().unwrap();
+    assert_eq!((audio.channels, audio.sample_rate), (Some(1), Some(22_050)));
+    assert!(smaller.size_bytes < size(&wav) / 3);
+}
+
+#[tokio::test]
+async fn a_size_limit_is_met_with_stronger_settings() {
+    let bins = engine();
+    let tmp = TempDir::new("compress-limit");
+    let photo = tmp.path("Foto.jpg");
+    generate(
+        &bins,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=1600x1200",
+            "-frames:v",
+            "1",
+            "-q:v",
+            "2",
+        ],
+        &photo,
+    );
+    let (fitted, _) = compress(&bins, &tmp, &photo, CompressLevel::Light, Some(100_000)).await;
+    assert!(fitted.size_bytes <= 100_000, "{}", fitted.size_bytes);
+
+    let video = tmp.path("Filmato.mp4");
+    generate(
+        &bins,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=640x480:rate=25:duration=6",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=330:duration=6",
+            "-c:v",
+            "libopenh264",
+            "-b:v",
+            "2500k",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-shortest",
+        ],
+        &video,
+    );
+    let (fitted, info) = compress(&bins, &tmp, &video, CompressLevel::Light, Some(400_000)).await;
+    assert!(fitted.size_bytes <= 400_000, "{}", fitted.size_bytes);
+    assert_duration(&info, 6.0);
+}
+
+#[tokio::test]
+async fn files_that_cannot_shrink_are_left_alone() {
+    let bins = engine();
+    let tmp = TempDir::new("compress-nothing");
+    // Already as small as a JPEG gets.
+    let photo = tmp.path("Minuscola.jpg");
+    generate(
+        &bins,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=gray:size=32x32",
+            "-frames:v",
+            "1",
+            "-q:v",
+            "31",
+        ],
+        &photo,
+    );
+    let media = probe(&bins, &photo).await.unwrap();
+    let out_dir = tmp.path("out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ws = Workspace::create(&tmp.path("ws")).unwrap();
+    let job = ConversionJob {
+        id: 7,
+        request: compress_request(&media, &photo, CompressLevel::Light, None),
+        input: photo,
+        media,
+        output_dir: out_dir.clone(),
+    };
+    let err = run_conversion(&bins, &ws, &job, &CancellationToken::new(), |_| {})
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "no_gain");
+    assert!(files_in(&out_dir).is_empty());
+    assert_eq!(files_in(ws.dir()), [".lock"]);
+}
+
+#[tokio::test]
+async fn pdfs_lose_weight_but_keep_their_text() {
+    let bins = engine();
+    let tmp = TempDir::new("compress-pdf");
+    let input = tmp.path("Relazione con foto.pdf");
+    std::fs::write(&input, fixtures::pdf_with_photo()).unwrap();
+
+    let (smaller, info) = compress(&bins, &tmp, &input, CompressLevel::Strong, None).await;
+    assert!(smaller.output.ends_with("Relazione con foto-compresso.pdf"));
+    assert!(
+        smaller.size_bytes < size(&input) / 4,
+        "{} of {}",
+        smaller.size_bytes,
+        size(&input)
+    );
+    assert_eq!(info.document.unwrap().pages, 1);
+    let data = std::fs::read(&smaller.output).unwrap();
+    assert!(!pdf_info(&data).contains("Mario"));
+    let doc = lopdf::Document::load_mem(&data).unwrap();
+    let page = *doc.get_pages().values().next().unwrap();
+    let text = String::from_utf8_lossy(&doc.get_page_content(page)).into_owned();
+    assert!(text.contains("(Relazione) Tj"), "{text}");
+    // The photo is drawn 3 inches wide: 144 dots per inch are enough.
+    let photo = doc
+        .objects
+        .values()
+        .find_map(|o| match o {
+            lopdf::Object::Stream(s)
+                if s.dict
+                    .get(b"Subtype")
+                    .is_ok_and(|v| v.as_name().is_ok_and(|n| n == b"Image")) =>
+            {
+                Some(s)
+            }
+            _ => None,
+        })
+        .expect("the photo is still there");
+    let width = photo.dict.get(b"Width").unwrap().as_i64().unwrap();
+    assert!((400..=432).contains(&width), "{width}");
+    assert_eq!(
+        photo.dict.get(b"Filter").unwrap().as_name().unwrap(),
+        b"DCTDecode"
+    );
+}
+
+#[tokio::test]
+async fn pdf_pages_become_pictures_only_when_allowed() {
+    let bins = engine();
+    let tmp = TempDir::new("compress-pdf-pages");
+    let input = tmp.path("Mappa.pdf");
+    std::fs::write(&input, fixtures::pdf_with_drawing()).unwrap();
+    let media = probe(&bins, &input).await.unwrap();
+    let page_text = |path: &Path| {
+        let doc = lopdf::Document::load_mem(&std::fs::read(path).unwrap()).unwrap();
+        let page = *doc.get_pages().values().next().unwrap();
+        String::from_utf8_lossy(&doc.get_page_content(page)).into_owned()
+    };
+
+    // Not allowed: the drawing stays a drawing, even above the limit.
+    let request = compress_request(&media, &input, CompressLevel::Max, Some(100_000));
+    let (drawing, _) = convert(&bins, &tmp, &input, request.clone()).await;
+    assert!(drawing.size_bytes > 100_000, "{}", drawing.size_bytes);
+    let text = page_text(&drawing.output);
+    assert!(text.contains(" l") && !text.contains("Do"));
+
+    // Allowed: the page becomes a picture to fit.
+    let mut request = request;
+    request.compress.as_mut().unwrap().pages_as_pictures = true;
+    let (picture, info) = convert(&bins, &tmp, &input, request).await;
+    assert!(picture.size_bytes <= 100_000, "{}", picture.size_bytes);
+    let text = page_text(&picture.output);
+    assert!(text.contains("Do") && !text.contains(" l"), "{text}");
+    let doc = info.document.unwrap();
+    assert!((doc.width_pt - 595.0).abs() < 1.0 && (doc.height_pt - 842.0).abs() < 1.0);
 }

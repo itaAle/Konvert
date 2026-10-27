@@ -54,6 +54,10 @@ pub enum CoreError {
     #[error("conversion cancelled")]
     Cancelled,
 
+    /// A smaller copy would not be smaller than the file (already compressed).
+    #[error("the file cannot be made smaller")]
+    NoGain,
+
     /// FFmpeg failed for a reason we could not classify.
     #[error("the conversion engine reported an error")]
     EngineFailed { details: String },
@@ -78,6 +82,7 @@ impl CoreError {
             CoreError::DiskFull { .. } => "disk_full",
             CoreError::PermissionDenied { .. } => "permission_denied",
             CoreError::Cancelled => "cancelled",
+            CoreError::NoGain => "no_gain",
             CoreError::EngineFailed { .. } => "engine_failed",
             CoreError::Io(e) if is_disk_full(e) => "disk_full",
             CoreError::Io(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {

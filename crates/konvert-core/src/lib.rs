@@ -7,6 +7,7 @@
 //! * [`estimate`]: estimated output size.
 //! * [`command`]: pure FFmpeg command builder (plan → arguments).
 //! * [`convert`]: runs FFmpeg, reports progress, supports cancellation.
+//! * [`compress`] / [`pdf_compress`]: smaller copies of files in their own format.
 //! * [`naming`] / [`workspace`]: safe output naming and temporary files.
 //! * [`metadata`]: cover art comments for Ogg files.
 //!
@@ -15,6 +16,7 @@
 
 pub mod binaries;
 pub mod command;
+pub mod compress;
 pub mod convert;
 pub mod disk;
 pub mod error;
@@ -24,6 +26,7 @@ pub mod formats;
 pub mod metadata;
 pub mod naming;
 pub mod pdf;
+pub mod pdf_compress;
 pub mod plan;
 pub mod probe;
 pub mod progress;
@@ -43,8 +46,9 @@ pub use plan::{ConversionPlan, ConversionWarning, plan_conversion};
 pub use probe::{MediaInfo, MediaKind, probe};
 pub use progress::Progress;
 pub use request::{
-    AdvancedOptions, ChannelLayout, ConversionRequest, FrameMode, FrameOptions, PageMargin,
-    PageOrientation, PageSize, PdfOptions, PdfPage, PdfSplit, QualityPreset,
+    AdvancedOptions, ChannelLayout, CompressLevel, CompressOptions, ConversionRequest, FrameMode,
+    FrameOptions, PageMargin, PageOrientation, PageSize, PdfOptions, PdfPage, PdfSplit,
+    QualityPreset,
 };
 pub use workspace::Workspace;
 

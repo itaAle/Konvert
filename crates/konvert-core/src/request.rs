@@ -221,6 +221,39 @@ impl Default for PdfOptions {
     }
 }
 
+/// How hard a file is compressed ("Leggera", "Forte", "Massima").
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize, TS,
+)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum CompressLevel {
+    /// Hardly visible changes.
+    Light,
+    /// Smaller, still good for screens and printing at home.
+    #[default]
+    Strong,
+    /// As small as possible while still readable: lower resolution too.
+    Max,
+}
+
+/// A smaller copy of a file in its own format.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export, optional_fields = nullable)]
+pub struct CompressOptions {
+    pub level: CompressLevel,
+    /// Largest acceptable result in bytes: the level gets stronger until the
+    /// file fits (`None`: just the level).
+    #[ts(type = "number | null")]
+    pub max_bytes: Option<u64>,
+    /// PDF only: pages may become pictures when that is smaller (their text
+    /// can no longer be selected or searched).
+    pub pages_as_pictures: bool,
+    /// Word after the name of the smaller copy (`"compresso"`, `"compressed"`).
+    pub label: Option<String>,
+}
+
 /// A conversion requested by the user.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -242,6 +275,11 @@ pub struct ConversionRequest {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub pdf: Option<PdfOptions>,
+    /// A smaller copy in the same format: `target` is the input's own format,
+    /// and the preset and advanced options are chosen by Konvert.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub compress: Option<CompressOptions>,
 }
 
 impl ConversionRequest {
@@ -254,6 +292,7 @@ impl ConversionRequest {
             frames: None,
             remove_location: false,
             pdf: None,
+            compress: None,
         }
     }
 }
@@ -306,6 +345,27 @@ mod tests {
             serde_json::from_str(r#"{ "target": "jpg", "frames": {} }"#).unwrap();
         assert_eq!(req.frames, Some(FrameOptions::default()));
         assert_eq!(FrameOptions::default().mode, FrameMode::Single);
+    }
+
+    #[test]
+    fn compress_options_are_optional() {
+        let req: ConversionRequest = serde_json::from_str(
+            r#"{ "target": "pdf", "compress": { "level": "max", "maxBytes": 5000000 } }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            req.compress,
+            Some(CompressOptions {
+                level: CompressLevel::Max,
+                max_bytes: Some(5_000_000),
+                pages_as_pictures: false,
+                label: None,
+            })
+        );
+        let req: ConversionRequest =
+            serde_json::from_str(r#"{ "target": "jpg", "compress": {} }"#).unwrap();
+        assert_eq!(req.compress.unwrap().level, CompressLevel::Strong);
+        assert!(CompressLevel::Light < CompressLevel::Max);
     }
 
     #[test]

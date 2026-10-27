@@ -10,6 +10,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::compress;
 use crate::error::CoreError;
 use crate::estimate::{SizeEstimate, estimate_size};
 use crate::formats::{
@@ -20,7 +21,9 @@ use crate::pdf::{self, Placement};
 use crate::probe::{
     AudioStream, MediaInfo, MediaKind, PictureInfo, VideoStream, pix_fmt_has_alpha,
 };
-use crate::request::{AdvancedOptions, ConversionRequest, FrameMode, QualityPreset};
+use crate::request::{
+    AdvancedOptions, CompressOptions, ConversionRequest, FrameMode, QualityPreset,
+};
 
 /// How the audio stream is produced.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -209,6 +212,8 @@ pub enum ConversionWarning {
     MetadataDropped,
     /// The bookmarks and the fillable form of a PDF are not kept.
     PdfExtrasDropped,
+    /// Compressed PDF: its pages may become pictures (text, links and forms lost).
+    PdfPagesAsPictures,
 }
 
 /// Pictures taken from a video.
@@ -274,6 +279,11 @@ pub struct ConversionPlan {
     /// Where the file was made is erased (GPS data, location tags).
     #[serde(default)]
     pub remove_location: bool,
+    /// A smaller copy in the same format: with a size limit, stronger settings
+    /// are tried until the file fits; never larger than the input.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub compress: Option<CompressOptions>,
     pub warnings: Vec<ConversionWarning>,
     pub estimate: Option<SizeEstimate>,
 }
@@ -293,13 +303,26 @@ pub fn plan_conversion(
     request: &ConversionRequest,
     input: &Path,
 ) -> Result<ConversionPlan, CoreError> {
-    let spec = formats::spec(request.target);
+    if let Some(options) = &request.compress {
+        return compress::plan(media, request, options, input);
+    }
     if !formats::is_offered(media, input, request.target) {
         return Err(unsupported(format!(
             "{} is not offered for this input",
-            spec.label
+            formats::spec(request.target).label
         )));
     }
+    plan_offered(media, request, input)
+}
+
+/// Plans a conversion into a format that makes sense for this input (or into
+/// its own format, for a smaller copy).
+pub(crate) fn plan_offered(
+    media: &MediaInfo,
+    request: &ConversionRequest,
+    input: &Path,
+) -> Result<ConversionPlan, CoreError> {
+    let spec = formats::spec(request.target);
     let adv = &request.advanced;
     if let Some(codec) = adv.video_codec.filter(|c| !spec.video_codecs.contains(c)) {
         return Err(unsupported(format!(
@@ -370,6 +393,7 @@ pub fn plan_conversion(
         frames: None,
         document: None,
         remove_location: request.remove_location && media.has_location,
+        compress: None,
         warnings: Vec::new(),
         estimate: None,
     };
@@ -567,6 +591,7 @@ fn plan_document(
                     placement: None,
                 }),
                 remove_location: false,
+                compress: None,
                 warnings: if info.extras {
                     vec![W::PdfExtrasDropped]
                 } else {
@@ -785,6 +810,7 @@ fn plan_still(
         frames: None,
         document: None,
         remove_location: request.remove_location && media.has_location,
+        compress: None,
         warnings,
         estimate: None,
     };

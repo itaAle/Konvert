@@ -353,3 +353,107 @@ fn split_nal_units(stream: &[u8]) -> Vec<&[u8]> {
         .filter(|unit| !unit.is_empty())
         .collect()
 }
+
+/// An A4 PDF with a line of text and a 1500×1000 photo-like picture
+/// (gradients and grain, stored without loss) drawn 3 inches wide, plus
+/// personal metadata.
+pub fn pdf_with_photo() -> Vec<u8> {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let (w, h) = (1500u32, 1000u32);
+    let mut seed = 12345u32;
+    let mut pixels = Vec::with_capacity((w * h * 3) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            let grain = (seed >> 16) as i32 % 17 - 8;
+            let channel = |v: u32| (v as i32 + grain).clamp(0, 255) as u8;
+            pixels.extend([
+                channel(x * 255 / w),
+                channel(y * 255 / h),
+                channel((x + y) % 256),
+            ]);
+        }
+    }
+    let mut doc = Document::with_version("1.7");
+    let mut photo = Stream::new(
+        dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Image",
+            "Width" => w as i64,
+            "Height" => h as i64,
+            "ColorSpace" => "DeviceRGB",
+            "BitsPerComponent" => 8,
+        },
+        pixels,
+    );
+    photo.compress().unwrap();
+    let photo_id = doc.add_object(photo);
+    let font = doc.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "Helvetica",
+    });
+    let content = "BT /F1 18 Tf 72 760 Td (Relazione) Tj ET q 216 0 0 144 72 500 cm /Im0 Do Q";
+    let content_id = doc.add_object(Stream::new(dictionary! {}, content.as_bytes().to_vec()));
+    let pages_id = doc.new_object_id();
+    let page = doc.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+        "Contents" => content_id,
+        "Resources" => dictionary! {
+            "Font" => dictionary! { "F1" => font },
+            "XObject" => dictionary! { "Im0" => photo_id },
+        },
+    });
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(
+            dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1 },
+        ),
+    );
+    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    let info = doc.add_object(dictionary! { "Author" => Object::string_literal("Mario Rossi") });
+    doc.trailer.set("Root", catalog);
+    doc.trailer.set("Info", info);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+/// An A4 PDF whose page is a heavy drawing: 30 000 thin lines, stored without
+/// compression.
+pub fn pdf_with_drawing() -> Vec<u8> {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut seed = 777u32;
+    let mut next = |max: u32| {
+        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+        (seed >> 8) % max
+    };
+    let mut content = String::from("0.2 w\n");
+    for _ in 0..30_000 {
+        let (x, y) = (next(595), next(842));
+        let (dx, dy) = (next(20), next(20));
+        content.push_str(&format!("{x} {y} m {} {} l S\n", x + dx, y + dy));
+    }
+    let mut doc = Document::with_version("1.7");
+    let content_id = doc.add_object(Stream::new(dictionary! {}, content.into_bytes()));
+    let pages_id = doc.new_object_id();
+    let page = doc.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+        "Contents" => content_id,
+    });
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(
+            dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1 },
+        ),
+    );
+    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    bytes
+}

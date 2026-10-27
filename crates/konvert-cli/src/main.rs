@@ -21,6 +21,8 @@
 //!          --dpi N  --pages "1-3, 5"   (PDF to pictures)
 //!          --layout "3, 1-2, 5@90"  --rotate 90|180|270
 //!          --split-every N | --split-after "2, 5"   (PDF to PDF)
+//!          --compress light|strong|max  --max-mb N  --pages-as-pictures
+//!                    (a smaller copy in the same format: no --to needed)
 //! ```
 //!
 //! The engine directory defaults to `$KONVERT_FFMPEG_DIR`, then to
@@ -32,11 +34,12 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use konvert_core::{
-    AdvancedOptions, Binaries, ChannelLayout, CombinedJob, ConversionJob, ConversionRequest,
-    CoreError, FrameMode, FrameOptions, MediaInfo, PageMargin, PageOrientation, PageSize,
-    PdfOptions, PdfPage, PdfSplit, Progress, QualityPreset, TargetFormat, Workspace,
-    available_targets, engine_encoders, engine_version, formats::supported_targets,
-    plan_conversion, probe, run_combined, run_conversion, workspace,
+    AdvancedOptions, Binaries, ChannelLayout, CombinedJob, CompressLevel, CompressOptions,
+    ConversionJob, ConversionRequest, CoreError, FrameMode, FrameOptions, MediaInfo, PageMargin,
+    PageOrientation, PageSize, PdfOptions, PdfPage, PdfSplit, Progress, QualityPreset,
+    TargetFormat, Workspace, available_targets, compress::compress_format, engine_encoders,
+    engine_version, formats::supported_targets, plan_conversion, probe, run_combined,
+    run_conversion, workspace,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -57,7 +60,9 @@ OPTIONS: --preset max|balanced|small  --height N  --fps N
          --margin none|small|normal   (pictures to PDF)
          --dpi N  --pages \"1-3, 5\"   (PDF to pictures)
          --layout \"3, 1-2, 5@90\"  --rotate 90|180|270
-         --split-every N | --split-after \"2, 5\"   (PDF to PDF)";
+         --split-every N | --split-after \"2, 5\"   (PDF to PDF)
+         --compress light|strong|max  --max-mb N  --pages-as-pictures
+                   (a smaller copy in the same format: no --to needed)";
 
 enum Action {
     Version,
@@ -124,6 +129,21 @@ fn rotate_pages(request: &mut ConversionRequest, media: &MediaInfo, rotate: Opti
     }
 }
 
+/// A smaller copy is written in the file's own format.
+fn compressed_format(
+    request: &mut ConversionRequest,
+    media: &MediaInfo,
+    input: &std::path::Path,
+) -> Result<(), CoreError> {
+    if request.compress.is_some() {
+        request.target =
+            compress_format(media, input).ok_or_else(|| CoreError::UnsupportedConversion {
+                details: "Konvert cannot make this file smaller".into(),
+            })?;
+    }
+    Ok(())
+}
+
 fn parse_args() -> Result<Cli, String> {
     let mut args = std::env::args_os().skip(1);
     let mut ffmpeg_dir = None;
@@ -136,6 +156,7 @@ fn parse_args() -> Result<Cli, String> {
     let mut remove_location = false;
     let mut pdf: Option<PdfOptions> = None;
     let mut rotate = None;
+    let mut compress: Option<CompressOptions> = None;
 
     fn number<T: std::str::FromStr>(name: &str, v: OsString) -> Result<T, String> {
         v.to_str()
@@ -245,6 +266,21 @@ fn parse_args() -> Result<Cli, String> {
                     .collect::<Result<_, _>>()
                     .map_err(|_| "--split-after needs page positions such as \"2, 5\"")?;
             }
+            Some("--compress") => {
+                compress.get_or_insert_default().level = match value("--compress")?.to_str() {
+                    Some("light") => CompressLevel::Light,
+                    Some("strong") => CompressLevel::Strong,
+                    Some("max") => CompressLevel::Max,
+                    _ => return Err("compression must be light, strong or max".into()),
+                }
+            }
+            Some("--max-mb") => {
+                let mb: f64 = number("--max-mb", value("--max-mb")?)?;
+                compress.get_or_insert_default().max_bytes = Some((mb * 1_000_000.0) as u64);
+            }
+            Some("--pages-as-pictures") => {
+                compress.get_or_insert_default().pages_as_pictures = true
+            }
             Some("--mono") => advanced.channels = Some(ChannelLayout::Mono),
             Some("--stereo") => advanced.channels = Some(ChannelLayout::Stereo),
             Some("-h" | "--help") => return Err(String::new()),
@@ -271,7 +307,13 @@ fn parse_args() -> Result<Cli, String> {
     };
     let request = || -> Result<ConversionRequest, String> {
         Ok(ConversionRequest {
-            target: target.ok_or("missing --to <FORMAT>")?,
+            // A smaller copy keeps the file's format, found once it is analysed.
+            target: match (target, &compress) {
+                (Some(target), _) => target,
+                (None, Some(_)) => TargetFormat::Pdf,
+                (None, None) => return Err("missing --to <FORMAT>".into()),
+            },
+            compress: compress.clone(),
             preset,
             advanced: advanced.clone(),
             frames,
@@ -348,11 +390,13 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
         Action::Plan(input, mut request) => {
             let media = probe(&bins, &input).await?;
             rotate_pages(&mut request, &media, cli.rotate);
+            compressed_format(&mut request, &media, &input)?;
             print_json(&plan_conversion(&media, &request, &input)?);
         }
         Action::Convert(input, mut request, out_dir) => {
             let media = probe(&bins, &input).await?;
             rotate_pages(&mut request, &media, cli.rotate);
+            compressed_format(&mut request, &media, &input)?;
             let plan = plan_conversion(&media, &request, &input)?;
             for warning in &plan.warnings {
                 eprintln!("warning: {warning:?}");

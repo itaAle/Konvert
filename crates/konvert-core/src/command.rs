@@ -218,7 +218,9 @@ fn picture_args(a: &mut Args, image: &ImagePlan, index: u32, frames: Option<&Fra
     } else if image.codec == ImageCodec::Avif {
         steps.push("format=yuv420p".to_owned());
     }
-    if image.codec == ImageCodec::Gif {
+    // A smaller PNG: at most 256 colors, like a GIF.
+    let png_palette = image.codec == ImageCodec::Png && image.quality == ImageQuality::Palette;
+    if image.codec == ImageCodec::Gif || png_palette {
         // One palette for this picture; a transparent entry only if needed.
         let (reserve, threshold) = if image.alpha {
             (1, ":alpha_threshold=128")
@@ -266,6 +268,13 @@ fn picture_args(a: &mut Args, image: &ImagePlan, index: u32, frames: Option<&Fra
         }
         (ImageCodec::Png, ImageQuality::Lossless { effort }) => {
             a.push(&["-c:v", "png", "-compression_level", &effort.to_string()]);
+            if effort >= 9 {
+                // The best filter for each row: slower, smaller.
+                a.push(&["-pred", "mixed"]);
+            }
+        }
+        (ImageCodec::Png, ImageQuality::Palette) => {
+            a.push(&["-c:v", "png", "-compression_level", "9"]);
         }
         (ImageCodec::Webp, ImageQuality::Lossless { effort }) => {
             a.push(&[
@@ -929,7 +938,7 @@ mod tests {
         assert_eq!(
             picture_body(&jpeg(), &req(TargetFormat::Png, QualityPreset::Small), "a.jpg"),
             (strings(&["-filter_complex", "[0:0]null[img]", "-map", "[img]", "-frames:v", "1",
-                "-c:v", "png", "-compression_level", "9"]), "image2pipe".into())
+                "-c:v", "png", "-compression_level", "9", "-pred", "mixed"]), "image2pipe".into())
         );
         assert_eq!(
             picture_body(&jpeg(), &req(TargetFormat::Jpg, QualityPreset::Max), "a.jpg"),
