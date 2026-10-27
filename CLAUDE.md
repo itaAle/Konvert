@@ -10,7 +10,7 @@ Apple Silicon and Linux (x86_64 and arm64).
 It uses Tauri 2.11, React 19 with TypeScript, and bundles FFmpeg/FFprobe.
 It works **entirely offline, on the user's computer**.
 **Public** repository: https://github.com/itaAle/Konvert (branch `main`).
-Releases ship a Windows NSIS installer, macOS/Linux packages and a `.sha256` file for each: `v0.1.0` to `v0.3.0` are published; `v0.4.0` (more formats, EXIF, SVG, PDF) is next.
+Releases ship a Windows NSIS installer, macOS/Linux packages and a `.sha256` file for each: `v0.1.0` to `v0.4.0` are published (0.4.0: more formats, EXIF, SVG, PDF; first release with Linux arm64).
 The `ffmpeg-n9.0.2-36` pre-release mirrors the FFmpeg build and its sources (required by the LGPL).
 
 ## Binding rules (from the owner)
@@ -162,10 +162,11 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
 - 2026-10-27: **v0.4.0** (phases A, B and C): version bumped in `package.json`, `Cargo.toml` and `tauri.conf.json`; `npm run release` green (all checks and tests, no local paths in the binaries).
   Installer `Konvert_0.4.0_x64-setup.exe` (52 MB), SHA-256 `b7b2e6c60037f225b2f15af4b31c599bb67e6c1f77e3e578c69c0636a157352a` (rebuild with `npm run release`). The macOS/Linux packages come from the **Release packages** workflow run on the pushed version commit; the owner creates the `v0.4.0` tag and the GitHub release.
   - The owner installed and tried the Windows 0.4.0 installer: it works.
+  - Published 2026-10-27 (tag `v0.4.0` on `d7d2d1e`) with all platforms, Linux arm64 included. Release assets are zips named `Konvert_<version>_<Windows_x64|macOS_arm|Linux_x64_deb|Linux_x64_rpm|Linux_x64_AppImage|Linux_arm_deb|Linux_arm_rpm|Linux_arm_AppImage>.zip`, each holding the package and its `.sha256` with their original names; the README installation table follows this scheme.
 
 ## Backlog (next work, by priority)
 1. **More formats and PDF**: phases A, B and C done (see Current status). Proposed next, only after the owner's OK: PDF page tools (split a PDF, extract, rotate and reorder pages).
-2. Finish the macOS/Linux rollout (see Current status), and macOS window vibrancy (needs `macOSPrivateApi`).
+2. macOS/Linux: verify on real hardware (see Current status), and macOS window vibrancy (needs `macOSPrivateApi`).
 3. Hardware encoders NVENC/QSV/AMF/h264_mf/VideoToolbox, with automatic detection.
 4. FFmpeg built without any network support on Windows and Linux (macOS already is).
 5. Code signing of the Windows installer; Developer ID signing + notarization on macOS (add the `APPLE_*` secrets, the workflow is ready).

@@ -5,7 +5,7 @@ Konvert converts audio, video, image and PDF files from one format to another **
 your computer**: no network connections, no telemetry, no account.
 
 Platforms: Windows 10/11 (64-bit), macOS 11 or later on Apple Silicon (M1 and later),
-Linux x86_64. Linux arm64 packages are coming in a later release.
+Linux x86_64 and arm64.
 
 ## How to use it
 
@@ -121,20 +121,20 @@ The format table is declarative: `crates/konvert-core/src/formats.rs`.
 
 ## Installation
 
-From the [Releases](https://github.com/itaAle/Konvert/releases) page, download the
-package for your system **and its `.sha256` file**, then **verify the checksum** (see
-below) before opening the package.
+From the [Releases](https://github.com/itaAle/Konvert/releases) page, download the zip for
+your system. Each zip holds the package **and its `.sha256` file**: extract both and
+**verify the checksum** (see below) before opening the package.
 
-| System                 | Package                                        |
-| ---------------------- | ---------------------------------------------- |
-| Windows 10/11 (64-bit) | `Konvert_<version>_x64-setup.exe`              |
-| macOS, Apple Silicon   | `Konvert_<version>_aarch64.dmg`                |
-| Debian, Ubuntu, Mint…  | `Konvert_<version>_amd64.deb`                  |
-| Fedora, openSUSE…      | `Konvert-<version>-1.x86_64.rpm`               |
-| Any Linux distribution | `Konvert_<version>_amd64.AppImage`             |
+| System                 | Download                                | Package inside                         |
+| ---------------------- | --------------------------------------- | -------------------------------------- |
+| Windows 10/11 (64-bit) | `Konvert_<version>_Windows_x64.zip`     | `Konvert_<version>_x64-setup.exe`      |
+| macOS, Apple Silicon   | `Konvert_<version>_macOS_arm.zip`       | `Konvert_<version>_aarch64.dmg`        |
+| Debian, Ubuntu, Mint…  | `Konvert_<version>_Linux_x64_deb.zip`   | `Konvert_<version>_amd64.deb`          |
+| Fedora, openSUSE…      | `Konvert_<version>_Linux_x64_rpm.zip`   | `Konvert-<version>-1.x86_64.rpm`       |
+| Any Linux distribution | `Konvert_<version>_Linux_x64_AppImage.zip` | `Konvert_<version>_amd64.AppImage`  |
 
-The Linux packages are for x86_64 (64-bit Intel/AMD) computers. Packages for arm64
-(`_arm64.deb`, `.aarch64.rpm`, `_aarch64.AppImage`) are coming in a later release.
+For Linux on arm64 computers (e.g. Raspberry Pi 4/5 with a 64-bit system) take the
+`Linux_arm` zips instead: `_arm64.deb`, `.aarch64.rpm` and `_aarch64.AppImage` packages.
 
 **Windows.** Run the installer: it installs Konvert for your user only (no administrator
 rights), creates the Start menu entry and adds Konvert to the **Open with** menu of the
@@ -147,8 +147,9 @@ website. The installer never downloads anything.
 Finder's **Open With** menu for the supported formats, without becoming the default app.
 The app is not notarized by Apple yet (see [macOS Gatekeeper warning](#macos-gatekeeper-warning)).
 
-**Linux.** Install the `.deb` (`sudo apt install ./Konvert_<version>_amd64.deb`) or the
-`.rpm` (`sudo dnf install ./Konvert-<version>-1.x86_64.rpm`): the package manager adds the
+**Linux.** Install the `.deb` (`sudo apt install ./Konvert_<version>_amd64.deb`, or
+`_arm64.deb`) or the `.rpm` (`sudo dnf install ./Konvert-<version>-1.x86_64.rpm`, or
+`.aarch64.rpm`): the package manager adds the
 system libraries Konvert needs (WebKitGTK) and Konvert appears in the applications menu and
 in the **Open with** menu of the supported formats. The AppImage needs no installation:
 make it executable (`chmod +x Konvert_*.AppImage`) and run it.
