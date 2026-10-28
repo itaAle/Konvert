@@ -133,10 +133,12 @@ fn read_pdf(
             });
         }
         let page_area = (width * height) as f64;
+        let mut glyphs = device.glyphs;
+        straighten(&mut glyphs, device.direction, (width, height));
         let mut content = PageContent {
             width,
             height,
-            glyphs: device.glyphs,
+            glyphs,
             pictures: device.pictures,
             // A colored page background is not a box behind some text.
             fills: device
@@ -166,6 +168,23 @@ fn read_pdf(
     let (document, mut report) = build(collected);
     report.pages_read = pages_read;
     Ok((document, report))
+}
+
+/// Text turned a little (a page scanned askew and read by OCR) is turned
+/// back around the center of the page (`size`) by the main direction of its
+/// glyphs, so that each line keeps one baseline.
+fn straighten(glyphs: &mut [GlyphBox], direction: (f32, f32), size: (f32, f32)) {
+    let angle = direction.1.atan2(direction.0);
+    if angle.abs() < 0.1f32.to_radians() {
+        return;
+    }
+    let (sin, cos) = (-angle).sin_cos();
+    let (mx, my) = (size.0 / 2.0, size.1 / 2.0);
+    for glyph in glyphs {
+        let (x, y) = (glyph.x - mx, glyph.y - my);
+        glyph.x = x * cos - y * sin + mx;
+        glyph.y = x * sin + y * cos + my;
+    }
 }
 
 /// A page of `size` pixels read by OCR (pixels of `point` points), as
@@ -283,6 +302,8 @@ struct Collector {
     fonts: HashMap<u128, std::rc::Rc<FontStyle>>,
     /// Pictures already encoded, by their PDF object (logos repeat on every page).
     encoded: HashMap<(i32, i32), std::rc::Rc<Vec<u8>>>,
+    /// Sum of the directions of the glyphs, each as long as its advance.
+    direction: (f32, f32),
 }
 
 impl Collector {
@@ -384,6 +405,9 @@ impl<'a> Device<'a> for Collector {
             .map(|w| (w as f64 * a.hypot(b)) as f32)
             .filter(|w| *w > 0.0)
             .unwrap_or(size * 0.5 * text.chars().count() as f32);
+            let length = a.hypot(b);
+            self.direction.0 += (a / length) as f32 * advance;
+            self.direction.1 += (b / length) as f32 * advance;
             let font = self.font(glyph);
             self.glyphs.push(GlyphBox {
                 x: e as f32,
@@ -1313,6 +1337,41 @@ mod tests {
         assert!(!list_marker("(iv) x"));
         assert!(!list_marker("2026 è l'anno"));
         assert!(!list_marker("-5 gradi"));
+    }
+
+    #[test]
+    fn text_turned_a_little_keeps_its_lines() {
+        // Two lines 16 points apart, turned by 1.5°: the end of each line is
+        // lower than the start of the next one.
+        let angle = 1.5f32.to_radians();
+        let mut glyphs = Vec::new();
+        for (row, text) in [
+            "prima riga di un testo piuttosto lungo",
+            "seconda riga di quel testo",
+        ]
+        .iter()
+        .enumerate()
+        {
+            for (i, c) in text.chars().enumerate() {
+                let along = i as f32 * 12.0;
+                let mut g = glyph(72.0, 100.0 + 16.0 * row as f32, &c.to_string(), 20.0);
+                g.x += along * angle.cos();
+                g.y += along * angle.sin();
+                glyphs.push(g);
+            }
+        }
+        assert!(lines(glyphs.clone()).len() > 2);
+        let direction = (angle.cos() * 100.0, angle.sin() * 100.0);
+        straighten(&mut glyphs, direction, (600.0, 800.0));
+        let lines = lines(glyphs);
+        let texts: Vec<String> = lines.iter().map(Line::text).collect();
+        assert_eq!(
+            texts,
+            [
+                "prima riga di un testo piuttosto lungo",
+                "seconda riga di quel testo"
+            ]
+        );
     }
 
     #[test]
