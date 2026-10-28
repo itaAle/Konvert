@@ -1,0 +1,26 @@
+{
+  "description": "Pinned OCR models used by Konvert (text recognition of scanned PDFs and pictures). Downloaded only at development/build time by scripts/setup-ocr.mjs, verified with SHA-256, never at runtime. To upgrade: pick new ONNX files, update urls/sha256/size, run the setup script and the test suite.",
+  "name": "PaddleOCR PP-OCRv5 mobile (text detection) and Latin PP-OCRv5 mobile (text recognition)",
+  "license": "Apache-2.0",
+  "source": {
+    "models": "https://github.com/PaddlePaddle/PaddleOCR",
+    "onnx": "https://github.com/GreatV/oar-ocr/releases/tag/v0.1.0"
+  },
+  "files": {
+    "det.onnx": {
+      "urls": ["https://github.com/GreatV/oar-ocr/releases/download/v0.1.0/ppocrv5_mobile_det.onnx"],
+      "sha256": "409fc0f60a5540afd69c5a5177543b826c1c1e858c30e799dea4e38d6dfff131",
+      "size": 4773473
+    },
+    "rec.onnx": {
+      "urls": ["https://github.com/GreatV/oar-ocr/releases/download/v0.1.0/latin_ppocrv5_mobile_rec.onnx"],
+      "sha256": "773fa0a8db8b9e463a05d79b4fd6b06cd6f6216eb24ab2e243b0d51a6ec0d7b8",
+      "size": 7867559
+    },
+    "dict.txt": {
+      "urls": ["https://github.com/GreatV/oar-ocr/releases/download/v0.1.0/ppocrv5_latin_dict.txt"],
+      "sha256": "3c0a8a79b612653c25f765271714f71281e4e955962c153e272b7b8c1d2b13ff",
+      "size": 1634
+    }
+  }
+}

@@ -73,6 +73,7 @@
     "longDescription": "Konvert converte file audio, video e immagini interamente sul tuo computer. Nessun dato lascia il dispositivo.",
     "resources": {
       "binaries/ffmpeg/*": "ffmpeg/",
+      "binaries/ocr/*": "ocr/",
       "../LICENSE": "LICENSE.txt",
       "../THIRD_PARTY_LICENSES": "THIRD_PARTY_LICENSES.txt"
     },

@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "setup:ffmpeg": "node scripts/run-platform-script.mjs setup-ffmpeg",
+    "setup:ocr": "node scripts/setup-ocr.mjs",
     "cli": "cargo run -q -p konvert-cli --",
     "test": "node scripts/check-privacy.mjs && node scripts/generate-licenses.mjs --check && vitest run && cargo test --workspace",
     "test:ui": "vitest run",

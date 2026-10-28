@@ -1,7 +1,7 @@
 # Shared setup of the CI and release workflows: Node, Rust cache, system libraries
-# (Linux), npm packages and the pinned FFmpeg build.
+# (Linux), npm packages, the pinned FFmpeg build and the OCR models.
 name: Set up the Konvert build
-description: Node, npm packages, system libraries and the pinned FFmpeg build
+description: Node, npm packages, system libraries, the pinned FFmpeg build and the OCR models
 
 inputs:
   require-pinned-ffmpeg:
@@ -73,3 +73,7 @@ runs:
         else
           npm run setup:ffmpeg
         fi
+
+    - name: OCR models
+      shell: bash
+      run: npm run setup:ocr

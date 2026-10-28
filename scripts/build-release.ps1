@@ -66,8 +66,9 @@ try {
     Write-Step 2 'npm dependencies (exact versions from package-lock.json)'
     Invoke-Checked npm @('ci', '--no-audit', '--no-fund')
 
-    Write-Step 3 'FFmpeg (pinned build, SHA-256 verified)'
+    Write-Step 3 'FFmpeg and OCR models (pinned, SHA-256 verified)'
     Invoke-Checked powershell @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/setup-ffmpeg.ps1')
+    Invoke-Checked node @('scripts/setup-ocr.mjs')
 
     Write-Step 4 'Checks and tests'
     Invoke-Checked node @('scripts/check-privacy.mjs')

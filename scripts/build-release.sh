@@ -54,8 +54,9 @@ echo "Konvert $PKG_VERSION"
 step 2 'npm ci'
 npm ci --no-audit --no-fund
 
-step 3 'FFmpeg'
+step 3 'FFmpeg and OCR models'
 bash scripts/setup-ffmpeg.sh
+node scripts/setup-ocr.mjs
 SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
 if [[ "$OS" == Darwin ]]; then
   if [[ -z "$SIGNING_IDENTITY" ]]; then

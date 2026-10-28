@@ -45,6 +45,20 @@ fn main() {
         );
     }
 
+    // Same for the OCR models (scripts/setup-ocr.mjs).
+    let ocr = Path::new("binaries/ocr/rec.onnx");
+    println!("cargo:rerun-if-changed={}", ocr.display());
+    if !ocr.is_file() {
+        panic!(
+            "
+
+OCR models not found in src-tauri/binaries/ocr.
+             Run the setup script first:  npm run setup:ocr
+
+"
+        );
+    }
+
     tauri_build::try_build(
         tauri_build::Attributes::new()
             .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),

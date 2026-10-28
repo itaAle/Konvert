@@ -158,13 +158,15 @@ src-tauri/target/
 src-tauri/gen/schemas/
 **/*.rs.bk
 
-# FFmpeg/FFprobe binaries: downloaded and verified by scripts/setup-ffmpeg.*
+# FFmpeg/FFprobe binaries and OCR models: downloaded and verified by
+# scripts/setup-ffmpeg.* and scripts/setup-ocr.mjs.
 # Never commit them (they are large); only the placeholder README is tracked.
 src-tauri/binaries/*
 !src-tauri/binaries/README.md
 
-# Temporary downloads of the setup script
+# Temporary downloads of the setup scripts
 .ffmpeg-download/
+.ocr-download/
 
 # Release artifacts produced by scripts/build-release.*
 release/
