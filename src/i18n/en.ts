@@ -57,12 +57,13 @@ export const en: Messages = {
     groupFrames: "Frames",
     groupPages: "Pages as pictures",
     groupDocument: "PDF document",
-    groupText: "Word document",
+    groupText: "Text",
     groupEditPdf: "Edit the PDF",
     editPdf: "Split, turn, reorder",
     lossless: "Lossless",
     sameFormat: "Same format",
     animated: "Animated",
+    plainText: "Plain text",
     more: "More formats",
     fewer: "Fewer formats",
     common: "Formats available for all the selected files.",
@@ -156,6 +157,10 @@ export const en: Messages = {
       bottom: "Bottom center",
       bottomRight: "Bottom right",
     },
+  },
+  ocr: {
+    title: "Make the text searchable (OCR)",
+    hint: "Pages without text, such as scans and photos, are read on your computer, so you can search and copy their words. About a second per page.",
   },
   protect: {
     title: "Protect with a password",
@@ -330,7 +335,9 @@ export const en: Messages = {
       "Konvert lays out the document itself, with the installed fonts: page breaks and spacing may differ slightly from Word.",
     docxSimplified: "Text boxes, charts, equations and embedded objects of the document will not be shown.",
     pdfToDocx:
-      "Text and pictures become editable; layout, tables and drawings are simplified. Scanned pages without text stay pictures.",
+      "Text and pictures become editable; layout, tables and drawings are simplified. Scanned pages are read by OCR.",
+    ocrReading:
+      "Text in photos and scanned pages is read by OCR: check it. Languages written in the Latin alphabet (English, Italian, French, German, Spanish…) are recognized; handwriting is not.",
   },
   actions: {
     convert: "Convert",
@@ -439,6 +446,7 @@ export const en: Messages = {
     cancelled: "Conversion cancelled.",
     engine_failed: "The conversion failed.",
     no_gain: "The file is already as compressed as it gets: Konvert could not make it smaller.",
+    no_text: "Konvert found no text in this file.",
     io: "Error while reading or writing the file.",
     unknown: "An unexpected error occurred.",
   },

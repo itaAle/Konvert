@@ -128,6 +128,7 @@ export const DEFAULT_PDF: PdfOptions = {
   protection: null,
   watermark: null,
   pageNumbers: null,
+  ocr: false,
 };
 
 /** Strong compression, no size limit, text kept as text. */
@@ -251,6 +252,7 @@ export function requestOf(state: QueueState): ConversionRequest | null {
       protection: state.target === "pdf" ? state.pdf.protection : null,
       watermark: state.target === "pdf" ? state.pdf.watermark : null,
       pageNumbers: state.target === "pdf" ? state.pdf.pageNumbers : null,
+      ocr: state.target === "pdf" && state.pdf.ocr,
     },
   };
 }
@@ -301,12 +303,15 @@ export function editedDocuments(state: QueueState): number {
 
 /**
  * The edited PDF differs from the original: pages changed, several
- * documents, or something drawn over the pages or a password.
+ * documents, something drawn over the pages, text read by OCR or a password.
  */
 export function pdfChanged(state: QueueState): boolean {
-  const { watermark, pageNumbers, protection } = state.pdf;
+  const { watermark, pageNumbers, protection, ocr } = state.pdf;
   const added =
-    (watermark != null && (watermark.picture != null || watermark.text.trim() !== "")) || pageNumbers != null || protection != null;
+    (watermark != null && (watermark.picture != null || watermark.text.trim() !== "")) ||
+    pageNumbers != null ||
+    protection != null ||
+    ocr;
   return added || isEdited(currentPages(state), pageSources(state)) || editedDocuments(state) > 1;
 }
 

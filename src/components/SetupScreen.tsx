@@ -29,6 +29,7 @@ import { FileList } from "./FileList";
 import { FormatGrid } from "./FormatGrid";
 import { FramesPanel } from "./FramesPanel";
 import { LocationRow } from "./LocationRow";
+import { OcrPanel } from "./OcrPanel";
 import { PageEditor, type EditorSource } from "./PageEditor";
 import { PagesPanel } from "./PagesPanel";
 import { PdfPanel } from "./PdfPanel";
@@ -301,6 +302,9 @@ export function SetupScreen({ q }: { q: QueueController }) {
                   />
                 </section>
               )}
+              {option?.format === "pdf" && (photos.length > 0 || documents.length > 0) && (
+                <OcrPanel value={state.pdf.ocr} onChange={(ocr) => q.setPdf({ ...state.pdf, ocr })} />
+              )}
               {option?.format === "pdf" && (
                 <ProtectPanel value={state.pdf.protection ?? null} onChange={(protection) => q.setPdf({ ...state.pdf, protection })} />
               )}
@@ -319,8 +323,9 @@ export function SetupScreen({ q }: { q: QueueController }) {
                 </section>
               )}
               {option && <AdvancedPanel option={option} value={state.advanced} onChange={q.setAdvanced} />}
-              {/* Frames and PDF pages never keep the location. */}
-              {hasLocation && (compressing || (option?.group !== "frames" && option?.group !== "document")) && (
+              {/* Frames, PDF pages and text never keep the location. */}
+              {hasLocation &&
+                (compressing || (option?.group !== "frames" && option?.group !== "document" && option?.group !== "text")) && (
                 <LocationRow checked={state.removeLocation} onChange={q.setRemoveLocation} />
               )}
               {/* Margin keeps the content clear of the faded edge above the footer. */}

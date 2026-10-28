@@ -489,6 +489,27 @@ describe("queue state machine", () => {
     expect(requestOf(s)?.pdf?.protection).toBeNull();
   });
 
+  it("reads scanned pages by OCR for new PDFs only", () => {
+    let s = run(
+      initialQueue(),
+      { type: "add", paths: ["scansione.pdf"] },
+      { type: "analyzed", key: 1, file: file("scansione.pdf", "document", null) },
+      { type: "selectTarget", target: "pdf" },
+    );
+    s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("pdf", 100) });
+    expect(pdfChanged(s)).toBe(false);
+    expect(requestOf(s)?.pdf?.ocr).toBe(false);
+    // Making it searchable is a change worth saving.
+    s = reduce(s, { type: "setPdf", pdf: { ...s.pdf, ocr: true } });
+    s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("pdf", 100) });
+    expect(pdfChanged(s)).toBe(true);
+    expect(canStart(s)).toBe(true);
+    expect(requestOf(s)?.pdf?.ocr).toBe(true);
+    // Pictures of the pages and text files do not get a text layer.
+    s = reduce(s, { type: "selectTarget", target: "txt" });
+    expect(requestOf(s)?.pdf?.ocr).toBe(false);
+  });
+
   it("does not arrange the pages of a Word document", () => {
     let s = run(initialQueue(), { type: "add", paths: ["a.pdf", "b.docx"] });
     s = run(

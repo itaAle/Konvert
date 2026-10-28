@@ -32,6 +32,7 @@ const GROUP_TITLES: Record<TargetGroup, MessageKey> = {
 /** Notes that the label alone does not tell (translated here, not in the catalog). */
 const NOTES: Partial<Record<TargetFormat, MessageKey>> = {
   animatedWebp: "formats.animated",
+  txt: "formats.plainText",
 };
 
 /** Second line of a card: what sets the format apart. */

@@ -56,12 +56,13 @@ export const it = {
     groupFrames: "Fotogrammi",
     groupPages: "Pagine come immagini",
     groupDocument: "Documento PDF",
-    groupText: "Documento Word",
+    groupText: "Testo",
     groupEditPdf: "Modifica il PDF",
     editPdf: "Dividi, ruota, riordina",
     lossless: "Senza perdita",
     sameFormat: "Stesso formato",
     animated: "Animata",
+    plainText: "Solo testo",
     more: "Altri formati",
     fewer: "Meno formati",
     common: "Formati disponibili per tutti i file selezionati.",
@@ -156,6 +157,10 @@ export const it = {
       bottom: "In basso al centro",
       bottomRight: "In basso a destra",
     },
+  },
+  ocr: {
+    title: "Rendi il testo ricercabile (OCR)",
+    hint: "Le pagine senza testo, come scansioni e foto, vengono lette sul tuo computer: potrai cercare e copiare le parole. Circa un secondo per pagina.",
   },
   protect: {
     title: "Proteggi con una password",
@@ -335,7 +340,9 @@ export const it = {
       "Konvert impagina il documento da sé, con i font installati: interruzioni di pagina e spaziature possono differire leggermente da Word.",
     docxSimplified: "Caselle di testo, grafici, equazioni e oggetti incorporati del documento non verranno riprodotti.",
     pdfToDocx:
-      "Testo e immagini diventano modificabili; impaginazione, tabelle e disegni vengono semplificati. Le pagine scansionate senza testo restano immagini.",
+      "Testo e immagini diventano modificabili; impaginazione, tabelle e disegni vengono semplificati. Le pagine scansionate vengono lette con l'OCR.",
+    ocrReading:
+      "Il testo di foto e pagine scansionate viene letto con l'OCR: ricontrollalo. Riconosce le lingue con l'alfabeto latino (italiano, inglese, francese, tedesco, spagnolo…), non la scrittura a mano.",
   },
   actions: {
     convert: "Converti",
@@ -448,6 +455,7 @@ export const it = {
     cancelled: "Conversione annullata.",
     engine_failed: "La conversione non è riuscita.",
     no_gain: "Il file è già compresso al massimo: Konvert non è riuscito a renderlo più piccolo.",
+    no_text: "Konvert non ha trovato testo in questo file.",
     io: "Errore durante la lettura o la scrittura del file.",
     unknown: "Si è verificato un errore imprevisto.",
   },

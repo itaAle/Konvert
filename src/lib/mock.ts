@@ -134,6 +134,7 @@ const FRAMES: TargetOption[] = [
 
 const PDF = option("pdf", "PDF", "document");
 const DOCX = option("docx", "DOCX (Word)", "text");
+const TXT = option("txt", "TXT", "text");
 
 const PAGES: TargetOption[] = [
   option("png", "PNG", "pages", true),
@@ -249,7 +250,7 @@ function analysis(path: string): FileAnalysis {
         hasLocation: false,
         document: { pages: MOCK_PAGES, widthPt: 595.3, heightPt: 841.9, bookmarkPages: [1, 3, 9], form: "fillable", locked: false },
       },
-      targets: [...PAGES, PDF, DOCX],
+      targets: [...PAGES, PDF, DOCX, TXT],
       compress: "pdf",
     };
   }
@@ -273,7 +274,7 @@ function analysis(path: string): FileAnalysis {
         document: null,
         text: { pictures: 4, widthPt: 595.3, heightPt: 841.9, simplified: params.get("mock") === "simplified" },
       },
-      targets: [PDF],
+      targets: [PDF, TXT],
       compress: "docx",
     };
   }
@@ -323,7 +324,7 @@ function analysis(path: string): FileAnalysis {
         hasLocation: true,
         document: null,
       },
-      targets: [...IMAGES.map((o) => ({ ...o, sameAsInput: !heic && o.format === "jpg" })), PDF],
+      targets: [...IMAGES.map((o) => ({ ...o, sameAsInput: !heic && o.format === "jpg" })), PDF, TXT],
       // Like the core: pictures keep their format (no HEIC encoder, BMP and TIFF are not compressed).
       compress: /\.png$/i.test(name) ? "png" : /\.webp$/i.test(name) ? "webp" : /\.avif$/i.test(name) ? "avif" : /\.jpe?g$/i.test(name) ? "jpg" : null,
     };
@@ -471,7 +472,7 @@ export const mockBackend: Backend = {
       };
       return plan;
     }
-    if (media.kind === "text" || request.target === "docx") {
+    if (media.kind === "text" || request.target === "docx" || request.target === "txt") {
       await sleep(80);
       const plan: ConversionPlan = {
         target: request.target,
@@ -485,7 +486,16 @@ export const mockBackend: Backend = {
         document: null,
         removeLocation: false,
         // Like the core: laid out (or read) by Konvert, size known once done.
-        warnings: media.kind === "text" ? (media.text?.simplified ? ["docxLayout", "docxSimplified"] : ["docxLayout"]) : ["pdfToDocx"],
+        warnings:
+          request.target === "txt"
+            ? media.kind === "text"
+              ? []
+              : ["ocrReading"]
+            : media.kind === "text"
+              ? media.text?.simplified
+                ? ["docxLayout", "docxSimplified"]
+                : ["docxLayout"]
+              : ["pdfToDocx"],
         estimate: null,
       };
       return plan;
@@ -517,17 +527,20 @@ export const mockBackend: Backend = {
         frames: null,
         removeLocation: false,
         document: { pages, rotations, parts, dpi, placement: null },
-        warnings: edited
-          ? [
-              ...(media.document?.bookmarkPages.some((p) => !pages.includes(p)) ? (["pdfBookmarksDropped"] as const) : []),
-              ...(media.document?.form === "fixed" ? (["pdfFormFixed"] as const) : []),
-              ...(media.document?.locked && !request.pdf?.protection ? (["pdfUnlocked"] as const) : []),
-            ]
-          : toPdf && media.picture?.exif
-            ? ["metadataDropped"]
-            : !toPdf && pages.length > 300
-              ? ["manyFiles"]
-              : [],
+        warnings: [
+          ...(edited
+            ? [
+                ...(media.document?.bookmarkPages.some((p) => !pages.includes(p)) ? (["pdfBookmarksDropped"] as const) : []),
+                ...(media.document?.form === "fixed" ? (["pdfFormFixed"] as const) : []),
+                ...(media.document?.locked && !request.pdf?.protection ? (["pdfUnlocked"] as const) : []),
+              ]
+            : toPdf && media.picture?.exif
+              ? (["metadataDropped"] as const)
+              : !toPdf && pages.length > 300
+                ? (["manyFiles"] as const)
+                : []),
+          ...(toPdf && request.pdf?.ocr ? (["ocrReading"] as const) : []),
+        ],
         estimate: {
           bytes: toPdf
             ? Math.round(((media.sizeBytes ?? 0) * (edited ? pages.length / count : media.kind === "document" ? 1 : 0.6)))
