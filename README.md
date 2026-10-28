@@ -147,6 +147,12 @@ PDF documents:
   AES-256 encryption), keeps it in memory only while the file is in the list, never saves
   or logs it, and decrypts the file in memory, never on disk. What Konvert makes of it has
   no password, unless you protect it again.
+- **Watermark and page numbers**: every PDF Konvert makes can show a watermark (text in any
+  language, laid out with the fonts of your computer, or a PNG/JPEG picture such as a logo)
+  and page numbers (`1`, `1 / 12` or `Page 1`, top or bottom, left, center or right, from the
+  page and number you choose, with pages left without a number). Both follow each page as
+  it is shown, even when it is turned, and the page editor previews them on the thumbnails.
+  When a PDF is split, each new PDF has its own numbers.
 - **Protect with a password**: every PDF Konvert makes (edited, split, combined, from
   photos or Word documents) can open only with a password, typed twice. It uses AES-256
   encryption, which every current PDF reader opens. You can also forbid printing or copying
