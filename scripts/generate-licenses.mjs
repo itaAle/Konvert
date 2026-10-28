@@ -206,6 +206,7 @@ PaddleOCR PP-OCRv5 models             Apache License 2.0 (text in section 5)
     characters), by the PaddlePaddle authors: ${ocr.source.models}
     ONNX files as converted by the oar-ocr project (Apache-2.0):
     ${ocr.source.onnx}
+    Copy in the Konvert repository: ${ocr.source.mirror}
     Unmodified; their SHA-256 are pinned in scripts/ocr-manifest.json. They
     are run by rten (section 3), inside Konvert.
 

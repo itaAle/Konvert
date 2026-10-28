@@ -529,7 +529,8 @@ and the build recipe are listed in [`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES
 
 The OCR models in the `ocr` folder of the application are the PaddleOCR PP-OCRv5 models
 (Apache License 2.0), unmodified, in the ONNX format published by the oar-ocr project;
-`scripts/ocr-manifest.json` pins them.
+`scripts/ocr-manifest.json` pins them, and the `ocr-ppocrv5-v0.1.0` release of this repository
+keeps a copy.
 
 **H.264 patents**: H.264 video is encoded with OpenH264, whose BSD license covers the
 source code only. **H.264 patents are not covered by the BSD license of OpenH264**
