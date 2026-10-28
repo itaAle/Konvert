@@ -33,6 +33,7 @@ use ts_rs::TS;
 
 use crate::error::CoreError;
 use crate::metadata::base64;
+use crate::pdf_ocr::{self, TextLayer};
 use crate::pdf_stamp::{self, Affine};
 use crate::probe::{MediaInfo, MediaKind};
 use crate::request::{
@@ -743,6 +744,8 @@ pub struct Finishing {
     pub watermark: Option<Watermark>,
     /// Page numbers (each document of a split has its own).
     pub page_numbers: Option<PageNumbers>,
+    /// Invisible text read by OCR on pages that had none.
+    pub text: Option<Arc<TextLayer>>,
 }
 
 impl Finishing {
@@ -752,12 +755,16 @@ impl Finishing {
             protection: options.protection.clone(),
             watermark: options.watermark.clone(),
             page_numbers: options.page_numbers.clone(),
+            text: None,
         }
     }
 
     /// Nothing is added.
     pub fn is_empty(&self) -> bool {
-        self.protection.is_none() && self.watermark.is_none() && self.page_numbers.is_none()
+        self.protection.is_none()
+            && self.watermark.is_none()
+            && self.page_numbers.is_none()
+            && self.text.is_none()
     }
 }
 
@@ -848,8 +855,12 @@ pub fn build(
             return Err(CoreError::Cancelled);
         }
         let mut writer = Writer::new();
-        writer.add(&inputs, &pages[start..start + size as usize])?;
+        let these = &pages[start..start + size as usize];
+        writer.add(&inputs, these)?;
         start += size as usize;
+        if let Some(text) = &finishing.text {
+            writer.add_text(text, these)?;
+        }
         writer.stamp(&stamps, i, finishing)?;
         if !on_document(i, writer.finish(&inputs, finishing)?) {
             return Err(CoreError::Cancelled);
@@ -2036,8 +2047,36 @@ impl Writer {
                 ));
             }
             if !drawing.is_empty() {
-                self.draw_over(page, &drawing, xobjects, states)?;
+                self.draw_over(
+                    page,
+                    &drawing,
+                    &[(b"XObject", xobjects), (b"ExtGState", states)],
+                )?;
             }
+        }
+        Ok(())
+    }
+
+    /// Invisible text read by OCR over the pages of this document that had
+    /// none (`pages`: where each page comes from).
+    fn add_text(&mut self, layer: &TextLayer, pages: &[PdfPage]) -> Result<(), CoreError> {
+        let ids: Vec<ObjectId> = self
+            .kids
+            .iter()
+            .filter_map(|k| k.as_reference().ok())
+            .collect();
+        let mut font = None;
+        for (id, page) in ids.into_iter().zip(pages) {
+            let lines = layer.lines(page.file, page.number);
+            if lines.is_empty() {
+                continue;
+            }
+            let font = *font.get_or_insert_with(|| pdf_ocr::add_font(&mut self.out));
+            self.draw_over(
+                id,
+                &pdf_ocr::drawing(lines),
+                &[(b"Font", dictionary! { pdf_ocr::FONT_NAME => font })],
+            )?;
         }
         Ok(())
     }
@@ -2119,8 +2158,7 @@ impl Writer {
         &mut self,
         page: ObjectId,
         drawing: &str,
-        xobjects: Dictionary,
-        states: Dictionary,
+        added: &[(&[u8], Dictionary)],
     ) -> Result<(), CoreError> {
         let dict = self
             .out
@@ -2130,7 +2168,7 @@ impl Writer {
             Ok(Object::Dictionary(r)) => r,
             _ => Dictionary::new(),
         };
-        for (category, added) in [(&b"XObject"[..], xobjects), (b"ExtGState", states)] {
+        for &(category, ref added) in added {
             if added.is_empty() {
                 continue;
             }
@@ -3846,5 +3884,81 @@ mod tests {
             "{top} {bottom}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn text_read_by_ocr_lies_invisibly_over_its_words() {
+        use crate::docx::from_pdf::{glyphs_of, pdf_to_text};
+        use crate::ocr::TextLine;
+        use hayro::hayro_interpret::TransformExt;
+        use hayro::kurbo;
+
+        // Upright; landscape shown by a quarter turn; cropped and upside down.
+        let data = blank_pdf(&[
+            (595.0, 842.0, 0, None),
+            (595.0, 842.0, 90, None),
+            (600.0, 800.0, 180, Some([50.0, 100.0, 550.0, 700.0])),
+        ]);
+        // On each page as shown, at 2 pixels per point: a line 120 × 16
+        // points starting 100 points from the left, halfway down.
+        let scale = 2.0;
+        let pdf = open(data.clone()).unwrap();
+        let mut layer = TextLayer::default();
+        let mut expected = Vec::new();
+        for (i, page) in pdf.pages().iter().enumerate() {
+            let (_, height) = page.render_dimensions();
+            let line = TextLine {
+                text: format!("Riga {} città", i + 1),
+                confidence: 1.0,
+                cx: 160.0 * scale,
+                cy: height / 2.0 * scale,
+                ux: 1.0,
+                uy: 0.0,
+                half_len: 60.0 * scale,
+                half_h: 8.0 * scale,
+            };
+            let to_page = page.initial_transform(true).to_kurbo().inverse()
+                * kurbo::Affine::scale(1.0 / f64::from(scale));
+            layer.insert(0, i as u32 + 1, pdf_ocr::place(&[line], to_page));
+            expected.push((format!("Riga {} città", i + 1), height / 2.0 + 8.0));
+        }
+        let finishing = Finishing {
+            text: Some(Arc::new(layer)),
+            ..Finishing::default()
+        };
+        let mut out = Vec::new();
+        build(
+            vec![Part::Document(data.clone())],
+            None,
+            &[],
+            &finishing,
+            &AtomicBool::new(false),
+            |_, b| {
+                out = b;
+                true
+            },
+        )
+        .unwrap();
+
+        // Each line is found where it was read, as large as its box, and
+        // stretched to its length.
+        for (glyphs, (text, baseline)) in glyphs_of(&out).iter().zip(&expected) {
+            let found: String = glyphs.iter().map(|g| g.0.as_str()).collect();
+            assert_eq!(&found, text);
+            let (first, last) = (&glyphs[0], glyphs.last().unwrap());
+            assert!((first.1 - 100.0).abs() < 0.1, "{glyphs:?}");
+            assert!((first.2 - baseline).abs() < 0.1, "{glyphs:?}");
+            assert!((first.3 - 16.0).abs() < 0.1, "{glyphs:?}");
+            let step = 120.0 / text.chars().count() as f32;
+            assert!((last.1 - (220.0 - step)).abs() < 0.1, "{glyphs:?}");
+        }
+        // Nothing shows.
+        assert_eq!(
+            rendered(out.clone(), &[1, 2, 3]),
+            rendered(data, &[1, 2, 3])
+        );
+        let (text, report) = pdf_to_text(&out, None, &AtomicBool::new(false), |_| {}).unwrap();
+        assert_eq!(text, "Riga 1 città\n\nRiga 2 città\n\nRiga 3 città\n");
+        assert_eq!(report.pages_read, 0);
     }
 }

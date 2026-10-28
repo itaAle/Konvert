@@ -7,7 +7,8 @@
 //
 // Sources: the Rust runtime dependency graph of the app for every shipped
 // platform (`cargo tree -e normal`), the npm production packages (package-lock.json),
-// the npm build tools whose code ends up in the bundle, and FFmpeg (manifest).
+// the npm build tools whose code ends up in the bundle, FFmpeg and the OCR models
+// (manifests).
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -28,6 +29,7 @@ const BUNDLED_BUILD_TOOLS = ["tailwindcss", "vite"];
 const LICENSE_FILE = /^(licen[cs]e|copying|notice|unlicense)([-._].*)?$/i;
 
 const ffmpeg = JSON.parse(readFileSync(join(ROOT, "scripts", "ffmpeg-manifest.json"), "utf8"));
+const ocr = JSON.parse(readFileSync(join(ROOT, "scripts", "ocr-manifest.json"), "utf8"));
 const appVersion = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
 
 function licenseTexts(dir) {
@@ -195,8 +197,17 @@ Patents
     they live.
 
 
-2. Fonts and system components
+2. OCR models, fonts and system components
 ${rule}
+
+PaddleOCR PP-OCRv5 models             Apache License 2.0 (text in section 5)
+    Files in the "ocr" folder: det.onnx (PP-OCRv5 mobile text detection),
+    rec.onnx (PP-OCRv5 mobile recognition of Latin script) and dict.txt (its
+    characters), by the PaddlePaddle authors: ${ocr.source.models}
+    ONNX files as converted by the oar-ocr project (Apache-2.0):
+    ${ocr.source.onnx}
+    Unmodified; their SHA-256 are pinned in scripts/ocr-manifest.json. They
+    are run by rten (section 3), inside Konvert.
 
 Inter (font, bundled in the app)      SIL Open Font License 1.1
     https://rsms.me/inter/ - packaged as @fontsource-variable/inter (below).

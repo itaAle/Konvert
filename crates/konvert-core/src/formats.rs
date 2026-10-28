@@ -77,6 +77,9 @@ pub enum TargetFormat {
     Pdf,
     /// Word document: from a PDF (its text and pictures, to edit).
     Docx,
+    /// Plain text: the text of a PDF or a Word document, or read by OCR in a
+    /// picture or a scanned page.
+    Txt,
 }
 
 impl TargetFormat {
@@ -936,6 +939,16 @@ pub static FORMATS: &[FormatSpec] = &[
         kind: FormatKind::Document,
         ..SPEC
     },
+    FormatSpec {
+        format: TargetFormat::Txt,
+        label: "TXT",
+        extension: "txt",
+        // Text files are not converted by Konvert.
+        input_extensions: &[],
+        muxer: "",
+        kind: FormatKind::Document,
+        ..SPEC
+    },
 ];
 
 /// Catalog entry of a format.
@@ -1009,7 +1022,7 @@ pub struct Rule {
     pub image: &'static [TargetFormat],
     /// Document outputs (PDF).
     pub document: &'static [TargetFormat],
-    /// Word document outputs (DOCX).
+    /// Text outputs (DOCX, TXT).
     pub text: &'static [TargetFormat],
 }
 
@@ -1046,7 +1059,7 @@ pub static RULES: &[Rule] = &[
         audio: &[],
         image: IMAGE_TARGETS,
         document: &[TargetFormat::Pdf],
-        text: &[],
+        text: &[TargetFormat::Txt],
     },
     Rule {
         input: MediaKind::Document,
@@ -1054,7 +1067,7 @@ pub static RULES: &[Rule] = &[
         audio: &[],
         image: PAGE_TARGETS,
         document: &[TargetFormat::Pdf],
-        text: &[TargetFormat::Docx],
+        text: &[TargetFormat::Docx, TargetFormat::Txt],
     },
     Rule {
         input: MediaKind::Text,
@@ -1062,7 +1075,7 @@ pub static RULES: &[Rule] = &[
         audio: &[],
         image: &[],
         document: &[TargetFormat::Pdf],
-        text: &[],
+        text: &[TargetFormat::Txt],
     },
 ];
 
@@ -1338,6 +1351,7 @@ mod tests {
         TargetFormat::Jxl,
         TargetFormat::Pdf,
         TargetFormat::Docx,
+        TargetFormat::Txt,
     ];
 
     fn media(json: &str) -> MediaInfo {
@@ -1397,7 +1411,12 @@ mod tests {
                     other.format
                 );
             }
-            assert!(s.input_extensions.contains(&s.extension), "{:?}", f);
+            // Text files are only made, never converted.
+            assert!(
+                s.input_extensions.contains(&s.extension) || *f == TargetFormat::Txt,
+                "{:?}",
+                f
+            );
             match s.kind {
                 FormatKind::Audio => {
                     assert!(
@@ -1427,13 +1446,17 @@ mod tests {
     #[test]
     fn pictures_get_only_picture_formats() {
         let all = available_targets(&picture("mjpeg", "image2"), Path::new("IMG_1.JPEG"));
-        // Pictures can also become a PDF document, in its own group, last.
-        let (options, pdf): (Vec<_>, Vec<_>) =
+        // Pictures can also become a PDF document and a text (read by OCR),
+        // each in its own group, last.
+        let (options, others): (Vec<_>, Vec<_>) =
             all.into_iter().partition(|o| o.group == TargetGroup::Image);
-        assert_eq!(formats(&pdf), [TargetFormat::Pdf]);
+        assert_eq!(formats(&others), [TargetFormat::Pdf, TargetFormat::Txt]);
         assert_eq!(
-            (pdf[0].group, pdf[0].kind),
-            (TargetGroup::Document, FormatKind::Document)
+            others.iter().map(|o| (o.group, o.kind)).collect::<Vec<_>>(),
+            [
+                (TargetGroup::Document, FormatKind::Document),
+                (TargetGroup::Text, FormatKind::Document)
+            ]
         );
         assert!(options.iter().all(|o| o.kind == FormatKind::Image));
         assert!(
@@ -1467,8 +1490,8 @@ mod tests {
         let heic = available_targets(&picture("hevc", "image2"), Path::new("a.heic"));
         assert_eq!(
             heic.len(),
-            IMAGE_TARGETS.len() + 1,
-            "every picture format, and PDF"
+            IMAGE_TARGETS.len() + 2,
+            "every picture format, PDF and TXT"
         );
 
         // Pictures never reach audio or video formats.

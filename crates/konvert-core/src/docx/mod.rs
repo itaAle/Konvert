@@ -7,7 +7,8 @@
 //!   engine with the fonts installed on the computer;
 //! * [`from_pdf`]: the text and pictures of a PDF → paragraphs, written as a
 //!   new DOCX by [`write`];
-//! * [`compress`]: a smaller DOCX (its pictures stored again).
+//! * [`compress`]: a smaller DOCX (its pictures stored again);
+//! * [`text`]: the plain text of the model (TXT).
 //!
 //! Nothing is fetched: pictures linked from outside the file, fields and
 //! macros are never followed or run. The documents Konvert writes carry no
@@ -16,6 +17,7 @@
 pub mod compress;
 pub mod from_pdf;
 pub mod read;
+pub mod text;
 pub mod typeset;
 pub mod write;
 

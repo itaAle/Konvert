@@ -36,6 +36,9 @@ typst = { workspace = true }
 typst-layout = { workspace = true }
 typst-pdf = { workspace = true }
 typst-kit = { workspace = true }
+# OCR of scanned pages and pictures (models bundled with the app).
+rten = { workspace = true }
+rten-tensor = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [

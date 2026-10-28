@@ -225,6 +225,9 @@ pub enum ConversionWarning {
     DocxSimplified,
     /// PDF to Word: text and pictures to edit; layout, tables and drawings simplified.
     PdfToDocx,
+    /// Text read by OCR (photos, scanned pages): to check; Latin script only,
+    /// no handwriting.
+    OcrReading,
 }
 
 /// Pictures taken from a video.
@@ -337,6 +340,12 @@ pub fn plan_conversion(
         .filter(|_| plan.target == TargetFormat::Pdf)
     {
         crate::pdf_stamp::check(options.watermark.as_ref(), options.page_numbers.as_ref())?;
+        if options.ocr
+            && request.compress.is_none()
+            && matches!(media.kind, MediaKind::Image | MediaKind::Document)
+        {
+            plan.warnings.push(ConversionWarning::OcrReading);
+        }
     }
     Ok(plan)
 }
@@ -558,6 +567,15 @@ fn plan_document(
         }
         (_, TargetFormat::Docx) => {
             return Err(unsupported("only PDFs become Word documents".into()));
+        }
+        (MediaKind::Text, TargetFormat::Txt) => return Ok(document_plan(Vec::new())),
+        (MediaKind::Document | MediaKind::Image, TargetFormat::Txt) => {
+            return Ok(document_plan(vec![W::OcrReading]));
+        }
+        (_, TargetFormat::Txt) => {
+            return Err(unsupported(
+                "only documents and pictures have text to extract".into(),
+            ));
         }
         _ => {}
     }

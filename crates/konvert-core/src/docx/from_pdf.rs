@@ -9,6 +9,12 @@
 //! lines become paragraphs (spacing, indents, alignment, list markers,
 //! headings by size). Drawings, table borders and exact positions are not
 //! kept: the result is a document to edit, not a copy of the page.
+//!
+//! Pages without any text (scans) are read by OCR when an engine is given:
+//! each line read becomes glyphs spread along it, in a frame where the text
+//! runs straight across (a page scanned askew or sideways is straightened),
+//! and goes through the same steps. The same reading gives the plain text of
+//! PDFs and of pictures (TXT).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,31 +27,89 @@ use hayro::hayro_interpret::{
 };
 use hayro::kurbo;
 
+use image::GrayImage;
+
 use super::read::{
     Align, Baseline, Block, Document, Inline, LineSpacing, PageSetup, Paragraph, RunProps, Section,
 };
 use crate::error::CoreError;
+use crate::ocr::{Ocr, TextLine};
 use crate::pdf;
 use crate::pdf_compress::encode_jpeg;
+use crate::pdf_ocr;
+
+/// Size of a pixel of a picture read by OCR, in points (as if scanned at
+/// 300 dpi).
+const PICTURE_POINT: f32 = 72.0 / 300.0;
 
 /// What the conversion could not keep.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Report {
     pub pages: u32,
-    /// Pages without any text (scans not read by OCR): kept as pictures.
+    /// Pages without any text (scans not read by OCR, or where OCR found
+    /// nothing): kept as pictures.
     pub pages_without_text: u32,
+    /// Pages read by OCR.
+    pub pages_read: u32,
 }
 
-/// Converts a PDF into a DOCX. `progress` gets the fraction of pages done.
-/// Blocking: run it on a worker thread.
+/// Converts a PDF into a DOCX; pages without text are read by `ocr` when
+/// given. `progress` gets the fraction of pages done. Blocking: run it on a
+/// worker thread.
 pub fn pdf_to_docx(
     data: &[u8],
+    ocr: Option<&Ocr>,
     cancel: &AtomicBool,
     mut progress: impl FnMut(f64),
 ) -> Result<(Vec<u8>, Report), CoreError> {
+    let (document, report) = read_pdf(data, ocr, cancel, &mut progress)?;
+    let bytes = super::write::to_docx(&document)?;
+    progress(1.0);
+    Ok((bytes, report))
+}
+
+/// The text of a PDF (see [`super::text::plain_text`]); pages without text
+/// are read by `ocr` when given. Blocking: run it on a worker thread.
+pub fn pdf_to_text(
+    data: &[u8],
+    ocr: Option<&Ocr>,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(f64),
+) -> Result<(String, Report), CoreError> {
+    let (document, report) = read_pdf(data, ocr, cancel, &mut progress)?;
+    progress(1.0);
+    Ok((super::text::plain_text(&document), report))
+}
+
+/// The text of a picture, read by OCR. Blocking: run it on a worker thread.
+pub fn picture_to_text(
+    picture: &GrayImage,
+    ocr: &Ocr,
+    cancel: &AtomicBool,
+) -> Result<String, CoreError> {
+    let lines = ocr.read(picture, cancel)?;
+    let page = ocr_page(
+        &lines,
+        (picture.width() as f32, picture.height() as f32),
+        PICTURE_POINT,
+        Vec::new(),
+    );
+    let (document, _) = build(vec![page]);
+    Ok(super::text::plain_text(&document))
+}
+
+/// Every page of a PDF as paragraphs (90% of the progress).
+fn read_pdf(
+    data: &[u8],
+    ocr: Option<&Ocr>,
+    cancel: &AtomicBool,
+    progress: &mut impl FnMut(f64),
+) -> Result<(Document, Report), CoreError> {
     let pdf = pdf::open(data.to_vec())?;
     let pages = pdf.pages();
     let cache = InterpreterCache::new();
+    let render_cache = hayro::RenderCache::new();
+    let mut pages_read = 0;
     let mut collected = Vec::with_capacity(pages.len());
     for (i, page) in pages.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
@@ -69,7 +133,7 @@ pub fn pdf_to_docx(
             });
         }
         let page_area = (width * height) as f64;
-        collected.push(PageContent {
+        let mut content = PageContent {
             width,
             height,
             glyphs: device.glyphs,
@@ -80,13 +144,93 @@ pub fn pdf_to_docx(
                 .into_iter()
                 .filter(|(r, _)| r.area() < page_area * 0.5)
                 .collect(),
-        });
+        };
+        if let Some(ocr) = ocr
+            && content.glyphs.is_empty()
+        {
+            let scale = pdf_ocr::ocr_scale(width, height);
+            let settings = InterpreterSettings::default();
+            if let Some(pixmap) = pdf::draw(page, &render_cache, &settings, scale) {
+                let lines = ocr.read(&pdf_ocr::gray(&pixmap), cancel)?;
+                pages_read += 1;
+                if !lines.is_empty() {
+                    let pictures = std::mem::take(&mut content.pictures);
+                    let size = (width * scale, height * scale);
+                    content = ocr_page(&lines, size, 1.0 / scale, pictures);
+                }
+            }
+        }
+        collected.push(content);
         progress((i + 1) as f64 / pages.len().max(1) as f64 * 0.9);
     }
-    let (document, report) = build(collected);
-    let bytes = super::write::to_docx(&document)?;
-    progress(1.0);
-    Ok((bytes, report))
+    let (document, mut report) = build(collected);
+    report.pages_read = pages_read;
+    Ok((document, report))
+}
+
+/// A page of `size` pixels read by OCR (pixels of `point` points), as
+/// glyphs: the characters of each line spread evenly along it. A page whose
+/// text runs askew or sideways is turned so that it runs straight across;
+/// its `pictures` (placed on the page as it was) are then left out.
+fn ocr_page(
+    lines: &[TextLine],
+    size: (f32, f32),
+    point: f32,
+    pictures: Vec<PictureBox>,
+) -> PageContent {
+    // The main direction of the text, weighted by the length of the lines.
+    let (dx, dy) = lines.iter().fold((0.0f32, 0.0f32), |a, l| {
+        (a.0 + l.ux * l.half_len, a.1 + l.uy * l.half_len)
+    });
+    let mut angle = dy.atan2(dx);
+    if angle.abs() < 0.5f32.to_radians() {
+        angle = 0.0;
+    }
+    let (sin, cos) = (-angle).sin_cos();
+    let (mx, my) = (size.0 / 2.0, size.1 / 2.0);
+    let turn = |x: f32, y: f32| {
+        let (x, y) = (x - mx, y - my);
+        (x * cos - y * sin + mx, x * sin + y * cos + my)
+    };
+    let corners = [(0.0, 0.0), (size.0, 0.0), (0.0, size.1), size].map(|(x, y)| turn(x, y));
+    let (x0, y0) = corners
+        .iter()
+        .fold((f32::MAX, f32::MAX), |a, c| (a.0.min(c.0), a.1.min(c.1)));
+    let (x1, y1) = corners
+        .iter()
+        .fold((f32::MIN, f32::MIN), |a, c| (a.0.max(c.0), a.1.max(c.1)));
+    let font = std::rc::Rc::new(FontStyle {
+        family: "Arial".into(),
+        bold: false,
+        italic: false,
+    });
+    let mut glyphs = Vec::new();
+    for line in lines {
+        let chars: Vec<char> = line.text.chars().collect();
+        let (cx, cy) = turn(line.cx, line.cy);
+        let (cx, cy) = ((cx - x0) * point, (cy - y0) * point);
+        let (half_len, half_h) = (line.half_len * point, line.half_h * point);
+        let width = 2.0 * half_len / chars.len().max(1) as f32;
+        for (i, c) in chars.into_iter().enumerate() {
+            glyphs.push(GlyphBox {
+                x: cx - half_len + i as f32 * width,
+                // The box reaches a little above and below the letters.
+                y: cy + 0.5 * half_h,
+                width,
+                size: 1.5 * half_h,
+                text: c.to_string(),
+                font: font.clone(),
+                color: [0, 0, 0],
+            });
+        }
+    }
+    PageContent {
+        width: (x1 - x0) * point,
+        height: (y1 - y0) * point,
+        glyphs,
+        pictures: if angle == 0.0 { pictures } else { Vec::new() },
+        fills: Vec::new(),
+    }
 }
 
 // --- Collecting --------------------------------------------------------------------
@@ -1089,6 +1233,34 @@ fn paragraphs(
         });
     }
     out
+}
+
+/// The glyphs of each page: text, left edge and baseline (points from the
+/// top left of the page as shown) and size.
+#[cfg(test)]
+pub(crate) fn glyphs_of(data: &[u8]) -> Vec<Vec<(String, f32, f32, f32)>> {
+    let pdf = pdf::open(data.to_vec()).unwrap();
+    let cache = InterpreterCache::new();
+    pdf.pages()
+        .iter()
+        .map(|page| {
+            let (width, height) = page.render_dimensions();
+            let mut device = Collector::default();
+            let mut context = Context::new(
+                page.initial_transform(true).to_kurbo(),
+                kurbo::Rect::new(0.0, 0.0, width as f64, height as f64),
+                &cache,
+                page.xref(),
+                InterpreterSettings::default(),
+            );
+            interpret_page(page, &mut context, &mut device);
+            device
+                .glyphs
+                .into_iter()
+                .map(|g| (g.text, g.x, g.y, g.size))
+                .collect()
+        })
+        .collect()
 }
 
 #[cfg(test)]

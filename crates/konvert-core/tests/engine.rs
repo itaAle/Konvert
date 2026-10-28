@@ -2586,3 +2586,222 @@ async fn word_documents_get_smaller_and_join_other_files_in_one_pdf() {
         .pages;
     assert_eq!(pages, 3);
 }
+
+// --- OCR ---------------------------------------------------------------------------
+
+/// A "scan" of the first page of the Word fixture: the page drawn at 200 dpi,
+/// as a PNG.
+async fn scanned_page(bins: &Binaries, tmp: &TempDir) -> PathBuf {
+    let input = tmp.path("Relazione.docx");
+    std::fs::write(
+        &input,
+        fixtures::docx(&fixtures::noisy_png(300, 200), (216.0, 144.0)),
+    )
+    .unwrap();
+    let (pdf, _) = convert(
+        bins,
+        tmp,
+        &input,
+        req(TargetFormat::Pdf, QualityPreset::Balanced),
+    )
+    .await;
+    let mut png = Vec::new();
+    konvert_core::pdf::render_pages(
+        std::fs::read(&pdf.output).unwrap(),
+        &[1],
+        200,
+        &Default::default(),
+        |page| {
+            png = page.png;
+            true
+        },
+    )
+    .unwrap();
+    let scan = tmp.path("Scansione.png");
+    std::fs::write(&scan, png).unwrap();
+    scan
+}
+
+/// What every reading of the scanned page must find.
+fn assert_read(text: &str) {
+    for words in [
+        "Relazione annuale",
+        "Primo punto",
+        "Secondo punto",
+        "Cella unita",
+    ] {
+        assert!(text.contains(words), "{words:?} not in {text:?}");
+    }
+}
+
+fn read_text(path: &Path) -> String {
+    let text = std::fs::read_to_string(path).unwrap();
+    // The platform's line ends.
+    assert_eq!(text.contains("\r\n"), cfg!(windows));
+    text
+}
+
+#[tokio::test]
+async fn photos_of_documents_become_text() {
+    let bins = engine();
+    let tmp = TempDir::new("ocr-text");
+    let scan = scanned_page(&bins, &tmp).await;
+    let media = probe(&bins, &scan).await.unwrap();
+    assert!(formats::is_offered(&media, &scan, TargetFormat::Txt));
+    let plan = plan_conversion(
+        &media,
+        &req(TargetFormat::Txt, QualityPreset::Balanced),
+        &scan,
+    )
+    .unwrap();
+    assert_eq!(plan.warnings, [konvert_core::ConversionWarning::OcrReading]);
+    let text = convert_to_text(&bins, &tmp, &scan).await;
+    assert!(text.output.ends_with("Scansione.txt"));
+    let read = read_text(&text.output);
+    assert_read(&read);
+    // In reading order: the heading first, the list before the table.
+    let at = |words: &str| read.find(words).unwrap();
+    assert!(at("Relazione annuale") < at("Primo punto"));
+    assert!(at("Primo punto") < at("Secondo punto") && at("Secondo punto") < at("Cella unita"));
+
+    // A photo taken sideways is read too.
+    let turned = image::open(&scan).unwrap().rotate270();
+    let sideways = tmp.path("Di lato.png");
+    turned.save(&sideways).unwrap();
+    let text = convert_to_text(&bins, &tmp, &sideways).await;
+    assert_read(&read_text(&text.output));
+
+    // Nothing to read: no file, a clear error.
+    let blank = tmp.path("Vuota.png");
+    image::GrayImage::from_pixel(400, 300, image::Luma([255]))
+        .save(&blank)
+        .unwrap();
+    let media = probe(&bins, &blank).await.unwrap();
+    let ws = Workspace::create(&tmp.path("ws")).unwrap();
+    let job = ConversionJob {
+        id: 9,
+        input: blank.clone(),
+        media,
+        request: req(TargetFormat::Txt, QualityPreset::Balanced),
+        output_dir: tmp.path("out"),
+        passwords: Default::default(),
+    };
+    let error = run_conversion(&bins, &ws, &job, &CancellationToken::new(), |_| {})
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), "no_text");
+    assert!(!tmp.path("out").join("Vuota.txt").exists());
+}
+
+async fn convert_to_text(bins: &Binaries, tmp: &TempDir, input: &Path) -> ConversionOutcome {
+    let media = probe(bins, input).await.unwrap();
+    let out_dir = tmp.path("out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ws = Workspace::create(&tmp.path("ws")).unwrap();
+    let job = ConversionJob {
+        id: 3,
+        input: input.to_path_buf(),
+        media,
+        request: req(TargetFormat::Txt, QualityPreset::Balanced),
+        output_dir: out_dir,
+        passwords: Default::default(),
+    };
+    let outcome = run_conversion(bins, &ws, &job, &CancellationToken::new(), |_| {})
+        .await
+        .unwrap_or_else(|e| panic!("TXT failed: {e} {:?}", e.details()));
+    assert_eq!(files_in(ws.dir()), [".lock"], "temporary files left behind");
+    outcome
+}
+
+#[tokio::test]
+async fn scans_become_searchable_pdfs_and_text() {
+    let bins = engine();
+    let tmp = TempDir::new("ocr-pdf");
+    let scan = scanned_page(&bins, &tmp).await;
+
+    // A scanned PDF (the picture as a page): its text is read by OCR.
+    let (scanned, _) = convert(
+        &bins,
+        &tmp,
+        &scan,
+        req(TargetFormat::Pdf, QualityPreset::Balanced),
+    )
+    .await;
+    let text = convert_to_text(&bins, &tmp, &scanned.output).await;
+    assert_read(&read_text(&text.output));
+
+    // The same scan made searchable: invisible text over the picture.
+    let mut request = req(TargetFormat::Pdf, QualityPreset::Balanced);
+    request.pdf = Some(konvert_core::PdfOptions {
+        ocr: true,
+        ..Default::default()
+    });
+    let media = probe(&bins, &scan).await.unwrap();
+    let plan = plan_conversion(&media, &request, &scan).unwrap();
+    assert_eq!(plan.warnings, [konvert_core::ConversionWarning::OcrReading]);
+    let progress = std::sync::Mutex::new(Vec::new());
+    let out_dir = tmp.path("searchable");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ws = Workspace::create(&tmp.path("ws")).unwrap();
+    let job = ConversionJob {
+        id: 5,
+        input: scan.clone(),
+        media,
+        request: request.clone(),
+        output_dir: out_dir,
+        passwords: Default::default(),
+    };
+    let searchable = run_conversion(&bins, &ws, &job, &CancellationToken::new(), |p| {
+        progress.lock().unwrap().push(p.fraction.unwrap());
+    })
+    .await
+    .unwrap();
+    let fractions = progress.into_inner().unwrap();
+    assert!(
+        fractions.is_sorted() && fractions.last() == Some(&1.0),
+        "{fractions:?}"
+    );
+    let data = std::fs::read(&searchable.output).unwrap();
+    let doc = lopdf::Document::load_mem(&data).unwrap();
+    let page = doc.get_pages()[&1];
+    let fonts = doc.get_page_fonts(page).unwrap();
+    assert!(fonts.contains_key(&b"KonvertOCR"[..]), "{:?}", fonts.keys());
+    // Its text is that layer: no OCR needed to read it.
+    let text = convert_to_text(&bins, &tmp, &searchable.output).await;
+    assert_read(&read_text(&text.output));
+
+    // A scanned PDF made searchable in turn, with a password: the page has
+    // no text, so it is read.
+    let (again, _) = convert(&bins, &tmp, &scanned.output, request).await;
+    let doc = lopdf::Document::load_mem(&std::fs::read(&again.output).unwrap()).unwrap();
+    let fonts = doc.get_page_fonts(doc.get_pages()[&1]).unwrap();
+    assert!(fonts.contains_key(&b"KonvertOCR"[..]));
+}
+
+#[tokio::test]
+async fn word_documents_become_text() {
+    let bins = engine();
+    let tmp = TempDir::new("docx-txt");
+    let input = tmp.path("Relazione annuale.docx");
+    std::fs::write(
+        &input,
+        fixtures::docx(&fixtures::noisy_png(300, 200), (216.0, 144.0)),
+    )
+    .unwrap();
+    let media = probe(&bins, &input).await.unwrap();
+    let plan = plan_conversion(
+        &media,
+        &req(TargetFormat::Txt, QualityPreset::Balanced),
+        &input,
+    )
+    .unwrap();
+    assert!(plan.warnings.is_empty());
+    let text = convert_to_text(&bins, &tmp, &input).await;
+    assert!(text.output.ends_with("Relazione annuale.txt"));
+    let text = read_text(&text.output).replace("\r\n", "\n");
+    assert_eq!(
+        text,
+        "Relazione annuale\nTesto con grassetto e una nota[1].\n1. Primo punto\n2. Secondo punto\n\
+         Alta\tCella unita\nB\tC\n\nSeconda pagina\n\n\n[1] Testo della nota.\n"
+    );
+}

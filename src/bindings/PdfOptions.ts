@@ -64,4 +64,9 @@ watermark?: Watermark | null,
 /**
  * Numbers drawn on the pages of the new PDFs.
  */
-pageNumbers?: PageNumbers | null, };
+pageNumbers?: PageNumbers | null, 
+/**
+ * Pages without text (scans, photos) are read by OCR and get invisible
+ * text, so the new PDFs can be searched.
+ */
+ocr: boolean, };

@@ -25,9 +25,11 @@ use crate::exif;
 use crate::formats::{self, TargetFormat};
 use crate::metadata;
 use crate::naming;
+use crate::ocr::Ocr;
 use crate::pdf;
 use crate::pdf_compress;
-use crate::plan::{ConversionPlan, plan_conversion};
+use crate::pdf_ocr;
+use crate::plan::{ConversionPlan, plan_conversion, plan_offered};
 use crate::probe::{MediaInfo, MediaKind};
 use crate::process;
 use crate::progress::{Progress, ProgressParser};
@@ -95,8 +97,34 @@ pub async fn picture_thumbnail(
             details: "only pictures have a picture thumbnail".into(),
         });
     }
+    let size = size.clamp(16, pdf::MAX_THUMBNAIL);
+    let png = picture_png(
+        bins,
+        workspace,
+        id,
+        input,
+        media,
+        size,
+        &CancellationToken::new(),
+    )
+    .await?;
+    Ok(format!("data:image/png;base64,{}", metadata::base64(&png)))
+}
+
+/// A picture as a PNG conversion makes it (turned upright, HEIC tiles
+/// joined, SVG drawn), at most `size` pixels on its longest side, in the
+/// private workspace.
+async fn picture_png(
+    bins: &Binaries,
+    workspace: &Workspace,
+    id: u64,
+    input: &Path,
+    media: &MediaInfo,
+    size: u32,
+    cancel: &CancellationToken,
+) -> Result<Vec<u8>, CoreError> {
     let mut request = ConversionRequest::new(TargetFormat::Png, QualityPreset::Small);
-    request.advanced.max_dimension = Some(size.clamp(16, pdf::MAX_THUMBNAIL));
+    request.advanced.max_dimension = Some(size);
     let job = ConversionJob {
         id,
         input: input.to_path_buf(),
@@ -105,24 +133,16 @@ pub async fn picture_thumbnail(
         output_dir: workspace.dir().to_path_buf(),
         passwords: Passwords::default(),
     };
-    let mut plan = plan_conversion(media, &job.request, input)?;
+    // Also for a PNG (a PNG conversion is not offered for it).
+    let mut plan = plan_offered(media, &job.request, input)?;
     if let Some(image) = plan.image.as_mut() {
         image.copy_exif = false;
     }
     let output = workspace.job_output(id, "png");
-    encode(
-        bins,
-        workspace,
-        &job,
-        &plan,
-        &output,
-        &CancellationToken::new(),
-        &mut |_| {},
-    )
-    .await?;
-    let png = std::fs::read(&output);
+    let encoded = encode(bins, workspace, &job, &plan, &output, cancel, &mut |_| {}).await;
+    let png = encoded.and_then(|_| Ok(std::fs::read(&output)?));
     let _ = std::fs::remove_file(&output);
-    Ok(format!("data:image/png;base64,{}", metadata::base64(&png?)))
+    png
 }
 
 /// Runs `job`, calling `on_progress` as FFmpeg reports progress.
@@ -152,10 +172,13 @@ pub async fn run_conversion(
         let inputs = [(job.input.clone(), job.media.clone())];
         return run_build(bins, workspace, job, &inputs, cancel, on_progress, started).await;
     }
+    if job.request.target == TargetFormat::Txt {
+        return run_text(bins, workspace, job, cancel, on_progress, started).await;
+    }
     if job.request.target == TargetFormat::Docx
         || (job.request.target == TargetFormat::Pdf && job.media.kind == MediaKind::Text)
     {
-        return run_document_conversion(workspace, job, cancel, on_progress, started).await;
+        return run_document_conversion(bins, workspace, job, cancel, on_progress, started).await;
     }
     if job.request.target == TargetFormat::Pdf {
         let inputs = [(job.input.clone(), job.media.clone())];
@@ -421,6 +444,7 @@ fn typeset(data: &[u8]) -> Result<Vec<u8>, CoreError> {
 /// A file made by Konvert itself: a Word document laid out as PDF, or a PDF
 /// made into a Word document, next to the other outputs.
 async fn run_document_conversion(
+    bins: &Binaries,
     workspace: &Workspace,
     job: &ConversionJob,
     cancel: &CancellationToken,
@@ -428,6 +452,7 @@ async fn run_document_conversion(
     started: Instant,
 ) -> Result<ConversionOutcome, CoreError> {
     let to_word = job.request.target == TargetFormat::Docx;
+    let models = bins.ocr.clone();
     let data = if to_word {
         pdf::load(&job.input, job.passwords.get(&job.input))?
     } else {
@@ -442,7 +467,11 @@ async fn run_document_conversion(
     let bytes = on_worker(
         move |stop, progress| {
             if to_word {
-                docx::from_pdf::pdf_to_docx(&data, stop, progress).map(|(bytes, _)| bytes)
+                // Scanned pages are read by OCR (left as pictures without
+                // the models, in a development build).
+                let ocr = Ocr::load(&models).ok();
+                docx::from_pdf::pdf_to_docx(&data, ocr.as_ref(), stop, progress)
+                    .map(|(bytes, _)| bytes)
             } else {
                 progress(0.1);
                 let pdf = typeset(&data)?;
@@ -474,9 +503,84 @@ async fn run_document_conversion(
         &mut on_progress,
     )
     .await?;
+    finish_file(workspace, job, &bytes, started).await
+}
+
+/// The text of a Word document, a PDF or a picture, as a TXT file (UTF-8,
+/// the platform's line ends). PDF pages without text and pictures are read
+/// by OCR.
+async fn run_text(
+    bins: &Binaries,
+    workspace: &Workspace,
+    job: &ConversionJob,
+    cancel: &CancellationToken,
+    mut on_progress: impl FnMut(Progress) + Send,
+    started: Instant,
+) -> Result<ConversionOutcome, CoreError> {
+    let models = bins.ocr.clone();
+    let text = match job.media.kind {
+        MediaKind::Text => {
+            let data = std::fs::read(&job.input)?;
+            let work = move |_: &AtomicBool, progress: &mut dyn FnMut(f64)| {
+                let package = docx::Package::open(&data)?;
+                let document = docx::read::read(&package)?;
+                progress(1.0);
+                Ok(docx::text::plain_text(&document).into_bytes())
+            };
+            on_worker(work, cancel, &mut on_progress).await?
+        }
+        MediaKind::Document => {
+            let data = pdf::load(&job.input, job.passwords.get(&job.input))?;
+            let work = move |stop: &AtomicBool, progress: &mut dyn FnMut(f64)| {
+                let ocr = Ocr::load(&models)?;
+                docx::from_pdf::pdf_to_text(&data, Some(&ocr), stop, progress)
+                    .map(|(text, _)| text.into_bytes())
+            };
+            on_worker(work, cancel, &mut on_progress).await?
+        }
+        _ => {
+            let size = pdf_ocr::MAX_SIDE as u32;
+            let png = picture_png(
+                bins, workspace, job.id, &job.input, &job.media, size, cancel,
+            )
+            .await?;
+            let work = move |stop: &AtomicBool, progress: &mut dyn FnMut(f64)| {
+                let ocr = Ocr::load(&models)?;
+                let picture = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
+                    .map_err(|e| CoreError::CorruptInput {
+                        details: e.to_string(),
+                    })?;
+                let text =
+                    docx::from_pdf::picture_to_text(&pdf_ocr::on_white(&picture), &ocr, stop)?;
+                progress(1.0);
+                Ok(text.into_bytes())
+            };
+            on_worker(work, cancel, &mut on_progress).await?
+        }
+    };
+    let text = String::from_utf8_lossy(&text);
+    if text.trim().is_empty() {
+        return Err(CoreError::NoText);
+    }
+    let text = if cfg!(windows) {
+        text.replace('\n', "\r\n")
+    } else {
+        text.into_owned()
+    };
+    finish_file(workspace, job, text.as_bytes(), started).await
+}
+
+/// Writes a file made by Konvert itself next to the other outputs, under a
+/// name not taken yet.
+async fn finish_file(
+    workspace: &Workspace,
+    job: &ConversionJob,
+    bytes: &[u8],
+    started: Instant,
+) -> Result<ConversionOutcome, CoreError> {
     let ext = formats::spec(job.request.target).extension;
     let temp_output = workspace.job_output(job.id, ext);
-    std::fs::write(&temp_output, &bytes)?;
+    std::fs::write(&temp_output, bytes)?;
     let stem = output_stem(&job.input);
     let output_dir = job.output_dir.clone();
     let temp = temp_output.clone();
@@ -830,37 +934,61 @@ async fn run_build(
     std::fs::create_dir_all(&temp_dir)?;
     let documents = parts.len().max(1);
     let stop = Arc::new(AtomicBool::new(false));
-    let (sender, mut receiver) = tokio::sync::mpsc::channel::<(usize, Vec<u8>)>(1);
+    /// What the builder reports.
+    enum Built {
+        /// Fraction of the pages read by OCR.
+        Read(f64),
+        Document(usize, Vec<u8>),
+    }
+    let (sender, mut receiver) = tokio::sync::mpsc::channel::<Built>(1);
     let builder = {
         let stop = stop.clone();
         let parts = parts.clone();
-        let finishing = pdf::Finishing::of(&options);
+        let mut finishing = pdf::Finishing::of(&options);
+        let models = options.ocr.then(|| bins.ocr.clone());
         tokio::task::spawn_blocking(move || {
+            if let Some(models) = models {
+                let ocr = Ocr::load(&models)?;
+                let text = pdf_ocr::read_pages(&files, layout.as_deref(), &ocr, &stop, |done| {
+                    let _ = sender.blocking_send(Built::Read(done));
+                })?;
+                finishing.text = Some(Arc::new(text));
+            }
             pdf::build(
                 files,
                 layout.as_deref(),
                 &parts,
                 &finishing,
                 &stop,
-                |i, bytes| sender.blocking_send((i, bytes)).is_ok(),
+                |i, bytes| sender.blocking_send(Built::Document(i, bytes)).is_ok(),
             )
         })
     };
 
+    // The files are ready; reading pages by OCR takes most of what is left.
+    let ready = used.len() as f64 / steps as f64;
+    let reading = if options.ocr { 0.9 } else { 0.0 };
     let result: Result<(), CoreError> = async {
         let mut done = 0;
         loop {
-            let part = tokio::select! {
+            let message = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err(CoreError::Cancelled),
-                part = receiver.recv() => part,
+                message = receiver.recv() => message,
             };
-            let Some((i, bytes)) = part else {
-                return Ok(());
+            let share = match message {
+                None => return Ok(()),
+                Some(Built::Read(read)) => reading * read,
+                Some(Built::Document(i, bytes)) => {
+                    std::fs::write(temp_dir.join(format!("part-{i:06}.pdf")), &bytes)?;
+                    done += 1;
+                    reading + (1.0 - reading) * done as f64 / documents as f64
+                }
             };
-            std::fs::write(temp_dir.join(format!("part-{i:06}.pdf")), &bytes)?;
-            done += 1;
-            on_progress(fraction(used.len() * documents + done, steps * documents));
+            on_progress(Progress {
+                fraction: Some(ready + (1.0 - ready) * share),
+                ..fraction(0, 1)
+            });
         }
     }
     .await;

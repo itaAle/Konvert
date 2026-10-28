@@ -335,6 +335,9 @@ pub struct PdfOptions {
     pub watermark: Option<Watermark>,
     /// Numbers drawn on the pages of the new PDFs.
     pub page_numbers: Option<PageNumbers>,
+    /// Pages without text (scans, photos) are read by OCR and get invisible
+    /// text, so the new PDFs can be searched.
+    pub ocr: bool,
 }
 
 impl Default for PdfOptions {
@@ -355,6 +358,7 @@ impl Default for PdfOptions {
             protection: None,
             watermark: None,
             page_numbers: None,
+            ocr: false,
         }
     }
 }

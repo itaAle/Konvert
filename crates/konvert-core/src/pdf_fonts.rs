@@ -857,7 +857,7 @@ pub(crate) fn prune(font: &[u8], keep: &BTreeSet<u16>) -> Option<Vec<u8>> {
     // The whole-font checksum is computed again below.
     new_head.get_mut(8..12)?.copy_from_slice(&[0; 4]);
 
-    let mut out_tables: Vec<([u8; 4], Vec<u8>)> = tables
+    let out_tables: Vec<([u8; 4], Vec<u8>)> = tables
         .iter()
         .filter(|(tag, ..)| !LAYOUT_TABLES.contains(&tag))
         .map(|&(tag, offset, length)| {
@@ -870,11 +870,17 @@ pub(crate) fn prune(font: &[u8], keep: &BTreeSet<u16>) -> Option<Vec<u8>> {
             (tag, bytes)
         })
         .collect();
-    out_tables.sort_by_key(|(tag, _)| *tag);
-    let mut font = write_tables(&out_tables);
+    truetype_file(out_tables)
+}
+
+/// A TrueType font file made of `tables` (one of them `head`), with its
+/// checksums.
+pub(crate) fn truetype_file(mut tables: Vec<([u8; 4], Vec<u8>)>) -> Option<Vec<u8>> {
+    tables.sort_by_key(|(tag, _)| *tag);
+    let mut font = write_tables(&tables);
     // head.checkSumAdjustment makes the whole font add up to 0xB1B0AFBA.
     let adjustment = 0xB1B0_AFBAu32.wrapping_sub(checksum(&font));
-    let head_at = 12 + 16 * out_tables.iter().position(|(tag, _)| tag == b"head")?;
+    let head_at = 12 + 16 * tables.iter().position(|(tag, _)| tag == b"head")?;
     let head_offset = u32_at(&font, head_at + 8)? as usize;
     font.get_mut(head_offset + 8..head_offset + 12)?
         .copy_from_slice(&adjustment.to_be_bytes());
