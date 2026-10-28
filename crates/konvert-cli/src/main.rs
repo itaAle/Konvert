@@ -22,6 +22,7 @@
 //!          --dpi N  --pages "1-3, 5"   (PDF to pictures)
 //!          --layout "3, 1-2, 5@90"  --rotate 90|180|270
 //!          --watermark TEXT  --page-numbers   (new PDFs)
+//!          --protect   (new PDFs; the password is read from $KONVERT_PASSWORD)
 //!          --split-every N | --split-after "2, 5"   (PDF to PDF; with combine,
 //!                    "2:1-3" are pages of the second file)
 //!          --compress light|strong|max  --max-mb N  --pages-as-pictures
@@ -65,6 +66,7 @@ OPTIONS: --preset max|balanced|small  --height N  --fps N
          --dpi N  --pages \"1-3, 5\"   (PDF to pictures)
          --layout \"3, 1-2, 5@90\"  --rotate 90|180|270
          --watermark TEXT  --page-numbers   (new PDFs)
+         --protect   (new PDFs; the password is read from $KONVERT_PASSWORD)
          --split-every N | --split-after \"2, 5\"   (PDF to PDF; with combine,
                    \"2:1-3\" are pages of the second file)
          --compress light|strong|max  --max-mb N  --pages-as-pictures
@@ -300,6 +302,18 @@ fn parse_args() -> Result<Cli, String> {
                     text: value("--watermark")?.to_string_lossy().into_owned(),
                     ..Default::default()
                 })
+            }
+            Some("--protect") => {
+                // The password comes from the environment, never from the
+                // command line (other processes can read it there).
+                let password = std::env::var("KONVERT_PASSWORD")
+                    .map_err(|_| "--protect needs the password in KONVERT_PASSWORD")?;
+                pdf.get_or_insert_default().protection =
+                    Some(konvert_core::request::PdfProtection {
+                        password: konvert_core::Secret::new(password),
+                        allow_print: true,
+                        allow_copy: true,
+                    });
             }
             Some("--page-numbers") => {
                 pdf.get_or_insert_default().page_numbers = Some(Default::default())
