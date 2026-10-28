@@ -22,6 +22,7 @@
 //!          --dpi N  --pages "1-3, 5"   (PDF to pictures)
 //!          --layout "3, 1-2, 5@90"  --rotate 90|180|270
 //!          --watermark TEXT  --page-numbers   (new PDFs)
+//!          --ocr   (new PDFs: pages without text read by OCR, made searchable)
 //!          --protect   (new PDFs; the password is read from $KONVERT_PASSWORD)
 //!          --split-every N | --split-after "2, 5"   (PDF to PDF; with combine,
 //!                    "2:1-3" are pages of the second file)
@@ -31,6 +32,8 @@
 //!
 //! The engine directory defaults to `$KONVERT_FFMPEG_DIR`, then to
 //! `src-tauri/binaries/ffmpeg` in this repository (filled by `scripts/setup-ffmpeg.*`).
+//! The OCR models (`--to txt`, `--ocr`) are read from the `ocr` folder next to it
+//! (filled by `scripts/setup-ocr.mjs`).
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -66,6 +69,7 @@ OPTIONS: --preset max|balanced|small  --height N  --fps N
          --dpi N  --pages \"1-3, 5\"   (PDF to pictures)
          --layout \"3, 1-2, 5@90\"  --rotate 90|180|270
          --watermark TEXT  --page-numbers   (new PDFs)
+         --ocr   (new PDFs: pages without text read by OCR, made searchable)
          --protect   (new PDFs; the password is read from $KONVERT_PASSWORD)
          --split-every N | --split-after \"2, 5\"   (PDF to PDF; with combine,
                    \"2:1-3\" are pages of the second file)
@@ -318,6 +322,7 @@ fn parse_args() -> Result<Cli, String> {
             Some("--page-numbers") => {
                 pdf.get_or_insert_default().page_numbers = Some(Default::default())
             }
+            Some("--ocr") => pdf.get_or_insert_default().ocr = true,
             Some("--split-every") => {
                 let pdf = pdf.get_or_insert_default();
                 pdf.split = PdfSplit::Every;
