@@ -433,7 +433,12 @@ async fn run_document_conversion(
     } else {
         std::fs::read(&job.input)?
     };
-    let protection = job.request.pdf.as_ref().and_then(|p| p.protection.clone());
+    let finishing = job
+        .request
+        .pdf
+        .as_ref()
+        .map(pdf::Finishing::of)
+        .unwrap_or_default();
     let bytes = on_worker(
         move |stop, progress| {
             if to_word {
@@ -442,10 +447,25 @@ async fn run_document_conversion(
                 progress(0.1);
                 let pdf = typeset(&data)?;
                 progress(0.9);
-                let pdf = match &protection {
-                    Some(protection) => pdf::protect(&pdf, protection)?,
-                    None => pdf,
-                };
+                if finishing.is_empty() {
+                    progress(1.0);
+                    return Ok(pdf);
+                }
+                // A watermark, page numbers or a password: the laid out
+                // pages are copied once more (with their bookmarks).
+                let mut finished = Vec::new();
+                pdf::build(
+                    vec![pdf::Part::Document(pdf)],
+                    None,
+                    &[],
+                    &finishing,
+                    stop,
+                    |_, bytes| {
+                        finished = bytes;
+                        true
+                    },
+                )?;
+                let pdf = finished;
                 progress(1.0);
                 Ok(pdf)
             }
@@ -814,9 +834,7 @@ async fn run_build(
     let builder = {
         let stop = stop.clone();
         let parts = parts.clone();
-        let finishing = pdf::Finishing {
-            protection: options.protection.clone(),
-        };
+        let finishing = pdf::Finishing::of(&options);
         tokio::task::spawn_blocking(move || {
             pdf::build(
                 files,

@@ -194,6 +194,110 @@ fn yes() -> bool {
     true
 }
 
+/// Where something is drawn on a page, as the page is shown (after its turn).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum Anchor {
+    TopLeft,
+    Top,
+    TopRight,
+    Left,
+    #[default]
+    Center,
+    Right,
+    BottomLeft,
+    Bottom,
+    BottomRight,
+}
+
+/// Text or a picture drawn over the pages of a new PDF.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export, optional_fields = nullable)]
+pub struct Watermark {
+    /// The text (any language), unless a picture is given.
+    pub text: String,
+    /// A PNG or JPEG picture drawn instead of the text.
+    #[ts(type = "string | null")]
+    pub picture: Option<std::path::PathBuf>,
+    /// Size of the text in points; width of a picture in percent of the page.
+    pub size: f32,
+    /// Color of the text, `#rrggbb`.
+    pub color: String,
+    /// From 0.05 (barely visible) to 1 (opaque).
+    pub opacity: f32,
+    /// Counterclockwise turn in degrees, from -90 to 90.
+    pub angle: i32,
+    pub position: Anchor,
+    /// Pages of each new document that show it, such as `"1-3, 5"` (`None`:
+    /// every page).
+    pub pages: Option<String>,
+}
+
+impl Default for Watermark {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            picture: None,
+            size: 60.0,
+            color: "#808080".into(),
+            opacity: 0.3,
+            angle: 45,
+            position: Anchor::Center,
+            pages: None,
+        }
+    }
+}
+
+/// How page numbers read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum NumberFormat {
+    /// `3`
+    #[default]
+    Plain,
+    /// `3 / 12`
+    OfTotal,
+    /// `Pagina 3`: with the word of [`PageNumbers::word`].
+    Word,
+}
+
+/// Page numbers drawn on the pages of a new PDF (each document of a split
+/// has its own).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export, optional_fields = nullable)]
+pub struct PageNumbers {
+    pub position: Anchor,
+    pub format: NumberFormat,
+    /// The word before the number (`"Pagina"`, `"Page"`).
+    pub word: Option<String>,
+    /// Size of the numbers in points.
+    pub size: f32,
+    /// First page (1-based position) that shows a number.
+    pub first: u32,
+    /// The number that page shows.
+    pub start: u32,
+    /// Pages that show no number, such as `"1, 5-6"` (they still count).
+    pub skip: Option<String>,
+}
+
+impl Default for PageNumbers {
+    fn default() -> Self {
+        Self {
+            position: Anchor::Bottom,
+            format: NumberFormat::Plain,
+            word: None,
+            size: 10.0,
+            first: 1,
+            start: 1,
+            skip: None,
+        }
+    }
+}
+
 /// Choices for PDF documents: pictures to PDF, PDF to pictures, and edited
 /// or split PDFs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -227,6 +331,10 @@ pub struct PdfOptions {
     pub split_after: Vec<u32>,
     /// The new PDFs open only with a password.
     pub protection: Option<PdfProtection>,
+    /// Text or a picture drawn over the pages of the new PDFs.
+    pub watermark: Option<Watermark>,
+    /// Numbers drawn on the pages of the new PDFs.
+    pub page_numbers: Option<PageNumbers>,
 }
 
 impl Default for PdfOptions {
@@ -245,6 +353,8 @@ impl Default for PdfOptions {
             split_every: 1,
             split_after: Vec::new(),
             protection: None,
+            watermark: None,
+            page_numbers: None,
         }
     }
 }

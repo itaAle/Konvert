@@ -21,6 +21,7 @@
 //!          --margin none|small|normal   (pictures to PDF)
 //!          --dpi N  --pages "1-3, 5"   (PDF to pictures)
 //!          --layout "3, 1-2, 5@90"  --rotate 90|180|270
+//!          --watermark TEXT  --page-numbers   (new PDFs)
 //!          --split-every N | --split-after "2, 5"   (PDF to PDF; with combine,
 //!                    "2:1-3" are pages of the second file)
 //!          --compress light|strong|max  --max-mb N  --pages-as-pictures
@@ -63,6 +64,7 @@ OPTIONS: --preset max|balanced|small  --height N  --fps N
          --margin none|small|normal   (pictures to PDF)
          --dpi N  --pages \"1-3, 5\"   (PDF to pictures)
          --layout \"3, 1-2, 5@90\"  --rotate 90|180|270
+         --watermark TEXT  --page-numbers   (new PDFs)
          --split-every N | --split-after \"2, 5\"   (PDF to PDF; with combine,
                    \"2:1-3\" are pages of the second file)
          --compress light|strong|max  --max-mb N  --pages-as-pictures
@@ -293,6 +295,15 @@ fn parse_args() -> Result<Cli, String> {
                     Some(parse_layout(&value("--layout")?.to_string_lossy())?)
             }
             Some("--rotate") => rotate = Some(number("--rotate", value("--rotate")?)?),
+            Some("--watermark") => {
+                pdf.get_or_insert_default().watermark = Some(konvert_core::request::Watermark {
+                    text: value("--watermark")?.to_string_lossy().into_owned(),
+                    ..Default::default()
+                })
+            }
+            Some("--page-numbers") => {
+                pdf.get_or_insert_default().page_numbers = Some(Default::default())
+            }
             Some("--split-every") => {
                 let pdf = pdf.get_or_insert_default();
                 pdf.split = PdfSplit::Every;

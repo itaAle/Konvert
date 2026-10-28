@@ -331,6 +331,13 @@ pub fn plan_conversion(
     if locked && plan.target == TargetFormat::Pdf && !protected {
         plan.warnings.push(ConversionWarning::PdfUnlocked);
     }
+    if let Some(options) = request
+        .pdf
+        .as_ref()
+        .filter(|_| plan.target == TargetFormat::Pdf)
+    {
+        crate::pdf_stamp::check(options.watermark.as_ref(), options.page_numbers.as_ref())?;
+    }
     Ok(plan)
 }
 

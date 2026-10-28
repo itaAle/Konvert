@@ -58,7 +58,7 @@ const ALTERNATES: &[(&str, &[&str])] = &[
 const LINE: f32 = 1.2;
 
 /// Last resort for every run: common fonts of Windows, macOS and Linux.
-const FALLBACK: &[&str] = &[
+pub(crate) const FALLBACK: &[&str] = &[
     "Arial",
     "Helvetica",
     "Liberation Sans",
@@ -79,6 +79,15 @@ fn fonts() -> &'static FontStore {
 /// Lays out a Word document as PDF.
 pub fn to_pdf(document: &Document) -> Result<Vec<u8>, CoreError> {
     let (source, files) = to_typst(document);
+    only_konvert(&compile(source, files)?)
+}
+
+/// A Typst source laid out as PDF, with the fonts of the computer and the
+/// given files only.
+pub(crate) fn compile(
+    source: String,
+    files: HashMap<String, Vec<u8>>,
+) -> Result<Vec<u8>, CoreError> {
     let world = KonvertWorld::new(source, files);
     let result = typst::compile::<PagedDocument>(&world);
     let laid_out = result.output.map_err(|errors| CoreError::EngineFailed {
@@ -93,14 +102,13 @@ pub fn to_pdf(document: &Document) -> Result<Vec<u8>, CoreError> {
         timestamp: None,
         ..typst_pdf::PdfOptions::default()
     };
-    let pdf = typst_pdf::pdf(&laid_out, &options).map_err(|errors| CoreError::EngineFailed {
+    typst_pdf::pdf(&laid_out, &options).map_err(|errors| CoreError::EngineFailed {
         details: errors
             .iter()
             .map(|e| e.message.to_string())
             .collect::<Vec<_>>()
             .join("\n"),
-    })?;
-    only_konvert(&pdf)
+    })
 }
 
 /// Like every PDF Konvert writes, the only metadata is `Producer: Konvert`
@@ -137,7 +145,7 @@ struct Writer<'d> {
 }
 
 /// A Typst string literal.
-fn quote(text: &str) -> String {
+pub(crate) fn quote(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     out.push('"');
     for c in text.chars() {

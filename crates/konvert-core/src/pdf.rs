@@ -33,9 +33,11 @@ use ts_rs::TS;
 
 use crate::error::CoreError;
 use crate::metadata::base64;
+use crate::pdf_stamp::{self, Affine};
 use crate::probe::{MediaInfo, MediaKind};
 use crate::request::{
-    PageMargin, PageOrientation, PageSize, PdfOptions, PdfPage, PdfProtection, PdfSplit,
+    Anchor, PageMargin, PageNumbers, PageOrientation, PageSize, PdfOptions, PdfPage, PdfProtection,
+    PdfSplit, Watermark,
 };
 use crate::secret::{Secret, random_bytes, wipe};
 
@@ -737,6 +739,26 @@ pub enum Part {
 pub struct Finishing {
     /// A password that opens the documents.
     pub protection: Option<PdfProtection>,
+    /// Text or a picture over the pages.
+    pub watermark: Option<Watermark>,
+    /// Page numbers (each document of a split has its own).
+    pub page_numbers: Option<PageNumbers>,
+}
+
+impl Finishing {
+    /// What the options add to new PDFs.
+    pub fn of(options: &PdfOptions) -> Self {
+        Self {
+            protection: options.protection.clone(),
+            watermark: options.watermark.clone(),
+            page_numbers: options.page_numbers.clone(),
+        }
+    }
+
+    /// Nothing is added.
+    pub fn is_empty(&self) -> bool {
+        self.protection.is_none() && self.watermark.is_none() && self.page_numbers.is_none()
+    }
 }
 
 /// Builds one PDF from pictures and documents, every page in order. Gives
@@ -819,6 +841,7 @@ pub fn build(
             details: "the documents do not add up to the chosen pages".into(),
         });
     }
+    let stamps = Stamps::prepare(finishing, sizes)?;
     let mut start = 0;
     for (i, &size) in sizes.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
@@ -827,6 +850,7 @@ pub fn build(
         let mut writer = Writer::new();
         writer.add(&inputs, &pages[start..start + size as usize])?;
         start += size as usize;
+        writer.stamp(&stamps, i, finishing)?;
         if !on_document(i, writer.finish(&inputs, finishing)?) {
             return Err(CoreError::Cancelled);
         }
@@ -1820,6 +1844,336 @@ impl Writer {
         let mut bytes = Vec::new();
         self.out.save_to(&mut bytes).map_err(written)?;
         Ok(bytes)
+    }
+}
+
+/// Key of the pages laid out for stamps among the files of a [`Writer`].
+const STAMPS: usize = usize::MAX;
+
+/// The watermark and page numbers of every document of a build: the texts
+/// laid out once by Typst (one page each), and what each page shows.
+struct Stamps {
+    typeset: Option<Source>,
+    /// Page of `typeset` with the watermark text.
+    watermark: Option<usize>,
+    /// Page of `typeset` with each page number.
+    labels: HashMap<String, usize>,
+    picture: Option<pdf_stamp::Picture>,
+    /// For each document: which pages show the watermark, and their numbers.
+    parts: Vec<(Vec<bool>, Vec<Option<String>>)>,
+}
+
+impl Stamps {
+    fn prepare(finishing: &Finishing, sizes: &[u32]) -> Result<Self, CoreError> {
+        let watermark = finishing
+            .watermark
+            .as_ref()
+            .filter(|w| w.picture.is_some() || !w.text.trim().is_empty());
+        let numbers = finishing.page_numbers.as_ref();
+        let parts = sizes
+            .iter()
+            .map(|&count| {
+                Ok((
+                    match watermark {
+                        Some(w) => pdf_stamp::chosen(w.pages.as_deref(), count)?,
+                        None => Vec::new(),
+                    },
+                    match numbers {
+                        Some(n) => pdf_stamp::labels(n, count)?,
+                        None => Vec::new(),
+                    },
+                ))
+            })
+            .collect::<Result<Vec<_>, CoreError>>()?;
+        let mut distinct: Vec<String> = parts
+            .iter()
+            .flat_map(|(_, l)| l.iter().flatten().cloned())
+            .collect();
+        distinct.sort();
+        distinct.dedup();
+        let picture = match watermark.and_then(|w| w.picture.as_deref()) {
+            Some(path) => Some(pdf_stamp::picture(path)?),
+            None => None,
+        };
+        let texts = pdf_stamp::texts(watermark, &distinct, numbers);
+        let typeset = if texts.is_empty() {
+            None
+        } else {
+            Some(Source::open(&pdf_stamp::typeset(&texts)?)?)
+        };
+        let text_watermark = watermark.is_some() && picture.is_none();
+        let first_label = usize::from(text_watermark);
+        Ok(Self {
+            typeset,
+            watermark: text_watermark.then_some(0),
+            labels: distinct
+                .into_iter()
+                .enumerate()
+                .map(|(i, l)| (l, first_label + i))
+                .collect(),
+            picture,
+            parts,
+        })
+    }
+}
+
+/// A number of a PDF object (integer or real).
+fn number(object: &Object) -> Option<f32> {
+    match object {
+        Object::Integer(i) => Some(*i as f32),
+        Object::Real(r) => Some(*r),
+        _ => None,
+    }
+}
+
+impl Writer {
+    /// Draws the watermark and the page numbers of document `part` over its
+    /// pages.
+    fn stamp(
+        &mut self,
+        stamps: &Stamps,
+        part: usize,
+        finishing: &Finishing,
+    ) -> Result<(), CoreError> {
+        let Some((marked, labels)) = stamps.parts.get(part) else {
+            return Ok(());
+        };
+        let pages: Vec<ObjectId> = self
+            .kids
+            .iter()
+            .filter_map(|k| k.as_reference().ok())
+            .collect();
+        let mut forms: HashMap<usize, (ObjectId, [f32; 4])> = HashMap::new();
+        let mut picture: Option<ObjectId> = None;
+        for (i, page) in pages.into_iter().enumerate() {
+            let (crop, rotate) = self.shown_box(page);
+            let (to_page, shown) = pdf_stamp::shown_page(crop, rotate);
+            let mut drawing = String::new();
+            let mut xobjects = Dictionary::new();
+            let mut states = Dictionary::new();
+            if let (Some(true), Some(watermark)) = (marked.get(i), &finishing.watermark) {
+                let margin = if watermark.position == Anchor::Center {
+                    0.0
+                } else {
+                    pdf_stamp::WATERMARK_MARGIN
+                };
+                let angle = watermark.angle.clamp(-90, 90) as f32;
+                let placed = match (&stamps.picture, stamps.watermark) {
+                    (Some(p), _) => {
+                        let id = match picture {
+                            Some(id) => id,
+                            None => {
+                                let mut image = p.image.clone();
+                                if let Some(mask) = &p.mask {
+                                    let mask = self.out.add_object(mask.clone());
+                                    image.dict.set("SMask", mask);
+                                }
+                                *picture.insert(self.out.add_object(image))
+                            }
+                        };
+                        let width = shown.0 * watermark.size.clamp(1.0, 100.0) / 100.0;
+                        let height = width * p.height as f32 / p.width.max(1) as f32;
+                        Some((
+                            id,
+                            Affine::scale(width, height).then(pdf_stamp::place(
+                                watermark.position,
+                                shown,
+                                (width, height),
+                                margin,
+                                angle,
+                            )),
+                        ))
+                    }
+                    (None, Some(index)) => {
+                        self.stamp_form(stamps, index, &mut forms)
+                            .map(|(id, bbox)| {
+                                let size = (bbox[2] - bbox[0], bbox[3] - bbox[1]);
+                                (
+                                    id,
+                                    Affine::translate(-bbox[0], -bbox[1]).then(pdf_stamp::place(
+                                        watermark.position,
+                                        shown,
+                                        size,
+                                        margin,
+                                        angle,
+                                    )),
+                                )
+                            })
+                    }
+                    _ => None,
+                };
+                if let Some((id, map)) = placed {
+                    let opacity = watermark.opacity.clamp(0.05, 1.0);
+                    states.set(
+                        "KonvertGS",
+                        dictionary! { "Type" => "ExtGState", "ca" => opacity, "CA" => opacity },
+                    );
+                    xobjects.set("KonvertW", id);
+                    drawing.push_str(&format!(
+                        "q /KonvertGS gs {} /KonvertW Do Q
+",
+                        map.then(to_page).cm()
+                    ));
+                }
+            }
+            if let (Some(Some(label)), Some(numbers)) = (labels.get(i), &finishing.page_numbers)
+                && let Some(&index) = stamps.labels.get(label)
+                && let Some((id, bbox)) = self.stamp_form(stamps, index, &mut forms)
+            {
+                let size = (bbox[2] - bbox[0], bbox[3] - bbox[1]);
+                let map = Affine::translate(-bbox[0], -bbox[1]).then(pdf_stamp::place(
+                    numbers.position,
+                    shown,
+                    size,
+                    pdf_stamp::NUMBER_MARGIN,
+                    0.0,
+                ));
+                xobjects.set("KonvertN", id);
+                drawing.push_str(&format!(
+                    "q {} /KonvertN Do Q
+",
+                    map.then(to_page).cm()
+                ));
+            }
+            if !drawing.is_empty() {
+                self.draw_over(page, &drawing, xobjects, states)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The visible area of a page (crop box, else media box) and its turn.
+    fn shown_box(&self, page: ObjectId) -> ([f32; 4], i64) {
+        let Ok(dict) = self.out.get_dictionary(page) else {
+            return ([0.0, 0.0, A4.0, A4.1], 0);
+        };
+        let rect = |key: &[u8]| -> Option<[f32; 4]> {
+            let Object::Array(values) = self.resolved(dict.get(key).ok()?) else {
+                return None;
+            };
+            let values: Vec<f32> = values
+                .iter()
+                .filter_map(|v| number(&self.resolved(v)))
+                .collect();
+            values.try_into().ok()
+        };
+        let crop = rect(b"CropBox")
+            .or_else(|| rect(b"MediaBox"))
+            .unwrap_or([0.0, 0.0, A4.0, A4.1]);
+        let rotate = dict
+            .get(b"Rotate")
+            .ok()
+            .map(|r| self.resolved(r))
+            .and_then(|r| r.as_i64().ok())
+            .unwrap_or(0);
+        (crop, rotate)
+    }
+
+    /// A page laid out by Typst, as a form XObject of this document (copied
+    /// once): its number and its box.
+    fn stamp_form(
+        &mut self,
+        stamps: &Stamps,
+        index: usize,
+        forms: &mut HashMap<usize, (ObjectId, [f32; 4])>,
+    ) -> Option<(ObjectId, [f32; 4])> {
+        if let Some(found) = forms.get(&index) {
+            return Some(*found);
+        }
+        let source = stamps.typeset.as_ref()?;
+        let page = *source.pages.get(index)?;
+        let dict = source.doc.get_dictionary(page).ok()?;
+        let Object::Array(media) = source.resolve(dict.get(b"MediaBox").ok()?) else {
+            return None;
+        };
+        let bbox: [f32; 4] = media
+            .iter()
+            .filter_map(|v| number(source.resolve(v)))
+            .collect::<Vec<_>>()
+            .try_into()
+            .ok()?;
+        let content = source.doc.get_page_content(page);
+        let resources = dict
+            .get(b"Resources")
+            .ok()
+            .cloned()
+            .unwrap_or(Object::Dictionary(Dictionary::new()));
+        let resources = self.import_object(STAMPS, source, &resources);
+        let mut form = Stream::new(
+            dictionary! {
+                "Type" => "XObject", "Subtype" => "Form",
+                "BBox" => bbox.iter().map(|&v| Object::Real(v)).collect::<Vec<_>>(),
+                "Resources" => resources,
+            },
+            content,
+        );
+        let _ = form.compress();
+        let found = (self.out.add_object(form), bbox);
+        forms.insert(index, found);
+        Some(found)
+    }
+
+    /// Draws `drawing` over a page: its own content is kept apart (`q` …
+    /// `Q`) so that nothing it leaves set changes the drawing.
+    fn draw_over(
+        &mut self,
+        page: ObjectId,
+        drawing: &str,
+        xobjects: Dictionary,
+        states: Dictionary,
+    ) -> Result<(), CoreError> {
+        let dict = self
+            .out
+            .get_dictionary(page)
+            .map_err(|e| damaged(&e.to_string()))?;
+        let mut resources = match dict.get(b"Resources").map(|r| self.resolved(r)) {
+            Ok(Object::Dictionary(r)) => r,
+            _ => Dictionary::new(),
+        };
+        for (category, added) in [(&b"XObject"[..], xobjects), (b"ExtGState", states)] {
+            if added.is_empty() {
+                continue;
+            }
+            let mut entries = match resources.get(category).map(|e| self.resolved(e)) {
+                Ok(Object::Dictionary(e)) => e,
+                _ => Dictionary::new(),
+            };
+            for (name, value) in added.iter() {
+                entries.set(name.clone(), value.clone());
+            }
+            resources.set(category, entries);
+        }
+        let mut contents: Vec<Object> = match dict.get(b"Contents") {
+            Ok(Object::Array(items)) => items.clone(),
+            Ok(other @ Object::Reference(_)) => vec![other.clone()],
+            _ => Vec::new(),
+        };
+        let before = self.out.add_object(Stream::new(
+            Dictionary::new(),
+            b"q
+"
+            .to_vec(),
+        ));
+        let mut after = Stream::new(
+            Dictionary::new(),
+            format!(
+                "
+Q
+{drawing}"
+            )
+            .into_bytes(),
+        );
+        let _ = after.compress();
+        let after = self.out.add_object(after);
+        contents.insert(0, before.into());
+        contents.push(after.into());
+        let dict = self
+            .out
+            .get_dictionary_mut(page)
+            .map_err(|e| damaged(&e.to_string()))?;
+        dict.set("Resources", resources);
+        dict.set("Contents", contents);
+        Ok(())
     }
 }
 
@@ -3198,6 +3552,7 @@ mod tests {
         };
         let finishing = Finishing {
             protection: Some(protection(false, true)),
+            ..Finishing::default()
         };
         let mut result = Vec::new();
         build(
@@ -3274,6 +3629,221 @@ mod tests {
                 .map(|d| page_count(&d).unwrap())
                 .unwrap(),
             4
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Blank pages: `(width, height, turn, crop box)` each.
+    fn blank_pdf(pages: &[(f32, f32, i64, Option<[f32; 4]>)]) -> Vec<u8> {
+        let mut doc = Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let mut kids = Vec::new();
+        for &(w, h, rotate, crop) in pages {
+            let content =
+                doc.add_object(Stream::new(Dictionary::new(), b"q 1 0 0 1 5 5 cm".to_vec()));
+            let mut page = dictionary! {
+                "Type" => "Page", "Parent" => pages_id,
+                "MediaBox" => vec![0.into(), 0.into(), w.into(), h.into()],
+                "Contents" => content, "Rotate" => rotate,
+            };
+            if let Some(crop) = crop {
+                page.set(
+                    "CropBox",
+                    crop.iter().map(|&v| Object::Real(v)).collect::<Vec<_>>(),
+                );
+            }
+            kids.push(Object::from(doc.add_object(page)));
+        }
+        let count = kids.len() as i64;
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => count }),
+        );
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        bytes
+    }
+
+    /// Where a rendered page is not white: the box of its dark pixels, as
+    /// fractions of the page `(left, top, right, bottom)` (`None`: blank).
+    fn ink(png: &[u8]) -> Option<(f32, f32, f32, f32)> {
+        let page = image::load_from_memory(png).unwrap().to_luma8();
+        let (w, h) = page.dimensions();
+        let mut found: Option<(u32, u32, u32, u32)> = None;
+        for (x, y, p) in page.enumerate_pixels() {
+            if p.0[0] < 200 {
+                let b = found.get_or_insert((x, y, x, y));
+                *b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+            }
+        }
+        found.map(|(l, t, r, b)| {
+            (
+                l as f32 / w as f32,
+                t as f32 / h as f32,
+                r as f32 / w as f32,
+                b as f32 / h as f32,
+            )
+        })
+    }
+
+    fn rendered(data: Vec<u8>, pages: &[u32]) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        render_pages(data, pages, 72, &AtomicBool::new(false), |p| {
+            out.push(p.png);
+            true
+        })
+        .unwrap();
+        out
+    }
+
+    fn stamped(data: Vec<u8>, finishing: &Finishing, parts: &[u32]) -> Vec<Vec<u8>> {
+        let mut result = Vec::new();
+        build(
+            vec![Part::Document(data)],
+            None,
+            parts,
+            finishing,
+            &AtomicBool::new(false),
+            |_, b| {
+                result.push(b);
+                true
+            },
+        )
+        .unwrap();
+        result
+    }
+
+    #[test]
+    fn page_numbers_sit_where_the_page_is_read() {
+        use crate::request::{Anchor, NumberFormat, PageNumbers};
+        let numbers = Finishing {
+            page_numbers: Some(PageNumbers {
+                format: NumberFormat::OfTotal,
+                size: 14.0,
+                ..PageNumbers::default()
+            }),
+            ..Finishing::default()
+        };
+        // Portrait; landscape shown by a quarter turn; a crop box away from
+        // the origin.
+        let data = blank_pdf(&[
+            (400.0, 600.0, 0, None),
+            (400.0, 600.0, 90, None),
+            (600.0, 600.0, 0, Some([100.0, 50.0, 500.0, 350.0])),
+        ]);
+        let out = stamped(data, &numbers, &[]).pop().unwrap();
+        for (page, png) in rendered(out, &[1, 2, 3]).iter().enumerate() {
+            let (left, top, right, bottom) =
+                ink(png).unwrap_or_else(|| panic!("page {} is blank", page + 1));
+            // Bottom center, as the page is shown, about 1 cm from the edge.
+            assert!(
+                left > 0.35 && right < 0.65,
+                "page {}: {left}-{right}",
+                page + 1
+            );
+            assert!(
+                top > 0.85 && bottom < 0.99,
+                "page {}: {top}-{bottom}",
+                page + 1
+            );
+        }
+
+        // In a corner, and only from the second page on.
+        let corner = Finishing {
+            page_numbers: Some(PageNumbers {
+                position: Anchor::TopRight,
+                first: 2,
+                ..PageNumbers::default()
+            }),
+            ..Finishing::default()
+        };
+        let out = stamped(blank_pdf(&[(400.0, 600.0, 0, None); 2]), &corner, &[])
+            .pop()
+            .unwrap();
+        let pages = rendered(out, &[1, 2]);
+        assert_eq!(ink(&pages[0]), None);
+        let (left, top, ..) = ink(&pages[1]).unwrap();
+        assert!(left > 0.8 && top < 0.1, "{left} {top}");
+    }
+
+    #[test]
+    fn watermarks_are_drawn_over_the_chosen_pages() {
+        use crate::request::Watermark;
+        let watermark = Finishing {
+            watermark: Some(Watermark {
+                text: "RISERVATO".into(),
+                color: "#202020".into(),
+                opacity: 1.0,
+                pages: Some("2".into()),
+                ..Watermark::default()
+            }),
+            ..Finishing::default()
+        };
+        let data = blank_pdf(&[(500.0, 700.0, 0, None), (500.0, 700.0, 180, None)]);
+        let out = stamped(data.clone(), &watermark, &[]).pop().unwrap();
+        let pages = rendered(out.clone(), &[1, 2]);
+        assert_eq!(ink(&pages[0]), None);
+        // Turned 45 degrees around the center of the page.
+        let (left, top, right, bottom) = ink(&pages[1]).unwrap();
+        assert!(
+            (left + right - 1.0).abs() < 0.08 && (top + bottom - 1.0).abs() < 0.08,
+            "{left} {top} {right} {bottom}"
+        );
+        assert!(
+            right - left > 0.4 && bottom - top > 0.3,
+            "{left} {top} {right} {bottom}"
+        );
+        // The page's own content is kept apart from the drawing.
+        let doc = Document::load_mem(&out).unwrap();
+        let second = doc.get_pages()[&2];
+        let content = String::from_utf8_lossy(&doc.get_page_content(second)).into_owned();
+        assert!(
+            content.starts_with("q\n") && content.contains("\nQ\nq /KonvertGS gs"),
+            "{content}"
+        );
+
+        // Split in two: the watermark range belongs to each document.
+        let parts = stamped(data, &watermark, &[1, 1]);
+        assert_eq!(ink(&rendered(parts[0].clone(), &[1])[0]), None);
+        assert_eq!(ink(&rendered(parts[1].clone(), &[1])[0]), None);
+
+        // A picture with transparency, half the width of the page.
+        let dir = std::env::temp_dir().join(format!("konvert-watermark-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("logo.png");
+        let mut logo = image::RgbaImage::new(40, 20);
+        for (x, _, p) in logo.enumerate_pixels_mut() {
+            *p = if x < 20 {
+                image::Rgba([0, 0, 200, 255])
+            } else {
+                image::Rgba([0, 0, 0, 0])
+            };
+        }
+        logo.save(&path).unwrap();
+        let picture = Finishing {
+            watermark: Some(Watermark {
+                picture: Some(path),
+                size: 50.0,
+                angle: 0,
+                opacity: 1.0,
+                ..Watermark::default()
+            }),
+            ..Finishing::default()
+        };
+        let out = stamped(blank_pdf(&[(400.0, 400.0, 0, None)]), &picture, &[])
+            .pop()
+            .unwrap();
+        let (left, top, right, bottom) = ink(&rendered(out, &[1])[0]).unwrap();
+        // Only the opaque left half shows: a quarter of the page wide.
+        assert!(
+            (left - 0.25).abs() < 0.02 && (right - 0.5).abs() < 0.02,
+            "{left} {right}"
+        );
+        assert!(
+            (top - 0.375).abs() < 0.02 && (bottom - 0.625).abs() < 0.02,
+            "{top} {bottom}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
