@@ -126,6 +126,8 @@ export const DEFAULT_PDF: PdfOptions = {
   splitEvery: 1,
   splitAfter: [],
   protection: null,
+  watermark: null,
+  pageNumbers: null,
 };
 
 /** Strong compression, no size limit, text kept as text. */
@@ -247,6 +249,8 @@ export function requestOf(state: QueueState): ConversionRequest | null {
         ? { layout: layoutOf(pages, sources), splitAfter: cutPositions(pages, state.cuts, sources) }
         : { layout: null, split: "none", splitAfter: [] }),
       protection: state.target === "pdf" ? state.pdf.protection : null,
+      watermark: state.target === "pdf" ? state.pdf.watermark : null,
+      pageNumbers: state.target === "pdf" ? state.pdf.pageNumbers : null,
     },
   };
 }
@@ -295,9 +299,15 @@ export function editedDocuments(state: QueueState): number {
   return 1;
 }
 
-/** The edited PDF differs from the original: pages changed, or several documents. */
+/**
+ * The edited PDF differs from the original: pages changed, several
+ * documents, or something drawn over the pages or a password.
+ */
 export function pdfChanged(state: QueueState): boolean {
-  return isEdited(currentPages(state), pageSources(state)) || editedDocuments(state) > 1;
+  const { watermark, pageNumbers, protection } = state.pdf;
+  const added =
+    (watermark != null && (watermark.picture != null || watermark.text.trim() !== "")) || pageNumbers != null || protection != null;
+  return added || isEdited(currentPages(state), pageSources(state)) || editedDocuments(state) > 1;
 }
 
 /**

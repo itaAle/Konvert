@@ -14,6 +14,7 @@ import {
   initialQueue,
   overallProgress,
   pageSources,
+  pdfChanged,
   plannedItems,
   queueReducer as reduce,
   requestFor,
@@ -478,6 +479,11 @@ describe("queue state machine", () => {
     s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("pdf", 100) });
     expect(canStart(s)).toBe(true);
     expect(requestOf(s)?.pdf?.protection).toEqual({ password: "nuova", allowPrint: false, allowCopy: true });
+    // Numbers alone are a change worth saving too.
+    s = reduce(s, { type: "setPdf", pdf: { ...s.pdf, protection: null } });
+    expect(pdfChanged({ ...s, items: s.items.map((i) => ({ ...i, file: { ...i.file!, media: { ...i.file!.media, document: { ...i.file!.media.document!, locked: false } } } })) })).toBe(false);
+    s = reduce(s, { type: "setPdf", pdf: { ...s.pdf, pageNumbers: { position: "bottom", format: "plain", word: null, size: 10, first: 1, start: 1, skip: null } } });
+    expect(pdfChanged(s)).toBe(true);
     // Pictures of the pages are never protected.
     s = reduce(s, { type: "selectTarget", target: "png" });
     expect(requestOf(s)?.pdf?.protection).toBeNull();

@@ -418,6 +418,10 @@ export const mockBackend: Backend = {
     }
     return analysis(path);
   },
+  async pickPicture() {
+    await sleep(200);
+    return "C:\\Immagini\\Logo.png";
+  },
   async unlockPdf(path, password) {
     await sleep(400);
     if (password !== "segreta") throw { code: "pdf_wrong_password", details: null };

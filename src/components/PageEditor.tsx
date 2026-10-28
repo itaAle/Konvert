@@ -2,9 +2,12 @@ import { motion, useReducedMotion } from "motion/react";
 import { FileX2, RotateCcw, RotateCw, Scissors, Trash2, Undo2 } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 
+import type { PageNumbers } from "../bindings/PageNumbers";
 import type { PdfSplit } from "../bindings/PdfSplit";
 import type { Thumbnail } from "../bindings/Thumbnail";
+import type { Watermark } from "../bindings/Watermark";
 import { intlLocale, t } from "../i18n";
+import { backend } from "../lib/api";
 import { spring } from "../lib/motion";
 import { useThumbnails, type ThumbnailSource } from "../lib/useThumbnails";
 import {
@@ -22,6 +25,7 @@ import {
   toggleRemoved,
   type EditorPage,
 } from "../state/pages";
+import { chosenPages, NUMBER_MARGIN, pageLabels, placeBox, WATERMARK_MARGIN } from "../state/stamps";
 import { Button } from "./ui/Button";
 
 /** Pages per row; arrow keys up and down move by a row. */
@@ -51,6 +55,17 @@ interface PageEditorProps {
   splitEvery: number;
   /** `pages` is `null` when nothing is changed. */
   onChange: (pages: EditorPage[] | null, cuts: string[]) => void;
+  /** Drawn over the thumbnails as the new PDF will show them. */
+  watermark?: Watermark | null;
+  pageNumbers?: PageNumbers | null;
+}
+
+/** What a page of the new PDF shows over its content. */
+interface StampLayer {
+  watermark: Watermark | null;
+  pictureUrl: string | null;
+  label: string | null;
+  numbers: PageNumbers | null;
 }
 
 interface Drag {
@@ -71,7 +86,7 @@ interface Drag {
  * it out, scissors between pages to choose where a split starts a new
  * document. Thumbnails are drawn locally, only for the pages in view.
  */
-export function PageEditor({ sources, pages, cuts, split, splitEvery, onChange }: PageEditorProps) {
+export function PageEditor({ sources, pages, cuts, split, splitEvery, onChange, watermark = null, pageNumbers = null }: PageEditorProps) {
   const list = useMemo(() => reconcile(pages, sources), [pages, sources]);
   const { thumbnails, visible } = useThumbnails(sources, THUMBNAIL_SIZE);
   const reduceMotion = useReducedMotion();
@@ -115,6 +130,46 @@ export function PageEditor({ sources, pages, cuts, split, splitEvery, onChange }
   }, [list, cutAfter]);
   const last = [...list].reverse().find((p) => !p.removed);
   const lastKept = last ? pageId(last) : null;
+
+  // Watermark and numbers of each document the pages make.
+  const [pictureUrl, setPictureUrl] = useState<string | null>(null);
+  const picture = watermark?.picture ?? null;
+  useEffect(() => {
+    setPictureUrl(null);
+    if (!picture) return;
+    let current = true;
+    backend.pictureThumbnail(picture, 256).then(
+      (url) => current && setPictureUrl(url),
+      () => {},
+    );
+    return () => {
+      current = false;
+    };
+  }, [picture]);
+  const layers = useMemo(() => {
+    const layers = new Map<string, StampLayer>();
+    const drawn = watermark != null && (watermark.picture != null || watermark.text.trim() !== "");
+    if (!drawn && !pageNumbers) return layers;
+    const kept = list.filter((p) => !p.removed);
+    const documents: EditorPage[][] = [[]];
+    kept.forEach((p, i) => {
+      documents[documents.length - 1].push(p);
+      if (cutAfter.has(pageId(p)) && i < kept.length - 1) documents.push([]);
+    });
+    for (const document of documents) {
+      const marked = drawn ? chosenPages(watermark!.pages, document.length) : null;
+      const labels = pageNumbers ? pageLabels(pageNumbers, document.length) : null;
+      document.forEach((p, i) => {
+        layers.set(pageId(p), {
+          watermark: marked?.[i] ? watermark : null,
+          pictureUrl,
+          label: labels?.[i] ?? null,
+          numbers: pageNumbers,
+        });
+      });
+    }
+    return layers;
+  }, [list, cutAfter, watermark, pageNumbers, pictureUrl]);
 
   // --- Thumbnails of the pages in view ----------------------------------------------
   const elements = useRef(new Map<string, HTMLDivElement>());
@@ -362,6 +417,7 @@ export function PageEditor({ sources, pages, cuts, split, splitEvery, onChange }
                   angle={angleOf(page)}
                   removed={page.removed}
                   animate={!reduceMotion}
+                  layer={layers.get(id)}
                 />
                 {part != null && (
                   <span className="absolute top-1.5 left-1.5 rounded-full bg-accent px-1.5 py-px text-[10px] font-semibold text-white">
@@ -423,6 +479,7 @@ export function PageEditor({ sources, pages, cuts, split, splitEvery, onChange }
         })}
       </ul>
 
+      {layers.size > 0 && <p className="px-1 text-[12px] text-label-tertiary">{t("stamps.preview")}</p>}
       <p id={hintId} className="px-1 text-[13px] text-label-secondary">
         {t("pdf.editHint")}
         <span className="sr-only"> {t("pdf.keyboardHint")}</span>
@@ -494,7 +551,9 @@ function PageImage({
   angle,
   removed,
   animate,
+  layer,
 }: {
+  layer?: StampLayer;
   thumbnail: Thumbnail | undefined;
   fallback: { widthPt: number; heightPt: number };
   rotation: number;
@@ -533,7 +592,81 @@ function PageImage({
           <div className="size-full animate-pulse bg-[#f2f2f7]" />
         )}
       </motion.div>
+      {layer && !removed && (
+        <Stamps
+          layer={layer}
+          page={{ width: quarter ? height : width, height: quarter ? width : height }}
+          scale={scale}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * The watermark and the number of a page, drawn over its thumbnail as the
+ * page is shown (after its turn), in points; text widths are estimated.
+ */
+function Stamps({ layer, page, scale }: { layer: StampLayer; page: { width: number; height: number }; scale: number }) {
+  const { watermark, label, numbers } = layer;
+  let mark = null;
+  if (watermark) {
+    const margin = watermark.position === "center" ? 0 : WATERMARK_MARGIN;
+    if (watermark.picture) {
+      const side = (page.width * watermark.size) / 100;
+      const at = placeBox(watermark.position, page, { width: side, height: side }, margin, watermark.angle);
+      const s = side * at.fit;
+      mark = layer.pictureUrl && (
+        <image
+          href={layer.pictureUrl}
+          x={at.x - s / 2}
+          y={at.y - s / 2}
+          width={s}
+          height={s}
+          opacity={watermark.opacity}
+          transform={`rotate(${-watermark.angle} ${at.x} ${at.y})`}
+        />
+      );
+    } else {
+      const text = watermark.text.trim();
+      const box = { width: 0.55 * watermark.size * text.length, height: 1.15 * watermark.size };
+      const at = placeBox(watermark.position, page, box, margin, watermark.angle);
+      mark = (
+        <text
+          x={at.x}
+          y={at.y}
+          fontSize={watermark.size * at.fit}
+          fill={watermark.color}
+          opacity={watermark.opacity}
+          textAnchor="middle"
+          dominantBaseline="central"
+          transform={`rotate(${-watermark.angle} ${at.x} ${at.y})`}
+        >
+          {text}
+        </text>
+      );
+    }
+  }
+  let number = null;
+  if (label && numbers) {
+    const at = placeBox(numbers.position, page, { width: 0.55 * numbers.size * label.length, height: 1.15 * numbers.size }, NUMBER_MARGIN, 0);
+    number = (
+      <text x={at.x} y={at.y} fontSize={numbers.size * at.fit} fill="#000" textAnchor="middle" dominantBaseline="central">
+        {label}
+      </text>
+    );
+  }
+  if (!mark && !number) return null;
+  return (
+    <svg
+      aria-hidden
+      viewBox={`0 0 ${page.width} ${page.height}`}
+      className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 overflow-hidden"
+      style={{ width: `${page.width * scale}%`, height: `${page.height * scale}%`, fontFamily: "Arial, Helvetica, sans-serif" }}
+    >
+      {mark}
+      {number}
+    </svg>
   );
 }
 

@@ -228,6 +228,11 @@ export function useQueue() {
     }
   }, [state.items]);
 
+  const pickPicture = useCallback(
+    () => backend.pickPicture(t("stamps.pickerTitle"), t("stamps.pickerFilter")).catch(() => null),
+    [],
+  );
+
   const chooseFiles = useCallback(async () => {
     const paths = await backend.pickFiles(t("drop.pickerTitle"), t("drop.pickerFilter"));
     if (paths && paths.length > 0) dispatch({ type: "add", paths });
@@ -243,6 +248,7 @@ export function useQueue() {
     addFiles: (paths: string[]) => dispatch({ type: "add", paths }),
     chooseFiles,
     remove: (key: number) => dispatch({ type: "remove", key }),
+    pickPicture,
     unlock,
     move: (key: number, delta: -1 | 1) => dispatch({ type: "move", key, delta }),
     selectTarget: (target: TargetFormat) => dispatch({ type: "selectTarget", target }),

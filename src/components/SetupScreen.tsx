@@ -34,6 +34,7 @@ import { PagesPanel } from "./PagesPanel";
 import { PdfPanel } from "./PdfPanel";
 import { PlanFooterInfo, PlanSummary, hasStrongWarning, isRemux } from "./PlanSummary";
 import { ProtectPanel } from "./ProtectPanel";
+import { StampPanel } from "./StampPanel";
 import { QualityPicker } from "./QualityPicker";
 import { SplitPanel } from "./SplitPanel";
 import { Button } from "./ui/Button";
@@ -277,6 +278,8 @@ export function SetupScreen({ q }: { q: QueueController }) {
                       cuts={state.cuts}
                       split={state.pdf.split}
                       splitEvery={state.pdf.splitEvery}
+                      watermark={state.pdf.watermark ?? null}
+                      pageNumbers={state.pdf.pageNumbers ?? null}
                       onChange={q.setPages}
                     />
                   </section>
@@ -285,6 +288,18 @@ export function SetupScreen({ q }: { q: QueueController }) {
                     <SplitPanel value={state.pdf} onChange={q.setPdf} documents={documentCount} unchanged={unchanged} />
                   </section>
                 </>
+              )}
+              {option?.format === "pdf" && (
+                <section>
+                  <SectionTitle>{t("stamps.title")}</SectionTitle>
+                  <StampPanel
+                    watermark={state.pdf.watermark ?? null}
+                    numbers={state.pdf.pageNumbers ?? null}
+                    onWatermark={(watermark) => q.setPdf({ ...state.pdf, watermark })}
+                    onNumbers={(pageNumbers) => q.setPdf({ ...state.pdf, pageNumbers })}
+                    pickPicture={q.pickPicture}
+                  />
+                </section>
               )}
               {option?.format === "pdf" && (
                 <ProtectPanel value={state.pdf.protection ?? null} onChange={(protection) => q.setPdf({ ...state.pdf, protection })} />
