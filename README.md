@@ -4,9 +4,9 @@ modern interface.
 
 Konvert converts between many audio, video and image formats, takes frames from videos,
 turns photos into PDFs and PDF pages into pictures, splits, turns and rearranges the pages
-of a PDF, turns **Word documents into PDFs and PDFs into Word documents**, **compresses**
-files in their own format (down to a size you choose) and lets you keep or remove EXIF data
-and locations. Everything happens **on your computer**: no network
+of a PDF, turns **Word documents into PDFs and PDFs into Word documents**, reads the text
+of scans and photos with **OCR** (searchable PDFs, plain text), **compresses** files in their
+own format (down to a size you choose) and lets you keep or remove EXIF data and locations. Everything happens **on your computer**: no network
 connections, no telemetry, no account.
 
 Platforms: Windows 10/11 (64-bit), macOS 11 or later on Apple Silicon (M1 and later),
@@ -45,9 +45,9 @@ Konvert only offers the conversions that make sense for the file you give it:
 | Audio | MP3, M4A (AAC), ALAC (M4A), WAV, FLAC, OGG (Vorbis), OPUS, WMA, AIFF; more formats: AAC, AC3, E-AC3, MP2, CAF (ALAC), MKA |
 | Video with audio | MP4, MKV, MOV, WebM, AVI, GIF, animated WebP; more formats: TS, MPG (MPEG-2), 3GP, FLV, APNG. Also **audio only** in every audio format and **frames** as JPG, PNG or WebP |
 | Video without audio | The same, without the audio formats |
-| Picture (JPG/JPEG, PNG, WebP, AVIF, HEIC/HEIF, BMP, TIFF, ICO, SVG, JPEG XL¹) | JPG, PNG, WebP, AVIF, **PDF**; more formats: BMP, TIFF, GIF, ICO, JPEG XL¹ |
-| PDF document | Its **pages as pictures** (PNG, JPG, WebP); a **new PDF** with pages taken out, turned or moved, or **split** into several PDFs; together with other PDFs or pictures, **one PDF**; a **Word document** (DOCX) to edit |
-| Word document (DOCX) | **PDF**; together with PDFs or pictures, **one PDF** |
+| Picture (JPG/JPEG, PNG, WebP, AVIF, HEIC/HEIF, BMP, TIFF, ICO, SVG, JPEG XL¹) | JPG, PNG, WebP, AVIF, **PDF** (searchable with OCR), **TXT** (its text, read by OCR); more formats: BMP, TIFF, GIF, ICO, JPEG XL¹ |
+| PDF document | Its **pages as pictures** (PNG, JPG, WebP); a **new PDF** with pages taken out, turned or moved, or **split** into several PDFs, searchable with OCR; together with other PDFs or pictures, **one PDF**; a **Word document** (DOCX) to edit; its **text** (TXT) |
+| Word document (DOCX) | **PDF**; together with PDFs or pictures, **one PDF**; its **text** (TXT) |
 
 ¹ JPEG XL needs FFmpeg's libjxl, which the Windows and Linux builds have and the macOS
 build does not: Konvert checks the engine and offers JPEG XL only where it works.
@@ -177,8 +177,25 @@ Word documents (no Word or other program needed):
   text size, so they appear in Word's navigation pane), list items, rows of tables (as tab
   stops), colored title bars, two-column pages read in order, page breaks. Drawings and
   exact positions are not kept: the result is a document to edit, not a copy of the page.
-  Scanned pages without text stay pictures (Konvert does no OCR); scans that were already
-  read by OCR give their text.
+  Scanned pages without text are read by OCR (see below); scans that were already read by
+  OCR give their text.
+
+Text recognition (OCR), on your computer:
+
+- **Searchable PDF**: when Konvert makes a PDF (from photos, from scanned PDFs, edited or
+  combined), the **Make the text searchable** switch reads every page without text and
+  puts the words, invisible, over the picture: the PDF looks the same, but its text can be
+  found, selected and copied. Pages that already have text are left as they are.
+- **TXT**: the text of a PDF, a Word document or a photo of a document, as a plain text
+  file (UTF-8). PDF pages with text are read as they are, the others by OCR; two-column
+  pages are read one column after the other, table rows with tabs between the cells.
+- Konvert uses the [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) PP-OCRv5 models
+  (text detection, and recognition of languages written in the Latin alphabet: Italian,
+  English, French, German, Spanish and many more), run by [rten](https://github.com/robertknight/rten),
+  an inference engine written in Rust, inside Konvert. Pages scanned crooked, sideways or
+  upside down are read too. About a second per page.
+- Handwriting and other alphabets (Greek, Cyrillic, Chinese, Arabic…) are not recognized,
+  and the text read should be checked: Konvert says so before it starts.
 
 The format table is declarative: `crates/konvert-core/src/formats.rs`.
 
@@ -327,6 +344,8 @@ Konvert works entirely on your computer. No data leaves your device.
   read other files: pictures it names are ignored, only pictures embedded in it are drawn.
 - PDF files are read and written by Rust libraries without network code (hayro, lopdf):
   links, scripts, forms and embedded files in a PDF are never opened or run.
+- OCR runs inside Konvert: the models are part of the app (in its `ocr` folder, never
+  downloaded) and the pages are read in memory, with no other program.
 - Word documents are read and written by Konvert itself and laid out by the Typst library,
   which only sees the document and its own pictures: no Typst packages, no downloads, no
   other files. Fields, macros and pictures linked from outside the file are never run or
@@ -412,6 +431,7 @@ sudo apt install build-essential libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
 ```bash
 npm install
 npm run setup:ffmpeg      # downloads FFmpeg/FFprobe (LGPL) and verifies the SHA-256
+npm run setup:ocr         # downloads the OCR models (Apache-2.0) and verifies the SHA-256
 ```
 
 `npm run setup:ffmpeg` runs `scripts/setup-ffmpeg.ps1` on Windows and
@@ -425,6 +445,11 @@ No LGPL build exists for macOS on Apple Silicon, so `scripts/build-ffmpeg-macos.
 one from source, with the same library versions and `--disable-network`. The
 **FFmpeg for macOS** workflow runs it; its archive and the archive of its sources are
 published in the FFmpeg mirror release, and the manifest pins the archive's SHA-256.
+
+`npm run setup:ocr` (`scripts/setup-ocr.mjs`, every platform) downloads the PaddleOCR
+PP-OCRv5 models in ONNX format pinned in `scripts/ocr-manifest.json` (detection 4.8 MB,
+Latin recognition 7.9 MB and its list of characters), verifies their SHA-256 hashes and
+copies them into `src-tauri/binaries/ocr/`. They are not in the repository either.
 
 ### Commands
 
@@ -456,7 +481,7 @@ src-tauri/             Tauri app: IPC commands, queue, preferences, log, permiss
                        for those bundles) and installer hooks (windows/installer-hooks.nsh)
 src/                   React + TypeScript interface (Tailwind, Motion)
 src/bindings/          TypeScript types generated from the Rust types (ts-rs, during `cargo test`)
-scripts/               FFmpeg setup and macOS build, privacy check, network monitors,
+scripts/               FFmpeg and OCR model setup, macOS FFmpeg build, privacy check, network monitors,
                        licenses, release
 .github/workflows/     CI on Windows, macOS and Linux; release packages; macOS FFmpeg build
 ```
@@ -472,7 +497,7 @@ On Windows it runs `scripts/build-release.ps1`, on Linux and macOS
 
 1. check that the version matches in `package.json`, `Cargo.toml` and
    `src-tauri/tauri.conf.json`;
-2. install the exact npm dependencies (`npm ci`) and the verified FFmpeg build;
+2. install the exact npm dependencies (`npm ci`), the verified FFmpeg build and OCR models;
 3. run the privacy check, the license check and every test;
 4. build the packages (NSIS installer; `.dmg`; `.deb`, `.rpm` and AppImage) with local
    paths remapped and verify that the executable contains neither the user name nor
@@ -481,7 +506,7 @@ On Windows it runs `scripts/build-release.ps1`, on Linux and macOS
 5. copy the packages and their `.sha256` files into `release/`.
 
 Every input is pinned (Rust toolchain, `Cargo.lock`, `package-lock.json`, FFmpeg archive
-with its hash). The first build downloads the NSIS or AppImage tools used by Tauri once.
+and OCR models with their hashes). The first build downloads the NSIS or AppImage tools used by Tauri once.
 
 The macOS and Linux packages are built by the **Release packages** GitHub Actions workflow
 (started by hand), which also runs the network monitor on the finished app. On macOS it
@@ -501,6 +526,10 @@ unmodified in the `ffmpeg` folder of the application, where they can be replaced
 GPL components (no libx264/libx265) and no non-free ones. The exact FFmpeg source commit
 and the build recipe are listed in [`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES) and in
 `scripts/ffmpeg-manifest.json`.
+
+The OCR models in the `ocr` folder of the application are the PaddleOCR PP-OCRv5 models
+(Apache License 2.0), unmodified, in the ONNX format published by the oar-ocr project;
+`scripts/ocr-manifest.json` pins them.
 
 **H.264 patents**: H.264 video is encoded with OpenH264, whose BSD license covers the
 source code only. **H.264 patents are not covered by the BSD license of OpenH264**
