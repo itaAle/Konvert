@@ -495,6 +495,21 @@ pub async fn pick_files(
     )
 }
 
+/// Native dialog choosing a PNG or JPEG picture (a watermark). Returns
+/// `None` when cancelled.
+#[tauri::command]
+pub async fn pick_picture(app: AppHandle, title: String, filter_name: String) -> Option<PathBuf> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title(title)
+        .add_filter(filter_name, &["png", "jpg", "jpeg"])
+        .pick_file(move |picked| {
+            let _ = tx.send(picked);
+        });
+    rx.await.ok().flatten()?.into_path().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;

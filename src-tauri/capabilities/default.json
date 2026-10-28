@@ -30,6 +30,7 @@
     "allow-open-output",
     "allow-reveal-output",
     "allow-pick-files",
+    "allow-pick-picture",
     "allow-take-launch-files",
     "allow-open-licenses"
   ]

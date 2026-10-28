@@ -89,6 +89,7 @@ pub fn run() {
             commands::open_output,
             commands::reveal_output,
             commands::pick_files,
+            commands::pick_picture,
             commands::take_launch_files,
             commands::open_licenses,
         ])

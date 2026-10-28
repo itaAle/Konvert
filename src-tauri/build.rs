@@ -26,6 +26,7 @@ const COMMANDS: &[&str] = &[
     "open_output",
     "reveal_output",
     "pick_files",
+    "pick_picture",
     "take_launch_files",
     "open_licenses",
 ];
