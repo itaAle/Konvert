@@ -20,6 +20,8 @@ const COMMANDS: &[&str] = &[
     "plan_conversion",
     "pdf_thumbnails",
     "picture_thumbnail",
+    "video_frame",
+    "audio_waveform",
     "start_conversion",
     "start_combined",
     "cancel_conversion",

@@ -39,7 +39,10 @@ pub fn estimate_size(media: &MediaInfo, plan: &ConversionPlan) -> Option<SizeEst
             _ => Some(picture),
         };
     }
-    let duration = media.duration_secs?;
+    let duration = plan
+        .trim
+        .map(|(_, length)| length)
+        .or(media.duration_secs)?;
     let mut approximate = false;
     let mut kbps = 0.0;
 

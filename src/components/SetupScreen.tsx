@@ -22,6 +22,7 @@ import {
   readyItems,
   totalEstimate,
   trackScope,
+  trimScope,
 } from "../state/queue";
 import type { QueueController } from "../state/useQueue";
 import { AdvancedPanel } from "./AdvancedPanel";
@@ -44,6 +45,7 @@ import { PlanFooterInfo, PlanSummary, hasStrongWarning, isRemux } from "./PlanSu
 import { ProtectPanel } from "./ProtectPanel";
 import { StampPanel } from "./StampPanel";
 import { TracksPanel } from "./TracksPanel";
+import { TrimPanel } from "./TrimPanel";
 import { QualityPicker } from "./QualityPicker";
 import { SplitPanel } from "./SplitPanel";
 import { Button } from "./ui/Button";
@@ -128,6 +130,7 @@ export function SetupScreen({ q }: { q: QueueController }) {
   const sharedEditFormat = editFormats.size === 1 ? (files[0]?.name.split(".").pop()?.toUpperCase() ?? null) : null;
   const scope = editScope(state);
   const tracks = trackScope(state);
+  const trimming = trimScope(state);
   const mediaCopy = files.length > 0 && files.every((i) => i.file!.media.kind !== "image");
   const onlyFile = ready.length === 1 ? ready[0] : null;
   const loneStream = onlyFile?.file?.media.video[0];
@@ -268,6 +271,19 @@ export function SetupScreen({ q }: { q: QueueController }) {
                     onChange={q.setCompression}
                     largestBytes={largest}
                     documents={documents.length > 0}
+                  />
+                </section>
+              )}
+              {trimming && (
+                <section>
+                  <SectionTitle>{t("trim.heading")}</SectionTitle>
+                  <TrimPanel
+                    path={trimming.file.path}
+                    duration={trimming.duration}
+                    video={trimming.video}
+                    value={state.trim}
+                    onChange={q.setTrim}
+                    preciseByDefault={!state.editCopy}
                   />
                 </section>
               )}

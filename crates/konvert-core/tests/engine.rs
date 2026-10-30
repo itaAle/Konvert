@@ -3031,6 +3031,7 @@ async fn tracks_are_chosen_ordered_and_labelled() {
                 keep(1, "ita", true),
                 keep(3, "ita", false),
             ]),
+            trim: None,
             copy: true,
             label: Some("mod".into()),
         }),
@@ -3043,4 +3044,70 @@ async fn tracks_are_chosen_ordered_and_labelled() {
     let codecs: Vec<_> = copy.tracks.iter().map(|t| t.codec.as_str()).collect();
     assert_eq!(codecs, ["vp8", "opus", "subrip"]);
     assert!(!copy.tracks[2].default);
+}
+
+#[tokio::test]
+async fn files_are_trimmed_fast_or_precisely() {
+    use konvert_core::request::{MediaEdit, Trim};
+    let bins = engine();
+    let tmp = TempDir::new("trim");
+    // 6 s of video with a key frame every second, and audio.
+    let input = tmp.path("Clip.mp4");
+    generate(
+        &bins,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=s=320x240:r=25:d=6",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=f=440:d=6",
+            "-c:v",
+            "libopenh264",
+            "-g",
+            "25",
+            "-c:a",
+            "aac",
+            "-shortest",
+        ],
+        &input,
+    );
+    let trimmed = |precise| ConversionRequest {
+        media: Some(MediaEdit {
+            trim: Some(Trim {
+                start_secs: 1.5,
+                end_secs: Some(4.0),
+                precise,
+            }),
+            copy: true,
+            label: Some("mod".into()),
+            ..MediaEdit::default()
+        }),
+        ..req(TargetFormat::Mp4, QualityPreset::Balanced)
+    };
+    // Precise: 2.5 s exactly.
+    let (out, cut) = convert(&bins, &tmp, &input, trimmed(true)).await;
+    assert!(out.output.ends_with("Clip-mod.mp4"));
+    let length = cut.duration_secs.unwrap();
+    assert!((length - 2.5).abs() < 0.1, "{length}");
+    // Fast: copied from the key frame at 1 s, so up to a second longer.
+    let (_, cut) = convert(&bins, &tmp, &input, trimmed(false)).await;
+    let length = cut.duration_secs.unwrap();
+    assert!((2.4..=3.6).contains(&length), "{length}");
+    assert_eq!(cut.video[0].codec, "h264");
+
+    // Previews: a frame and a waveform, as PNG data URLs.
+    let media = probe(&bins, &input).await.unwrap();
+    let ws = Workspace::create(&tmp.path("ws")).unwrap();
+    let frame = konvert_core::video_frame(&bins, &ws, 1, &input, &media, 3.0, 160)
+        .await
+        .unwrap();
+    assert!(frame.starts_with("data:image/png;base64,"));
+    let wave = konvert_core::audio_waveform(&bins, &ws, 2, &input, &media, 300, 40)
+        .await
+        .unwrap();
+    assert!(wave.starts_with("data:image/png;base64,") && wave.len() > 200);
+    assert_eq!(files_in(ws.dir()), [".lock"], "temporary files left behind");
 }

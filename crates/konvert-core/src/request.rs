@@ -483,6 +483,20 @@ pub struct TrackChoice {
     pub default: bool,
 }
 
+/// The part of an audio or video file that is kept.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Trim {
+    /// Seconds from the start.
+    pub start_secs: f64,
+    /// Seconds from the start (`None`: the end of the file).
+    pub end_secs: Option<f64>,
+    /// Cut at the exact moment, encoding again; otherwise the streams are
+    /// copied and a video starts at the key frame before `start_secs`.
+    pub precise: bool,
+}
+
 /// Changes to an audio or video file.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
@@ -491,6 +505,9 @@ pub struct MediaEdit {
     /// Tracks kept, in this order (`None`: the first video and audio tracks).
     #[ts(optional = nullable)]
     pub tracks: Option<Vec<TrackChoice>>,
+    /// Only a part of the file is kept.
+    #[ts(optional = nullable)]
+    pub trim: Option<Trim>,
     /// An edited copy in the file's own format ("Modifica"): `target` is
     /// that format, named `name-<label>.ext`; streams are copied when they can be.
     pub copy: bool,

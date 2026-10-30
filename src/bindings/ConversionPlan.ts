@@ -51,4 +51,8 @@ compress?: CompressOptions | null,
  * Tracks written, in output order, when the user chose them (empty:
  * `video_stream` and `audio_stream` only).
  */
-tracks: Array<PlannedTrack>, warnings: Array<ConversionWarning>, estimate: SizeEstimate | null, };
+tracks: Array<PlannedTrack>, 
+/**
+ * Only this part of the input is written: `(start, length)` in seconds.
+ */
+trim: [number, number] | null, warnings: Array<ConversionWarning>, estimate: SizeEstimate | null, };

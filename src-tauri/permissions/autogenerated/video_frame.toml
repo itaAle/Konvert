@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-video-frame"
+description = "Enables the video_frame command without any pre-configured scope."
+commands.allow = ["video_frame"]
+
+[[permission]]
+identifier = "deny-video-frame"
+description = "Denies the video_frame command without any pre-configured scope."
+commands.deny = ["video_frame"]

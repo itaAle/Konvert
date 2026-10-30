@@ -319,6 +319,9 @@ pub struct ConversionPlan {
     /// `video_stream` and `audio_stream` only).
     #[serde(default)]
     pub tracks: Vec<PlannedTrack>,
+    /// Only this part of the input is written: `(start, length)` in seconds.
+    #[serde(default)]
+    pub trim: Option<(f64, f64)>,
     pub warnings: Vec<ConversionWarning>,
     pub estimate: Option<SizeEstimate>,
 }
@@ -432,7 +435,14 @@ pub(crate) fn plan_offered(
     // An edited copy copies what it can.
     let same_format = formats::source_format(media, input) == Some(request.target)
         && request.edited_copy().is_none();
-    let force_encode = request.preset == QualityPreset::Small || same_format;
+    // A precise cut is encoded again.
+    let trim = trim_of(media, request)?;
+    let precise = request
+        .media
+        .as_ref()
+        .and_then(|m| m.trim)
+        .is_some_and(|t| t.precise);
+    let force_encode = request.preset == QualityPreset::Small || same_format || precise;
 
     // Tracks chosen by the user, by kind, in their order.
     let choice = chosen_tracks(media, request);
@@ -550,12 +560,35 @@ pub(crate) fn plan_offered(
         remove_location: request.remove_location && media.has_location,
         compress: None,
         tracks,
+        trim,
         warnings: Vec::new(),
         estimate: None,
     };
     plan.warnings = collect_warnings(media, request, &plan);
     plan.estimate = estimate_size(media, &plan);
     Ok(plan)
+}
+
+/// The part kept, as `(start, length)` in seconds (`None`: the whole file).
+fn trim_of(
+    media: &MediaInfo,
+    request: &ConversionRequest,
+) -> Result<Option<(f64, f64)>, CoreError> {
+    let Some(trim) = request.media.as_ref().and_then(|m| m.trim) else {
+        return Ok(None);
+    };
+    let duration = media.duration_secs.unwrap_or(f64::MAX);
+    let end = trim.end_secs.unwrap_or(duration).min(duration);
+    let valid = trim.start_secs.is_finite() && end.is_finite() && trim.start_secs >= 0.0;
+    if !valid || end - trim.start_secs < 0.05 {
+        return Err(unsupported(format!(
+            "invalid trim from {} to {end} s",
+            trim.start_secs
+        )));
+    }
+    // Millisecond precision is enough.
+    let ms = |v: f64| (v * 1000.0).round() / 1000.0;
+    Ok(Some((ms(trim.start_secs), ms(end - trim.start_secs))))
 }
 
 /// The tracks the user keeps, in order: chosen, or every track of the file
@@ -735,6 +768,7 @@ fn plan_document(
         remove_location: false,
         compress: None,
         tracks: Vec::new(),
+        trim: None,
         warnings,
         estimate: None,
     };
@@ -864,6 +898,7 @@ fn plan_document(
                 remove_location: false,
                 compress: None,
                 tracks: Vec::new(),
+                trim: None,
                 warnings,
                 // The pages are copied as they are, with what they use.
                 estimate: media.size_bytes.map(|bytes| SizeEstimate {
@@ -1154,6 +1189,7 @@ fn plan_still(
         remove_location: request.remove_location && media.has_location,
         compress: None,
         tracks: Vec::new(),
+        trim: None,
         warnings,
         estimate: None,
     };

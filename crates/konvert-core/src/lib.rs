@@ -19,8 +19,8 @@ pub mod command;
 pub mod compress;
 pub mod convert;
 pub mod disk;
-pub mod edit;
 pub mod docx;
+pub mod edit;
 pub mod error;
 pub mod estimate;
 pub mod exif;
@@ -45,7 +45,8 @@ mod process;
 
 pub use binaries::Binaries;
 pub use convert::{
-    CombinedJob, ConversionJob, ConversionOutcome, picture_thumbnail, run_combined, run_conversion,
+    CombinedJob, ConversionJob, ConversionOutcome, audio_waveform, picture_thumbnail, run_combined,
+    run_conversion, video_frame,
 };
 pub use disk::available_space;
 pub use error::{CoreError, ErrorPayload};

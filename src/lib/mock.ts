@@ -508,6 +508,33 @@ export const mockBackend: Backend = {
     const shown = analysis(path).media.video[0];
     return mockPhoto(path, shown?.width ?? 3, shown?.height ?? 4, size);
   },
+  async videoFrame(_path, atSecs, size) {
+    await sleep(150);
+    // A colored card with the time on it.
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = Math.round((size * 9) / 16);
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = `hsl(${Math.round(atSecs * 3) % 360} 45% 45%)`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "white";
+    ctx.font = `${Math.round(size / 10)}px sans-serif`;
+    ctx.fillText(`${atSecs.toFixed(1)} s`, size / 12, canvas.height / 2);
+    return canvas.toDataURL("image/png");
+  },
+  async audioWaveform(_path, width, height) {
+    await sleep(200);
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "#8a8a8e";
+    for (let x = 0; x < width; x += 2) {
+      const h = (Math.abs(Math.sin(x / 9) * Math.cos(x / 37)) * 0.8 + 0.1) * height;
+      ctx.fillRect(x, (height - h) / 2, 1, h);
+    }
+    return canvas.toDataURL("image/png");
+  },
   async planConversion(_path, media, request) {
     if (request.compress) {
       await sleep(80);

@@ -24,6 +24,8 @@
     "allow-plan-conversion",
     "allow-pdf-thumbnails",
     "allow-picture-thumbnail",
+    "allow-video-frame",
+    "allow-audio-waveform",
     "allow-start-conversion",
     "allow-start-combined",
     "allow-cancel-conversion",

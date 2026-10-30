@@ -45,6 +45,10 @@ export interface Backend {
   pickPicture(title: string, filterName: string): Promise<string | null>;
   /** A small picture of a photo (longest side `size` pixels at most) as a `data:` URL, drawn locally. */
   pictureThumbnail(path: string, size: number): Promise<string>;
+  /** A frame of a video at `atSecs`, at most `size` pixels wide, as a PNG `data:` URL. */
+  videoFrame(path: string, atSecs: number, size: number): Promise<string>;
+  /** The waveform of the audio of a file, as a PNG `data:` URL. */
+  audioWaveform(path: string, width: number, height: number): Promise<string>;
   startConversion(path: string, request: ConversionRequest): Promise<number>;
   /** One job that turns every file, in order, into a single PDF. */
   startCombined(paths: string[], request: ConversionRequest): Promise<number>;
@@ -98,6 +102,8 @@ const tauriBackend: Backend = {
   planConversion: (path, media, request) => call("plan_conversion", { path, media, request }),
   pdfThumbnails: (path, pages, size) => call("pdf_thumbnails", { path, pages, size }),
   pictureThumbnail: (path, size) => call("picture_thumbnail", { path, size }),
+  videoFrame: (path, atSecs, size) => call("video_frame", { path, atSecs, size }),
+  audioWaveform: (path, width, height) => call("audio_waveform", { path, width, height }),
   pickPicture: (title, filterName) => call("pick_picture", { title, filterName }),
   startConversion: (path, request) => call("start_conversion", { path, request }),
   startCombined: (paths, request) => call("start_combined", { paths, request }),

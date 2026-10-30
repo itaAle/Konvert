@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-audio-waveform"
+description = "Enables the audio_waveform command without any pre-configured scope."
+commands.allow = ["audio_waveform"]
+
+[[permission]]
+identifier = "deny-audio-waveform"
+description = "Denies the audio_waveform command without any pre-configured scope."
+commands.deny = ["audio_waveform"]

@@ -348,6 +348,38 @@ pub async fn picture_thumbnail(
         .map_err(payload)
 }
 
+/// A frame of a video at `at_secs`, as a PNG `data:` URL (the ends of a trim).
+#[tauri::command]
+pub async fn video_frame(
+    state: State<'_, AppState>,
+    path: PathBuf,
+    at_secs: f64,
+    size: u32,
+) -> Result<String, ErrorPayload> {
+    let bins = state.binaries().map_err(payload)?;
+    let media = konvert_core::probe(bins, &path).await.map_err(payload)?;
+    let id = state.thumbnails.fetch_add(1, Ordering::Relaxed);
+    konvert_core::video_frame(bins, &state.workspace, id, &path, &media, at_secs, size)
+        .await
+        .map_err(payload)
+}
+
+/// The waveform of a file's audio, as a PNG `data:` URL (the bar of a trim).
+#[tauri::command]
+pub async fn audio_waveform(
+    state: State<'_, AppState>,
+    path: PathBuf,
+    width: u32,
+    height: u32,
+) -> Result<String, ErrorPayload> {
+    let bins = state.binaries().map_err(payload)?;
+    let media = konvert_core::probe(bins, &path).await.map_err(payload)?;
+    let id = state.thumbnails.fetch_add(1, Ordering::Relaxed);
+    konvert_core::audio_waveform(bins, &state.workspace, id, &path, &media, width, height)
+        .await
+        .map_err(payload)
+}
+
 /// Queues a conversion; progress arrives through `job-update` events.
 /// The destination comes from the preferences (default: next to the original).
 #[tauri::command]

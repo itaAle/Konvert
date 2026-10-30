@@ -83,6 +83,8 @@ pub fn run() {
             commands::plan_conversion,
             commands::pdf_thumbnails,
             commands::picture_thumbnail,
+            commands::video_frame,
+            commands::audio_waveform,
             commands::start_conversion,
             commands::start_combined,
             commands::cancel_conversion,

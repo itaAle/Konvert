@@ -81,6 +81,7 @@ pub(crate) fn plan(
             remove_location: false,
             compress: Some(options.clone()),
             tracks: Vec::new(),
+            trim: None,
             warnings: if options.pages_as_pictures && format == TargetFormat::Pdf {
                 vec![ConversionWarning::PdfPagesAsPictures]
             } else {

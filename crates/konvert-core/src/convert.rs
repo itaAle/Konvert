@@ -111,6 +111,71 @@ pub async fn picture_thumbnail(
     Ok(format!("data:image/png;base64,{}", metadata::base64(&png)))
 }
 
+/// A frame of a video at `at_secs` (kept inside it), at most `width` pixels
+/// wide, as a PNG `data:` URL made in the private workspace: the ends of a trim.
+/// `id` must not be used by another job at the same time.
+pub async fn video_frame(
+    bins: &Binaries,
+    workspace: &Workspace,
+    id: u64,
+    input: &Path,
+    media: &MediaInfo,
+    at_secs: f64,
+    width: u32,
+) -> Result<String, CoreError> {
+    if media.primary_video().is_none() {
+        return Err(CoreError::UnsupportedConversion {
+            details: "only videos have frames".into(),
+        });
+    }
+    let last = media.duration_secs.map_or(f64::MAX, |d| (d - 0.1).max(0.0));
+    let output = workspace.job_output(id, "png");
+    let args = crate::command::frame_args(
+        input,
+        at_secs.clamp(0.0, last),
+        width.clamp(16, 1280),
+        &output,
+    );
+    preview_png(bins, &args, &output).await
+}
+
+/// The waveform of the first audio track as a PNG `data:` URL made in the
+/// private workspace: the bar of a trim. `id` as for [`video_frame`].
+pub async fn audio_waveform(
+    bins: &Binaries,
+    workspace: &Workspace,
+    id: u64,
+    input: &Path,
+    media: &MediaInfo,
+    width: u32,
+    height: u32,
+) -> Result<String, CoreError> {
+    if media.primary_audio().is_none() {
+        return Err(CoreError::UnsupportedConversion {
+            details: "only audio has a waveform".into(),
+        });
+    }
+    let output = workspace.job_output(id, "png");
+    let args =
+        crate::command::waveform_args(input, width.clamp(16, 2048), height.clamp(8, 512), &output);
+    preview_png(bins, &args, &output).await
+}
+
+async fn preview_png(
+    bins: &Binaries,
+    args: &[OsString],
+    output: &Path,
+) -> Result<String, CoreError> {
+    let ran = run_ffmpeg(bins, args, None, &CancellationToken::new(), &mut |_| {}).await;
+    let png = ran.and_then(|_| Ok(std::fs::read(output)?));
+    let _ = std::fs::remove_file(output);
+    let png = png?;
+    if png.is_empty() {
+        return Err(nothing_written());
+    }
+    Ok(format!("data:image/png;base64,{}", metadata::base64(&png)))
+}
+
 /// A picture as a PNG conversion makes it (turned upright, HEIC tiles
 /// joined, SVG drawn), at most `size` pixels on its longest side, in the
 /// private workspace.
@@ -248,14 +313,12 @@ async fn encode(
     let source = drawing.as_deref().unwrap_or(&job.input);
     let command = build_from_plan_with(plan, source, cover_comment.as_deref(), output);
 
-    let result = run_ffmpeg(
-        bins,
-        &command.args,
-        job.media.duration_secs,
-        cancel,
-        on_progress,
-    )
-    .await;
+    // Progress follows the part kept.
+    let duration = plan
+        .trim
+        .map(|(_, length)| length)
+        .or(job.media.duration_secs);
+    let result = run_ffmpeg(bins, &command.args, duration, cancel, on_progress).await;
     for temporary in [&cover_comment, &drawing].into_iter().flatten() {
         let _ = std::fs::remove_file(temporary);
     }

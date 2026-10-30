@@ -88,6 +88,10 @@ pub fn build_from_plan_with(
         // Seeking before `-i` decodes from the previous key frame: fast and exact.
         a.push(&["-ss", &format_number(at)]);
     }
+    if let Some((start, _)) = plan.trim.filter(|(start, _)| *start > 0.0) {
+        // Encoded streams start exactly there; copied ones at the key frame before.
+        a.push(&["-ss", &format_number(start)]);
+    }
     a.push(&["-i"]);
     a.push_os(file_url(input));
     if let Some(comment) = cover_comment {
@@ -178,11 +182,70 @@ fn media_args(a: &mut Args, plan: &ConversionPlan, spec: &FormatSpec, cover_comm
     }
 
     track_args(a, plan);
+    if let Some((_, length)) = plan.trim {
+        a.push(&["-t", &format_number(length)]);
+        // Copied streams starting before zero would confuse players.
+        a.push(&["-avoid_negative_ts", "make_zero"]);
+    }
 
     // Cover art is only planned for audio outputs, so `v:0` is the picture.
     if attached_cover.is_some() {
         a.push(&["-c:v", "copy", "-disposition:v:0", "attached_pic"]);
     }
+}
+
+/// One frame of a video at `at_secs`, at most `width` pixels wide, as a PNG.
+pub fn frame_args(input: &Path, at_secs: f64, width: u32, output: &Path) -> Vec<OsString> {
+    let mut a = Args::default();
+    a.push(&["-hide_banner", "-nostdin", "-loglevel", "error"]);
+    a.push(&[
+        "-protocol_whitelist",
+        "file",
+        "-ss",
+        &format_number(at_secs.max(0.0)),
+        "-i",
+    ]);
+    a.push_os(file_url(input));
+    a.push(&[
+        "-map",
+        "0:v:0",
+        "-frames:v",
+        "1",
+        "-vf",
+        &format!("scale='min({width},iw)':-2:flags=bicubic"),
+        "-c:v",
+        "png",
+        "-f",
+        "image2",
+        "-y",
+    ]);
+    a.push_os(file_url(output));
+    a.0
+}
+
+/// The waveform of the first audio track, `width`×`height` pixels, as a PNG.
+pub fn waveform_args(input: &Path, width: u32, height: u32, output: &Path) -> Vec<OsString> {
+    let mut a = Args::default();
+    a.push(&["-hide_banner", "-nostdin", "-loglevel", "error"]);
+    a.push(&["-protocol_whitelist", "file", "-i"]);
+    a.push_os(file_url(input));
+    a.push(&[
+        "-filter_complex",
+        &format!(
+            "[0:a:0]aformat=channel_layouts=mono,showwavespic=s={width}x{height}:colors=0x8a8a8e[w]"
+        ),
+        "-map",
+        "[w]",
+        "-frames:v",
+        "1",
+        "-c:v",
+        "png",
+        "-f",
+        "image2",
+        "-y",
+    ]);
+    a.push_os(file_url(output));
+    a.0
 }
 
 /// Subtitle codecs, then the language, title and default flag of each track
@@ -1319,6 +1382,7 @@ mod tests {
                     keep(1, Some("ita"), true),
                     keep(3, None, false),
                 ]),
+                trim: None,
                 copy: true,
                 label: Some("mod".into()),
             }),
@@ -1339,5 +1403,91 @@ mod tests {
             ..req(TargetFormat::Mp4, QualityPreset::Balanced)
         };
         assert!(plan_conversion(&film(), &request, Path::new("film.mkv")).is_err());
+    }
+
+    #[test]
+    fn trims_copy_or_encode() {
+        use crate::request::{MediaEdit, Trim};
+        let trimmed = |precise, end_secs| ConversionRequest {
+            media: Some(MediaEdit {
+                trim: Some(Trim {
+                    start_secs: 75.5,
+                    end_secs,
+                    precise,
+                }),
+                copy: true,
+                label: None,
+                ..MediaEdit::default()
+            }),
+            ..req(TargetFormat::Mp4, QualityPreset::Balanced)
+        };
+        let mut long = mp4();
+        long.duration_secs = Some(600.0);
+        // Fast: the streams are copied from the key frame before 1:15.5.
+        let plan = plan_conversion(&long, &trimmed(false, Some(90.0)), Path::new("a.mp4")).unwrap();
+        assert!(plan.is_remux());
+        assert_eq!(plan.trim, Some((75.5, 14.5)));
+        // To the end of the file.
+        let plan = plan_conversion(&long, &trimmed(false, None), Path::new("a.mp4")).unwrap();
+        assert_eq!(plan.trim, Some((75.5, 524.5)));
+        let cmd = build_command(
+            &long,
+            &trimmed(false, Some(90.0)),
+            Path::new("a.mp4"),
+            Path::new("o.mp4"),
+        )
+        .unwrap();
+        let args = cmd.args_lossy().join(" ");
+        assert!(args.contains("-ss 75.5 -i file:a.mp4"), "{args}");
+        // Nothing left: the end comes before the start, or past the file.
+        assert!(plan_conversion(&long, &trimmed(false, Some(30.0)), Path::new("a.mp4")).is_err());
+        assert!(plan_conversion(&mp4(), &trimmed(false, None), Path::new("a.mp4")).is_err());
+        // Precise: encoded again, exactly.
+        let plan = plan_conversion(&long, &trimmed(true, Some(90.0)), Path::new("a.mp4")).unwrap();
+        assert!(!plan.is_remux());
+        let cmd = build_command(
+            &long,
+            &trimmed(true, Some(90.0)),
+            Path::new("a.mp4"),
+            Path::new("o.mp4"),
+        )
+        .unwrap();
+        let args = cmd.args_lossy().join(" ");
+        assert!(
+            args.contains("-t 14.5 -avoid_negative_ts make_zero"),
+            "{args}"
+        );
+        // The size follows the part kept.
+        let whole = plan_conversion(
+            &long,
+            &req(TargetFormat::Mkv, QualityPreset::Balanced),
+            Path::new("a.mp4"),
+        )
+        .unwrap()
+        .estimate
+        .unwrap()
+        .bytes;
+        let part = plan.estimate.unwrap().bytes;
+        assert!(part * 20 < whole, "{part} vs {whole}");
+    }
+
+    #[test]
+    fn previews_are_pictures_of_the_file() {
+        let frame = frame_args(Path::new("v.mp4"), 12.25, 320, Path::new("f.png"));
+        let frame: Vec<String> = frame
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            frame.join(" ").contains(
+                "-protocol_whitelist file -ss 12.25 -i file:v.mp4 -map 0:v:0 -frames:v 1"
+            )
+        );
+        let wave = waveform_args(Path::new("a.mp3"), 600, 64, Path::new("w.png"));
+        let wave: Vec<String> = wave
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(wave.join(" ").contains("showwavespic=s=600x64"));
     }
 }

@@ -5,6 +5,7 @@ import {
   canCompress,
   currentTracks,
   trackScope,
+  trimScope,
   canEditCopy,
   editScope,
   EDIT_LABEL,
@@ -698,6 +699,7 @@ describe("queue state machine", () => {
         { index: 1, language: "ita", title: null, default: true },
         { index: 3, language: "ita", title: null, default: false },
       ],
+      trim: null,
       copy: false,
       label: null,
     });
@@ -720,6 +722,26 @@ describe("queue state machine", () => {
     s = run(s, { type: "add", paths: ["b.mkv"] });
     expect(s.tracks).toBeNull();
     expect(trackScope(s)).toBeNull();
+  });
+
+  it("keeps a part of a lone file, fast in a copy and precise in a conversion", () => {
+    const clip = file("clip.mp4", "videoWithAudio", 60);
+    clip.edit = "mp4";
+    let s = run(initialQueue(), { type: "add", paths: ["clip.mp4"] }, { type: "analyzed", key: 1, file: clip }, { type: "selectTarget", target: "mkv" });
+    expect(trimScope(s)).toMatchObject({ duration: 60, video: true });
+    s = reduce(s, { type: "setTrim", trim: { start: 5, end: 20, precise: null } });
+    expect(requestOf(s)?.media).toEqual({ tracks: null, trim: { startSecs: 5, endSecs: 20, precise: true }, copy: false, label: null });
+    s = reduce(s, { type: "selectEditCopy" });
+    expect(requestFor(s, s.items[0])?.media?.trim).toEqual({ startSecs: 5, endSecs: 20, precise: false });
+    s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("mp4", 50) });
+    expect(canStart(s)).toBe(true);
+    // Nothing cut away: a copy would change nothing.
+    s = reduce(s, { type: "setTrim", trim: { start: 0, end: null, precise: true } });
+    s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("mp4", 50) });
+    expect(canStart(s)).toBe(false);
+    // Pictures taken from the video have their own moment.
+    s = reduce(s, { type: "selectTarget", target: "jpg" });
+    expect(trimScope(s)).toBeNull();
   });
 
   it("resizes pictures taken from videos, without turning them", () => {
