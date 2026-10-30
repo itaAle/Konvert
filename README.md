@@ -153,12 +153,15 @@ format, named `name-mod.ext`, which copies the streams whenever it can), offers:
   without sound. One track is saved next to the file (`Film-eng.opus`), several go into a
   new folder named after it.
 
-Several audio or video files can be **joined** into one, in the order of the list (switch
-**One file** under **Join**, after choosing an audio or video format). When every file has
+The **volume** also works for several files at once, each file on its own. Several audio or
+video files can be **joined** into one, in the order of the list (switch **One file** under
+**Join**, after choosing an audio or video format, or with **Edit** when they all have the
+same format, which the result keeps). When every file has
 the same codecs and parameters, the streams are copied one after the other without
 re-encoding; otherwise everything is encoded again at the size and frame rate of the first
 file (other pictures fitted with black bars, the sound at 48 kHz stereo, silence where a
-file has none), and Konvert says so first. The result is named after the first file
+file has none), and Konvert says so first. With a new volume, every file is encoded and
+gets it on its own before the join, so quiet and loud songs end up alike. The result is named after the first file
 (`Holiday-joined.mp4`).
 
 PDF documents:
