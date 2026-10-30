@@ -20,10 +20,12 @@ use crate::formats::{
 };
 use crate::pdf::{self, PdfForm, Placement};
 use crate::probe::{
-    AudioStream, MediaInfo, MediaKind, PictureInfo, VideoStream, pix_fmt_has_alpha,
+    AudioStream, MediaInfo, MediaKind, PictureInfo, Track, TrackKind, VideoStream,
+    pix_fmt_has_alpha,
 };
 use crate::request::{
     AdvancedOptions, CompressOptions, ConversionRequest, FrameMode, QualityPreset, Resize,
+    TrackChoice,
 };
 
 /// How the audio stream is produced.
@@ -313,8 +315,27 @@ pub struct ConversionPlan {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub compress: Option<CompressOptions>,
+    /// Tracks written, in output order, when the user chose them (empty:
+    /// `video_stream` and `audio_stream` only).
+    #[serde(default)]
+    pub tracks: Vec<PlannedTrack>,
     pub warnings: Vec<ConversionWarning>,
     pub estimate: Option<SizeEstimate>,
+}
+
+/// A track written into the output, with its details.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlannedTrack {
+    /// Stream index in the input.
+    pub index: u32,
+    pub kind: TrackKind,
+    /// Subtitles converted into this codec (`None`: copied as they are).
+    pub subtitle_codec: Option<String>,
+    pub language: Option<String>,
+    pub title: Option<String>,
+    pub default: bool,
 }
 
 impl ConversionPlan {
@@ -334,7 +355,7 @@ pub fn plan_conversion(
 ) -> Result<ConversionPlan, CoreError> {
     let mut plan = if let Some(options) = &request.compress {
         compress::plan(media, request, options, input)?
-    } else if request.edit.as_ref().is_some_and(|e| e.copy) {
+    } else if request.edited_copy().is_some() {
         // An edited copy in the file's own format (PNG to PNG too).
         if edit::edit_format(media, input) != Some(request.target) {
             return Err(unsupported(format!(
@@ -408,10 +429,31 @@ pub(crate) fn plan_offered(
 
     // Re-encode when the user asked for a smaller file or for the same format
     // (copying would just duplicate the input).
-    let same_format = formats::source_format(media, input) == Some(request.target);
+    // An edited copy copies what it can.
+    let same_format = formats::source_format(media, input) == Some(request.target)
+        && request.edited_copy().is_none();
     let force_encode = request.preset == QualityPreset::Small || same_format;
 
+    // Tracks chosen by the user, by kind, in their order.
+    let choice = chosen_tracks(media, request);
+    let choice = choice.as_deref();
+    let chosen = |kind: TrackKind| -> Vec<(&TrackChoice, &Track)> {
+        choice
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|c| {
+                let track = media.tracks.iter().find(|t| t.index == c.index)?;
+                (track.kind == kind).then_some((c, track))
+            })
+            .collect()
+    };
     let video_stream = match spec.kind {
+        FormatKind::Video if choice.is_some() => Some(
+            chosen(TrackKind::Video)
+                .first()
+                .and_then(|(c, _)| media.video.iter().find(|v| v.index == c.index))
+                .ok_or_else(|| unsupported("a video track must be kept".into()))?,
+        ),
         FormatKind::Video => Some(
             media
                 .primary_video()
@@ -421,15 +463,69 @@ pub(crate) fn plan_offered(
     };
     let video = video_stream.map(|v| plan_video(spec, v, request, force_encode));
 
-    let audio_stream = media
-        .primary_audio()
+    let kept_audio: Vec<&AudioStream> = match choice {
+        Some(_) => chosen(TrackKind::Audio)
+            .iter()
+            .filter_map(|(c, _)| media.audio.iter().find(|a| a.index == c.index))
+            .collect(),
+        None => media.primary_audio().into_iter().collect(),
+    };
+    let audio_stream = kept_audio
+        .first()
+        .copied()
         .filter(|_| !spec.audio_codecs.is_empty());
     if spec.kind == FormatKind::Audio && audio_stream.is_none() {
         return Err(unsupported("the input has no audio track".into()));
     }
-    let audio = audio_stream
+    // More audio tracks, where the format holds them.
+    let animation = matches!(&video, Some(VideoPlan::Encode(e)) if e.codec.is_animation());
+    let extra_audio: Vec<&AudioStream> = if holds_many_audio(request.target) && !animation {
+        kept_audio.iter().skip(1).copied().collect()
+    } else {
+        Vec::new()
+    };
+    let mut audio = audio_stream
         .map(|a| plan_audio(spec, a, request, force_encode))
         .transpose()?;
+    // One codec for every audio track: copied only if all can be.
+    if matches!(audio, Some(AudioPlan::Copy { .. }))
+        && extra_audio
+            .iter()
+            .any(|a| !spec.copy_audio.contains(&a.codec.as_str()))
+        && let Some(primary) = audio_stream
+    {
+        audio = Some(plan_audio(spec, primary, request, true)?);
+    }
+
+    // Every track written, in output order: video, audio, subtitles.
+    let mut tracks = Vec::new();
+    if choice.is_some() && !animation {
+        let planned =
+            |(c, track): &(&TrackChoice, &Track), subtitle_codec: Option<String>| PlannedTrack {
+                index: track.index,
+                kind: track.kind,
+                subtitle_codec,
+                language: c.language.clone().filter(|l| !l.trim().is_empty()),
+                title: c.title.clone().filter(|t| !t.trim().is_empty()),
+                default: c.default,
+            };
+        let video_tracks = chosen(TrackKind::Video);
+        if let Some(first) = video_tracks.first().filter(|_| video.is_some()) {
+            tracks.push(planned(first, None));
+        }
+        let audio_tracks = chosen(TrackKind::Audio);
+        let written = 1 + extra_audio.len();
+        if audio.is_some() {
+            tracks.extend(audio_tracks.iter().take(written).map(|t| planned(t, None)));
+        }
+        if video.is_some() {
+            for track in chosen(TrackKind::Subtitle) {
+                if let Some(codec) = subtitle_output(request.target, track.1) {
+                    tracks.push(planned(&track, codec.map(str::to_string)));
+                }
+            }
+        }
+    }
 
     let cover_art_stream = media
         .cover_art
@@ -453,12 +549,76 @@ pub(crate) fn plan_offered(
         document: None,
         remove_location: request.remove_location && media.has_location,
         compress: None,
+        tracks,
         warnings: Vec::new(),
         estimate: None,
     };
     plan.warnings = collect_warnings(media, request, &plan);
     plan.estimate = estimate_size(media, &plan);
     Ok(plan)
+}
+
+/// The tracks the user keeps, in order: chosen, or every track of the file
+/// for an edited copy (`None`: the first video and audio tracks).
+fn chosen_tracks<'a>(
+    media: &MediaInfo,
+    request: &'a ConversionRequest,
+) -> Option<std::borrow::Cow<'a, [TrackChoice]>> {
+    if let Some(tracks) = request.media.as_ref().and_then(|m| m.tracks.as_deref()) {
+        return Some(std::borrow::Cow::Borrowed(tracks));
+    }
+    request.edited_copy()?;
+    Some(std::borrow::Cow::Owned(
+        media
+            .tracks
+            .iter()
+            .map(|t| TrackChoice {
+                index: t.index,
+                language: t.language.clone(),
+                title: t.title.clone(),
+                default: t.default,
+            })
+            .collect(),
+    ))
+}
+
+/// The format can hold several audio tracks.
+fn holds_many_audio(target: TargetFormat) -> bool {
+    use TargetFormat as F;
+    matches!(
+        target,
+        F::Mp4 | F::Mkv | F::Mov | F::Webm | F::Avi | F::Ts | F::Mpg | F::Mka
+    )
+}
+
+/// How a subtitle track goes into `target`: copied (`Some(None)`), converted
+/// into a codec (`Some(Some(codec))`), or not at all (`None`): MP4 and MOV
+/// hold text as `mov_text`, WebM as WebVTT, Matroska most text and picture
+/// subtitles, TS only DVB pictures.
+pub(crate) fn subtitle_output(target: TargetFormat, track: &Track) -> Option<Option<&'static str>> {
+    use TargetFormat as F;
+    let codec = track.codec.as_str();
+    let text = !track.bitmap;
+    match target {
+        F::Mkv => match codec {
+            "subrip" | "ass" | "ssa" | "webvtt" | "dvd_subtitle" | "hdmv_pgs_subtitle"
+            | "dvb_subtitle" => Some(None),
+            _ if text => Some(Some("subrip")),
+            _ => None,
+        },
+        F::Mp4 | F::Mov => match codec {
+            "mov_text" => Some(None),
+            _ if text => Some(Some("mov_text")),
+            _ => None,
+        },
+        F::Webm => match codec {
+            "webvtt" => Some(None),
+            _ if text => Some(Some("webvtt")),
+            _ => None,
+        },
+        F::Ts if codec == "dvb_subtitle" => Some(None),
+        _ => None,
+    }
 }
 
 fn unsupported(details: String) -> CoreError {
@@ -574,6 +734,7 @@ fn plan_document(
         document: None,
         remove_location: false,
         compress: None,
+        tracks: Vec::new(),
         warnings,
         estimate: None,
     };
@@ -702,6 +863,7 @@ fn plan_document(
                 }),
                 remove_location: false,
                 compress: None,
+                tracks: Vec::new(),
                 warnings,
                 // The pages are copied as they are, with what they use.
                 estimate: media.size_bytes.map(|bytes| SizeEstimate {
@@ -991,6 +1153,7 @@ fn plan_still(
         document: None,
         remove_location: request.remove_location && media.has_location,
         compress: None,
+        tracks: Vec::new(),
         warnings,
         estimate: None,
     };
@@ -1370,11 +1533,37 @@ fn collect_warnings(
     if media.has_tags && spec.kind == FormatKind::Audio && !spec.tags {
         warnings.push(W::TagsDropped);
     }
-    if media.subtitle_streams > 0 {
-        warnings.push(W::SubtitlesDropped);
-    }
-    if media.audio.len() > 1 && plan.audio.is_some() {
-        warnings.push(W::ExtraAudioTracksDropped);
+    match chosen_tracks(media, request).as_deref() {
+        // Tracks kept by the user that the format cannot hold.
+        Some(choice) => {
+            let kept = |kind: TrackKind| {
+                choice
+                    .iter()
+                    .filter(|c| {
+                        media
+                            .tracks
+                            .iter()
+                            .any(|t| t.index == c.index && t.kind == kind)
+                    })
+                    .count()
+            };
+            let written = |kind: TrackKind| plan.tracks.iter().filter(|t| t.kind == kind).count();
+            if kept(TrackKind::Subtitle) > written(TrackKind::Subtitle) {
+                warnings.push(W::SubtitlesDropped);
+            }
+            let audio_written = written(TrackKind::Audio).max(usize::from(plan.audio.is_some()));
+            if plan.audio.is_some() && kept(TrackKind::Audio) > audio_written {
+                warnings.push(W::ExtraAudioTracksDropped);
+            }
+        }
+        None => {
+            if media.subtitle_streams > 0 {
+                warnings.push(W::SubtitlesDropped);
+            }
+            if media.audio.len() > 1 && plan.audio.is_some() {
+                warnings.push(W::ExtraAudioTracksDropped);
+            }
+        }
     }
 
     // Keep the first occurrence of each warning, then order by importance.
@@ -2363,6 +2552,7 @@ mod tests {
             video: Vec::new(),
             cover_art: None,
             subtitle_streams: 0,
+            tracks: Vec::new(),
             picture: None,
             has_tags: false,
             has_location: false,

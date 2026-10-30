@@ -18,6 +18,7 @@ const media = (overrides: Partial<MediaInfo>): MediaInfo => ({
   audio: [],
   video: [],
   coverArt: null,
+  tracks: [],
   subtitleStreams: 0,
   picture: null,
   hasTags: false,

@@ -7,16 +7,19 @@ import { spring } from "../lib/motion";
 interface EditCardProps {
   selected: boolean;
   onSelect: () => void;
-  /** Format shared by every picture ("JPG"), if any. */
+  /** Format shared by every file ("JPG"), if any. */
   format: string | null;
+  /** Audio or video files: their tracks are edited. */
+  media?: boolean;
 }
 
 /**
- * "Edit": an edited copy of every picture in its own format (turned,
- * mirrored, cropped, resized). Selected like a format card.
+ * "Edit": an edited copy of every file in its own format (pictures turned,
+ * mirrored, cropped, resized; audio and video with chosen tracks). Selected
+ * like a format card.
  */
-export function EditCard({ selected, onSelect, format }: EditCardProps) {
-  const note = format ? t("edit.cardFormat", { format }) : t("edit.cardHint");
+export function EditCard({ selected, onSelect, format, media = false }: EditCardProps) {
+  const note = format ? t(media ? "edit.cardMedia" : "edit.cardFormat", { format }) : t("edit.cardHint");
   return (
     <button
       type="button"

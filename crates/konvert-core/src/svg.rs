@@ -113,6 +113,7 @@ pub fn probe(path: &Path) -> Result<MediaInfo, CoreError> {
         }],
         cover_art: None,
         subtitle_streams: 0,
+        tracks: Vec::new(),
         picture: Some(PictureInfo {
             alpha: true,
             ..PictureInfo::default()

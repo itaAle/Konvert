@@ -83,6 +83,7 @@ pub fn probe(path: &Path) -> Result<MediaInfo, CoreError> {
         video: Vec::new(),
         cover_art: None,
         subtitle_streams: 0,
+        tracks: Vec::new(),
         picture: None,
         has_tags: false,
         has_location: false,

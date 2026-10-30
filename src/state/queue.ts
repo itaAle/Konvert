@@ -16,7 +16,10 @@ import type { Progress } from "../bindings/Progress";
 import type { QualityPreset } from "../bindings/QualityPreset";
 import type { TargetFormat } from "../bindings/TargetFormat";
 import type { TargetOption } from "../bindings/TargetOption";
+import type { MediaEdit } from "../bindings/MediaEdit";
+import type { TrackChoice } from "../bindings/TrackChoice";
 import { DEFAULT_EDIT, editChanged, pictureEditOf, type EditScope, type EditState } from "./edit";
+import { defaultTracks, sameTracks } from "./tracks";
 import { cutPositions, isEdited, keptCount, layoutOf, moveFile, reconcile, type EditorPage, type PageSource } from "./pages";
 
 export type ItemStatus =
@@ -58,6 +61,8 @@ export interface QueueState {
   editCopy: boolean;
   /** Turn, mirroring, crop and new size of pictures. */
   edit: EditState;
+  /** Tracks kept from the only audio or video file, in order (`null`: the default ones). */
+  tracks: TrackChoice[] | null;
   preset: QualityPreset;
   advanced: AdvancedOptions;
   /** Pictures taken from videos (frame targets only). */
@@ -93,6 +98,7 @@ export type QueueAction =
   | { type: "setCompression"; compression: CompressOptions }
   | { type: "selectEditCopy" }
   | { type: "setEdit"; edit: EditState }
+  | { type: "setTracks"; tracks: TrackChoice[] | null }
   | { type: "selectPreset"; preset: QualityPreset }
   | { type: "setAdvanced"; advanced: AdvancedOptions }
   | { type: "setFrames"; frames: FrameOptions }
@@ -150,6 +156,7 @@ export function initialQueue(preset: QualityPreset = "balanced"): QueueState {
     compression: DEFAULT_COMPRESSION,
     editCopy: false,
     edit: DEFAULT_EDIT,
+    tracks: null,
     preset,
     advanced: {},
     frames: DEFAULT_FRAMES,
@@ -231,6 +238,7 @@ function lonePhoto(state: QueueState): boolean {
 export function editScope(state: QueueState): EditScope | null {
   if (state.compress) return null;
   if (state.editCopy) {
+    if (!readyItems(state).some((i) => i.file!.media.kind === "image")) return null;
     const icons = readyItems(state).every((i) => i.file!.edit === "ico");
     return { turn: true, crop: lonePhoto(state), resize: !icons };
   }
@@ -238,6 +246,47 @@ export function editScope(state: QueueState): EditScope | null {
   if (option?.group === "image") return { turn: true, crop: lonePhoto(state), resize: option.format !== "ico" };
   if (option?.group === "frames") return { turn: false, crop: false, resize: true };
   return null;
+}
+
+const MEDIA_KINDS = ["audio", "video", "videoWithAudio"];
+
+/**
+ * The only file is audio or video, made into audio or video (or an edited
+ * copy): its tracks can be chosen. `audio`: only its audio tracks matter.
+ */
+export function trackScope(state: QueueState): { file: FileAnalysis; audio: boolean } | null {
+  const ready = readyItems(state);
+  if (state.compress || ready.length !== 1 || state.items.length !== 1) return null;
+  const file = ready[0].file!;
+  if (!MEDIA_KINDS.includes(file.media.kind) || file.media.tracks.length === 0) return null;
+  if (state.editCopy) return { file, audio: file.media.kind === "audio" };
+  const option = commonTargets(state.items).find((o) => o.format === state.target);
+  if (!option || !["video", "audio", "audioOnly"].includes(option.group)) return null;
+  // Animations have no audio or subtitles.
+  if (["gif", "animatedWebp", "apng"].includes(option.format)) return null;
+  return { file, audio: option.group !== "video" };
+}
+
+/** The tracks kept, as shown: chosen, or the default ones. */
+export function currentTracks(state: QueueState): TrackChoice[] {
+  const scope = trackScope(state);
+  if (!scope) return [];
+  return state.tracks ?? defaultTracks(scope.file.media.tracks, state.editCopy);
+}
+
+/** Track choices sent to the core (`null`: nothing chosen). */
+function mediaOf(state: QueueState, copy: boolean): MediaEdit | null {
+  const tracks = trackScope(state) ? state.tracks : null;
+  if (!copy && tracks == null) return null;
+  return { tracks, copy, label: copy ? EDIT_LABEL : null };
+}
+
+/** An edited copy changes something in the pictures or in the tracks. */
+function copyChanged(state: QueueState): boolean {
+  const scope = editScope(state);
+  if (scope && editChanged(state.edit, scope)) return true;
+  const tracks = trackScope(state);
+  return tracks != null && state.tracks != null && !sameTracks(state.tracks, defaultTracks(tracks.file.media.tracks, true));
 }
 
 /** The only file is a PDF: as a PDF target, its pages can be edited and split. */
@@ -296,6 +345,7 @@ export function requestOf(state: QueueState): ConversionRequest | null {
       ocr: state.target === "pdf" && state.pdf.ocr,
     },
     edit: editOf(state),
+    media: mediaOf(state, false),
   };
 }
 
@@ -314,6 +364,7 @@ export function requestFor(state: QueueState, item: QueueItem): ConversionReques
   if (state.editCopy) {
     const target = item.file?.edit;
     if (!target) return null;
+    const picture = item.file!.media.kind === "image";
     return {
       target,
       preset: state.preset,
@@ -321,7 +372,8 @@ export function requestFor(state: QueueState, item: QueueItem): ConversionReques
       frames: null,
       removeLocation: state.removeLocation,
       pdf: null,
-      edit: editOf(state),
+      edit: picture ? editOf(state) : null,
+      media: picture ? null : mediaOf(state, true),
     };
   }
   if (!state.compress) {
@@ -402,7 +454,7 @@ export function canStart(state: QueueState): boolean {
     state.phase === "setup" &&
     (state.target != null || (state.compress && canCompress(ready)) || (state.editCopy && canEditCopy(ready))) &&
     // An edited copy with nothing edited would be pointless.
-    (!state.editCopy || editChanged(state.edit, editScope(state)!)) &&
+    (!state.editCopy || copyChanged(state)) &&
     planned.length > 0 &&
     !state.items.some((i) => i.status === "analyzing") &&
     planned.every((i) => i.plan && !i.planError) &&
@@ -539,6 +591,7 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
         nextKey,
         items: [...base.items, ...added],
         edit: { ...base.edit, crop: null },
+        tracks: null,
       };
     }
 
@@ -576,7 +629,7 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
 
     case "remove": {
       if (state.phase !== "setup") return state;
-      const next = withoutItems({ ...state, edit: { ...state.edit, crop: null } }, state.items.filter((i) => i.key !== action.key));
+      const next = withoutItems({ ...state, edit: { ...state.edit, crop: null }, tracks: null }, state.items.filter((i) => i.key !== action.key));
       // The pages of the file go with it; edits are forgotten once no PDF is made of the files left.
       if (!next.pages) return next;
       return invalidate(editsPdf(next) ? next : { ...next, pages: null, cuts: [] });
@@ -613,6 +666,10 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
     case "setEdit":
       if (state.phase !== "setup") return state;
       return invalidate({ ...state, edit: action.edit, notice: null });
+
+    case "setTracks":
+      if (state.phase !== "setup") return state;
+      return invalidate({ ...state, tracks: action.tracks, notice: null });
 
     case "setCompression":
       if (state.phase !== "setup") return state;

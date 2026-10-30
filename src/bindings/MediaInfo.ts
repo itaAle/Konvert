@@ -5,6 +5,7 @@ import type { DocumentInfo } from "./DocumentInfo";
 import type { MediaKind } from "./MediaKind";
 import type { PictureInfo } from "./PictureInfo";
 import type { TextInfo } from "./TextInfo";
+import type { Track } from "./Track";
 import type { VideoStream } from "./VideoStream";
 
 /**
@@ -28,6 +29,11 @@ video: Array<VideoStream>,
  * Embedded cover picture (e.g. album art in MP3/M4A/FLAC).
  */
 coverArt: CoverArt | null, subtitleStreams: number, 
+/**
+ * Every video, audio and subtitle track, in file order (cover pictures
+ * left out); empty for pictures and documents.
+ */
+tracks: Array<Track>, 
 /**
  * Picture details, for [`MediaKind::Image`] only.
  */

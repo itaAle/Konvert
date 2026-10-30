@@ -20,6 +20,7 @@
 //!          --turn 90|180|270  --flip-h  --flip-v  --crop "x,y,w,h" (fractions)
 //!          --resize 50% | 1920x1080 | 1920x | x1080 | 1920x1080! | long:1920  --enlarge
 //!          --edit-copy   (an edited copy in the same format, name-mod.ext: no --to needed)
+//!          --tracks "0, 2:eng*, 1:ita, 3"   (tracks kept in this order: index, language, * default)
 //!          --page-size a4|letter|fit  --orientation auto|portrait|landscape
 //!          --margin none|small|normal   (pictures to PDF)
 //!          --dpi N  --pages "1-3, 5"   (PDF to pictures)
@@ -43,7 +44,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use konvert_core::request::{CropRect, PictureEdit, Resize};
+use konvert_core::request::{CropRect, MediaEdit, PictureEdit, Resize, TrackChoice};
 use konvert_core::{
     AdvancedOptions, Binaries, ChannelLayout, CombinedJob, CompressLevel, CompressOptions,
     ConversionJob, ConversionRequest, CoreError, FrameMode, FrameOptions, MediaInfo, PageMargin,
@@ -71,6 +72,7 @@ OPTIONS: --preset max|balanced|small  --height N  --fps N
          --turn 90|180|270  --flip-h  --flip-v  --crop \"x,y,w,h\" (fractions)
          --resize 50% | 1920x1080 | 1920x | x1080 | 1920x1080! | long:1920  --enlarge
          --edit-copy   (an edited copy in the same format, name-mod.ext: no --to needed)
+         --tracks \"0, 2:eng*, 1:ita, 3\"   (tracks kept in this order: index, language, * default)
          --page-size a4|letter|fit  --orientation auto|portrait|landscape
          --margin none|small|normal   (pictures to PDF)
          --dpi N  --pages \"1-3, 5\"   (PDF to pictures)
@@ -252,6 +254,7 @@ fn parse_args() -> Result<Cli, String> {
     let mut rotate = None;
     let mut compress: Option<CompressOptions> = None;
     let mut edit: Option<PictureEdit> = None;
+    let mut media: Option<MediaEdit> = None;
 
     fn number<T: std::str::FromStr>(name: &str, v: OsString) -> Result<T, String> {
         v.to_str()
@@ -430,6 +433,34 @@ fn parse_args() -> Result<Cli, String> {
                         "--resize needs 50%, 1920x1080, 1920x, x1080, 1920x1080! or long:1920",
                     )?);
             }
+            Some("--tracks") => {
+                let spec = value("--tracks")?;
+                let tracks = spec
+                    .to_str()
+                    .unwrap_or_default()
+                    .split(',')
+                    .map(|item| {
+                        let item = item.trim();
+                        let (item, default) = match item.strip_suffix('*') {
+                            Some(i) => (i, true),
+                            None => (item, false),
+                        };
+                        let (index, language) = match item.split_once(':') {
+                            Some((i, l)) => (i, Some(l.to_string())),
+                            None => (item, None),
+                        };
+                        Ok(TrackChoice {
+                            index: index
+                                .parse()
+                                .map_err(|_| "--tracks needs indexes such as \"0, 2:eng*\"")?,
+                            language,
+                            title: None,
+                            default,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                media.get_or_insert_default().tracks = Some(tracks);
+            }
             Some("--mono") => advanced.channels = Some(ChannelLayout::Mono),
             Some("--stereo") => advanced.channels = Some(ChannelLayout::Stereo),
             Some("-h" | "--help") => return Err(String::new()),
@@ -465,6 +496,7 @@ fn parse_args() -> Result<Cli, String> {
             },
             compress: compress.clone(),
             edit: edit.clone(),
+            media: media.clone(),
             preset,
             advanced: advanced.clone(),
             frames,

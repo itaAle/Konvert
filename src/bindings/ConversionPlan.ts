@@ -5,6 +5,7 @@ import type { ConversionWarning } from "./ConversionWarning";
 import type { DocumentPlan } from "./DocumentPlan";
 import type { FramePlan } from "./FramePlan";
 import type { ImagePlan } from "./ImagePlan";
+import type { PlannedTrack } from "./PlannedTrack";
 import type { SizeEstimate } from "./SizeEstimate";
 import type { TargetFormat } from "./TargetFormat";
 import type { VideoPlan } from "./VideoPlan";
@@ -45,4 +46,9 @@ removeLocation: boolean,
  * A smaller copy in the same format: with a size limit, stronger settings
  * are tried until the file fits; never larger than the input.
  */
-compress?: CompressOptions | null, warnings: Array<ConversionWarning>, estimate: SizeEstimate | null, };
+compress?: CompressOptions | null, 
+/**
+ * Tracks written, in output order, when the user chose them (empty:
+ * `video_stream` and `audio_stream` only).
+ */
+tracks: Array<PlannedTrack>, warnings: Array<ConversionWarning>, estimate: SizeEstimate | null, };

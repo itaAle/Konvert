@@ -201,8 +201,8 @@ pub async fn run_conversion(
 
     let mut stem = output_stem(&job.input);
     // An edited copy in the file's own format: `name-mod.ext`.
-    if let Some(edit) = job.request.edit.as_ref().filter(|e| e.copy) {
-        stem.push(format!("-{}", label(edit.label.as_deref(), "mod")));
+    if let Some(copy) = job.request.edited_copy() {
+        stem.push(format!("-{}", label(Some(copy), "mod")));
     }
     let output_dir = job.output_dir.clone();
     let temp = temp_output.clone();

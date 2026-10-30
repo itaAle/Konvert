@@ -2,6 +2,7 @@
 import type { AdvancedOptions } from "./AdvancedOptions";
 import type { CompressOptions } from "./CompressOptions";
 import type { FrameOptions } from "./FrameOptions";
+import type { MediaEdit } from "./MediaEdit";
 import type { PdfOptions } from "./PdfOptions";
 import type { PictureEdit } from "./PictureEdit";
 import type { QualityPreset } from "./QualityPreset";
@@ -32,4 +33,9 @@ compress?: CompressOptions | null,
  * Pictures only: turned, mirrored, cropped or resized (or an edited
  * copy in the same format).
  */
-edit?: PictureEdit | null, };
+edit?: PictureEdit | null, 
+/**
+ * Audio and video only: tracks kept and their details (or an edited
+ * copy in the same format).
+ */
+media?: MediaEdit | null, };

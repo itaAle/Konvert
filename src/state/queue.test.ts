@@ -3,6 +3,8 @@ import {
   allWarnings,
   arrangesPages,
   canCompress,
+  currentTracks,
+  trackScope,
   canEditCopy,
   editScope,
   EDIT_LABEL,
@@ -84,6 +86,7 @@ function file(name: string, kind: "audio" | "videoWithAudio" | "image" | "docume
       video: [],
       coverArt: null,
       subtitleStreams: 0,
+      tracks: [],
       hasTags: false,
       picture: kind === "image" ? { alpha: false, alphaStream: null, gridGroup: null, exif: false, exifCopyable: false } : null,
       hasLocation: false,
@@ -104,6 +107,7 @@ const plan = (target: TargetFormat, bytes: number, approximate = false, warnings
   audioStream: 0,
   audio: null,
   coverArtStream: null,
+  tracks: [],
   image: null,
   frames: null,
   removeLocation: false,
@@ -263,6 +267,7 @@ describe("queue state machine", () => {
       removeLocation: false,
       pdf: DEFAULT_PDF,
       edit: null,
+      media: null,
     });
   });
 
@@ -670,6 +675,51 @@ describe("queue state machine", () => {
     // A HEIC photo cannot be written as HEIC: no edited copy.
     s = run(s, { type: "add", paths: ["c.heic"] }, { type: "analyzed", key: 3, file: file("c.heic", "image", null) });
     expect(canEditCopy(s.items)).toBe(false);
+  });
+
+  it("chooses the tracks of a lone video", () => {
+    const film = file("film.mkv", "videoWithAudio", 60);
+    film.edit = "mkv";
+    film.media.tracks = [
+      { index: 0, kind: "video", codec: "h264", language: null, title: null, default: true, channels: null, bitmap: false },
+      { index: 1, kind: "audio", codec: "aac", language: "ita", title: null, default: true, channels: 2, bitmap: false },
+      { index: 2, kind: "audio", codec: "ac3", language: "eng", title: "Commento", default: false, channels: 6, bitmap: false },
+      { index: 3, kind: "subtitle", codec: "subrip", language: "ita", title: null, default: false, channels: null, bitmap: false },
+    ];
+    let s = run(initialQueue(), { type: "add", paths: ["film.mkv"] }, { type: "analyzed", key: 1, file: film }, { type: "selectTarget", target: "mp4" });
+    expect(trackScope(s)?.audio).toBe(false);
+    // As the core does by default: the first video and audio tracks.
+    expect(currentTracks(s).map((c) => c.index)).toEqual([0, 1]);
+    expect(requestOf(s)?.media).toBeNull();
+    s = reduce(s, { type: "setTracks", tracks: [...currentTracks(s), { index: 3, language: "ita", title: null, default: false }] });
+    expect(requestOf(s)?.media).toEqual({
+      tracks: [
+        { index: 0, language: null, title: null, default: true },
+        { index: 1, language: "ita", title: null, default: true },
+        { index: 3, language: "ita", title: null, default: false },
+      ],
+      copy: false,
+      label: null,
+    });
+    // Into an audio format, only audio tracks matter.
+    s = reduce(s, { type: "selectTarget", target: "mp3" });
+    expect(trackScope(s)?.audio).toBe(true);
+
+    // An edited copy keeps every track until some is changed.
+    s = reduce(s, { type: "setTracks", tracks: null });
+    s = reduce(s, { type: "selectEditCopy" });
+    expect(currentTracks(s).map((c) => c.index)).toEqual([0, 1, 2, 3]);
+    expect(editScope(s)).toBeNull();
+    expect(requestFor(s, s.items[0])).toMatchObject({ target: "mkv", edit: null, media: { tracks: null, copy: true, label: EDIT_LABEL } });
+    s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("mkv", 50) });
+    expect(canStart(s)).toBe(false);
+    s = reduce(s, { type: "setTracks", tracks: currentTracks(s).filter((c) => c.index !== 2) });
+    s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("mkv", 50) });
+    expect(canStart(s)).toBe(true);
+    // Another file: the choice is forgotten.
+    s = run(s, { type: "add", paths: ["b.mkv"] });
+    expect(s.tracks).toBeNull();
+    expect(trackScope(s)).toBeNull();
   });
 
   it("resizes pictures taken from videos, without turning them", () => {

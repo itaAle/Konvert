@@ -274,6 +274,7 @@ function analysis(path: string): FileAnalysis {
         audio: [],
         coverArt: null,
         subtitleStreams: 0,
+        tracks: [],
         hasTags: false,
         picture: null,
         hasLocation: false,
@@ -298,6 +299,7 @@ function analysis(path: string): FileAnalysis {
         audio: [],
         coverArt: null,
         subtitleStreams: 0,
+        tracks: [],
         hasTags: false,
         picture: null,
         hasLocation: false,
@@ -324,6 +326,7 @@ function analysis(path: string): FileAnalysis {
         audio: [],
         coverArt: null,
         subtitleStreams: 0,
+        tracks: [],
         hasTags: false,
         picture: { alpha: true, alphaStream: null, gridGroup: null, exif: false, exifCopyable: false },
         hasLocation: false,
@@ -352,6 +355,7 @@ function analysis(path: string): FileAnalysis {
         audio: [],
         coverArt: null,
         subtitleStreams: 0,
+        tracks: [],
         hasTags: false,
         picture: { alpha: false, alphaStream: null, gridGroup: heic ? 0 : null, exif: true, exifCopyable: true },
         hasLocation: true,
@@ -365,6 +369,7 @@ function analysis(path: string): FileAnalysis {
     };
   }
   const isVideo = /\.(mp4|mov|mkv|webm|avi)$/i.test(name);
+  const film = /film/i.test(name);
   if (isVideo) {
     return {
       path,
@@ -376,9 +381,26 @@ function analysis(path: string): FileAnalysis {
         sizeBytes: 486_000_000,
         bitRate: 5_150_000,
         video: [{ index: 0, codec: "h264", width: 1920, height: 1080, fps: 29.97, bitRate: 4_960_000, pixFmt: "yuv420p" }],
-        audio: [{ index: 1, codec: "aac", sampleRate: 48000, channels: 2, bitRate: 192_000, bitDepth: null }],
+        audio: film
+          ? [
+              { index: 1, codec: "aac", sampleRate: 48000, channels: 2, bitRate: 192_000, bitDepth: null },
+              { index: 2, codec: "ac3", sampleRate: 48000, channels: 6, bitRate: 448_000, bitDepth: null },
+            ]
+          : [{ index: 1, codec: "aac", sampleRate: 48000, channels: 2, bitRate: 192_000, bitDepth: null }],
         coverArt: null,
-        subtitleStreams: 0,
+        subtitleStreams: film ? 2 : 0,
+        // Films (mock files named "film"): two languages, text and picture subtitles.
+        tracks: [
+          { index: 0, kind: "video", codec: "h264", language: null, title: null, default: true, channels: null, bitmap: false },
+          { index: 1, kind: "audio", codec: "aac", language: "ita", title: null, default: true, channels: 2, bitmap: false },
+          ...(film
+            ? ([
+                { index: 2, kind: "audio", codec: "ac3", language: "eng", title: "Commento", default: false, channels: 6, bitmap: false },
+                { index: 3, kind: "subtitle", codec: "subrip", language: "ita", title: null, default: false, channels: null, bitmap: false },
+                { index: 4, kind: "subtitle", codec: "hdmv_pgs_subtitle", language: "eng", title: null, default: false, channels: null, bitmap: true },
+              ] as const)
+            : []),
+        ],
         hasTags: false,
         hasLocation: false,
         document: null,
@@ -391,7 +413,7 @@ function analysis(path: string): FileAnalysis {
         ...FRAMES,
       ],
       compress: (name.split(".").pop()?.toLowerCase() ?? "mp4") as TargetFormat,
-      edit: null,
+      edit: (name.split(".").pop()?.toLowerCase() ?? "mp4") as TargetFormat,
     };
   }
   return {
@@ -407,6 +429,7 @@ function analysis(path: string): FileAnalysis {
       audio: [{ index: 0, codec: "pcm_s16le", sampleRate: 44100, channels: 2, bitRate: 1_411_200, bitDepth: 16 }],
       coverArt: null,
       subtitleStreams: 0,
+      tracks: [{ index: 0, kind: "audio", codec: "pcm_s16le", language: null, title: null, default: true, channels: 2, bitmap: false }],
       hasTags: true,
       hasLocation: false,
       document: null,
@@ -414,7 +437,7 @@ function analysis(path: string): FileAnalysis {
     },
     targets: AUDIO,
     compress: "wav",
-    edit: null,
+    edit: "wav",
   };
 }
 
@@ -498,6 +521,7 @@ export const mockBackend: Backend = {
         audioStream: null,
         audio: null,
         coverArtStream: null,
+        tracks: [],
         image: null,
         frames: null,
         document: null,
@@ -518,6 +542,7 @@ export const mockBackend: Backend = {
         audioStream: null,
         audio: null,
         coverArtStream: null,
+        tracks: [],
         image: null,
         frames: null,
         document: null,
@@ -560,6 +585,7 @@ export const mockBackend: Backend = {
         audioStream: null,
         audio: null,
         coverArtStream: null,
+        tracks: [],
         image: null,
         frames: null,
         removeLocation: false,
@@ -603,6 +629,7 @@ export const mockBackend: Backend = {
         audioStream: null,
         audio: null,
         coverArtStream: null,
+        tracks: [],
         image: {
           codec: request.target === "jpg" ? "jpeg" : (request.target as "png" | "webp"),
           quality: request.target === "png" ? { kind: "lossless", effort: 6 } : { kind: "lossy", quality: 85 },
@@ -647,6 +674,7 @@ export const mockBackend: Backend = {
         audioStream: null,
         audio: null,
         coverArtStream: null,
+        tracks: [],
         image: {
           codec: request.target === "jpg" ? "jpeg" : (request.target as "png" | "webp" | "avif"),
           quality: png ? { kind: "lossless", effort: 6 } : { kind: "lossy", quality: request.advanced.imageQuality ?? quality },
@@ -692,6 +720,7 @@ export const mockBackend: Backend = {
       audioStream: media.audio[0]?.index ?? null,
       audio: remux ? { mode: "copy", codec: "aac" } : null,
       coverArtStream: null,
+      tracks: [],
       image: null,
       frames: null,
       removeLocation: request.removeLocation,

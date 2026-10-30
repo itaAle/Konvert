@@ -469,6 +469,36 @@ impl PictureEdit {
     }
 }
 
+/// A track kept in an audio or video file, with its details.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TrackChoice {
+    /// Stream index in the file.
+    pub index: u32,
+    /// ISO 639-2 language code (`None`: none).
+    pub language: Option<String>,
+    pub title: Option<String>,
+    /// Played or shown by default (one per kind of track).
+    pub default: bool,
+}
+
+/// Changes to an audio or video file.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct MediaEdit {
+    /// Tracks kept, in this order (`None`: the first video and audio tracks).
+    #[ts(optional = nullable)]
+    pub tracks: Option<Vec<TrackChoice>>,
+    /// An edited copy in the file's own format ("Modifica"): `target` is
+    /// that format, named `name-<label>.ext`; streams are copied when they can be.
+    pub copy: bool,
+    /// Word after the name of the copy (`"mod"`).
+    #[ts(optional = nullable)]
+    pub label: Option<String>,
+}
+
 /// A conversion requested by the user.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -500,9 +530,23 @@ pub struct ConversionRequest {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub edit: Option<PictureEdit>,
+    /// Audio and video only: tracks kept and their details (or an edited
+    /// copy in the same format).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub media: Option<MediaEdit>,
 }
 
 impl ConversionRequest {
+    /// An edited copy in the file's own format (a picture or a media file).
+    pub fn edited_copy(&self) -> Option<&str> {
+        match (&self.edit, &self.media) {
+            (Some(edit), _) if edit.copy => Some(edit.label.as_deref().unwrap_or("")),
+            (_, Some(media)) if media.copy => Some(media.label.as_deref().unwrap_or("")),
+            _ => None,
+        }
+    }
+
     /// Request with the given preset and no advanced overrides.
     pub fn new(target: TargetFormat, preset: QualityPreset) -> Self {
         Self {
@@ -514,6 +558,7 @@ impl ConversionRequest {
             pdf: None,
             compress: None,
             edit: None,
+            media: None,
         }
     }
 }

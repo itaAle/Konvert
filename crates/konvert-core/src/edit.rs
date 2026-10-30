@@ -22,13 +22,18 @@ pub const MAX_SIDE: u32 = 16384;
 const MAX_PIXELS: f64 = 100_000_000.0;
 
 /// The format an edited copy of this file keeps ("Modifica"): its own
-/// picture format, when Konvert can write it (not HEIC or SVG).
+/// picture, audio or video format, when Konvert can write it (not HEIC or
+/// SVG).
 pub fn edit_format(media: &MediaInfo, input: &Path) -> Option<TargetFormat> {
-    if media.kind != MediaKind::Image {
-        return None;
-    }
     let format = formats::source_format(media, input)?;
-    (formats::spec(format).kind == FormatKind::Image).then_some(format)
+    let kind = formats::spec(format).kind;
+    let fits = match media.kind {
+        MediaKind::Image => kind == FormatKind::Image,
+        MediaKind::Video | MediaKind::VideoWithAudio => kind == FormatKind::Video,
+        MediaKind::Audio => kind == FormatKind::Audio,
+        MediaKind::Document | MediaKind::Text => false,
+    };
+    fits.then_some(format)
 }
 
 /// Checks the values of an edit.

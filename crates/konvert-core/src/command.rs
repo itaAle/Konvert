@@ -15,7 +15,7 @@ use crate::plan::{
     AudioEncode, AudioPlan, AudioRate, ConversionPlan, FramePlan, ImagePlan, ImageQuality,
     VideoEncode, VideoPlan, VideoRate, plan_conversion,
 };
-use crate::probe::MediaInfo;
+use crate::probe::{MediaInfo, TrackKind};
 use crate::request::{ConversionRequest, FrameMode};
 
 /// A fully built FFmpeg invocation (program arguments only).
@@ -128,10 +128,16 @@ fn media_args(a: &mut Args, plan: &ConversionPlan, spec: &FormatSpec, cover_comm
                 "[gif]",
             ]);
         }
+        // Tracks chosen by the user, in their order.
+        _ if !plan.tracks.is_empty() => {
+            for track in &plan.tracks {
+                a.push(&["-map", &format!("0:{}", track.index)]);
+            }
+        }
         (Some(_), Some(index)) => a.push(&["-map", &format!("0:{index}")]),
         _ => {}
     }
-    if let (Some(_), Some(index)) = (&plan.audio, plan.audio_stream) {
+    if let (Some(_), Some(index), true) = (&plan.audio, plan.audio_stream, plan.tracks.is_empty()) {
         a.push(&["-map", &format!("0:{index}")]);
     }
     if let Some(index) = attached_cover {
@@ -171,9 +177,41 @@ fn media_args(a: &mut Args, plan: &ConversionPlan, spec: &FormatSpec, cover_comm
         None => {}
     }
 
+    track_args(a, plan);
+
     // Cover art is only planned for audio outputs, so `v:0` is the picture.
     if attached_cover.is_some() {
         a.push(&["-c:v", "copy", "-disposition:v:0", "attached_pic"]);
+    }
+}
+
+/// Subtitle codecs, then the language, title and default flag of each track
+/// chosen by the user (numbered within its kind).
+fn track_args(a: &mut Args, plan: &ConversionPlan) {
+    let mut counts = [0usize; 3];
+    for track in &plan.tracks {
+        let (slot, letter) = match track.kind {
+            TrackKind::Video => (0, "v"),
+            TrackKind::Audio => (1, "a"),
+            TrackKind::Subtitle => (2, "s"),
+        };
+        let n = counts[slot];
+        counts[slot] += 1;
+        if track.kind == TrackKind::Subtitle {
+            a.push(&[
+                &format!("-c:s:{n}"),
+                track.subtitle_codec.as_deref().unwrap_or("copy"),
+            ]);
+        }
+        // An empty value removes the tag.
+        a.push(&[
+            &format!("-metadata:s:{letter}:{n}"),
+            &format!("language={}", track.language.as_deref().unwrap_or("")),
+            &format!("-metadata:s:{letter}:{n}"),
+            &format!("title={}", track.title.as_deref().unwrap_or("")),
+            &format!("-disposition:{letter}:{n}"),
+            if track.default { "default" } else { "0" },
+        ]);
     }
 }
 
@@ -1164,5 +1202,142 @@ mod tests {
             strings(&["-filter_complex",
                 "[0:0]transpose=clock,vflip,crop=3000:2000:0:1000:exact=1,scale=1000:667:flags=lanczos[img]"])
         );
+    }
+
+    /// A film: H.264, Italian AAC (default), English AC-3 with a title, text
+    /// and picture subtitles.
+    fn film() -> MediaInfo {
+        media(
+            r#"{ "streams": [
+            { "index": 0, "codec_name": "h264", "codec_type": "video", "width": 1920, "height": 1080,
+              "avg_frame_rate": "24/1", "disposition": { "default": 1 } },
+            { "index": 1, "codec_name": "aac", "codec_type": "audio", "sample_rate": "48000", "channels": 2,
+              "disposition": { "default": 1 }, "tags": { "language": "ita" } },
+            { "index": 2, "codec_name": "ac3", "codec_type": "audio", "sample_rate": "48000", "channels": 6,
+              "tags": { "language": "eng", "title": "Director's commentary" } },
+            { "index": 3, "codec_name": "subrip", "codec_type": "subtitle", "tags": { "language": "ita" } },
+            { "index": 4, "codec_name": "hdmv_pgs_subtitle", "codec_type": "subtitle", "tags": { "language": "eng" } }],
+            "format": { "format_name": "matroska,webm", "duration": "5400" } }"#,
+        )
+    }
+
+    fn keep(index: u32, language: Option<&str>, default: bool) -> crate::request::TrackChoice {
+        crate::request::TrackChoice {
+            index,
+            language: language.map(str::to_string),
+            title: None,
+            default,
+        }
+    }
+
+    #[test]
+    fn tracks_are_read_from_the_file() {
+        use crate::probe::TrackKind;
+        let film = film();
+        let kinds: Vec<_> = film.tracks.iter().map(|t| (t.index, t.kind)).collect();
+        assert_eq!(
+            kinds,
+            [
+                (0, TrackKind::Video),
+                (1, TrackKind::Audio),
+                (2, TrackKind::Audio),
+                (3, TrackKind::Subtitle),
+                (4, TrackKind::Subtitle)
+            ]
+        );
+        assert_eq!(film.tracks[1].language.as_deref(), Some("ita"));
+        assert!(film.tracks[1].default && !film.tracks[2].default);
+        assert_eq!(
+            film.tracks[2].title.as_deref(),
+            Some("Director's commentary")
+        );
+        assert_eq!(film.tracks[2].channels, Some(6));
+        assert!(film.tracks[4].bitmap && !film.tracks[3].bitmap);
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn chosen_tracks_are_mapped_with_their_details() {
+        use crate::request::MediaEdit;
+        // English first and by default, Italian second; the text subtitles
+        // become mov_text in MP4, the picture ones cannot go there.
+        let request = ConversionRequest {
+            media: Some(MediaEdit {
+                tracks: Some(vec![
+                    keep(0, None, true),
+                    keep(2, Some("eng"), true),
+                    keep(1, Some("ita"), false),
+                    keep(3, Some("ita"), false),
+                    keep(4, Some("eng"), false),
+                ]),
+                ..MediaEdit::default()
+            }),
+            ..req(TargetFormat::Mp4, QualityPreset::Balanced)
+        };
+        let plan = plan_conversion(&film(), &request, Path::new("film.mkv")).unwrap();
+        assert_eq!(plan.tracks.iter().map(|t| t.index).collect::<Vec<_>>(), [0, 2, 1, 3]);
+        assert!(plan.warnings.contains(&crate::plan::ConversionWarning::SubtitlesDropped));
+        assert!(!plan.warnings.contains(&crate::plan::ConversionWarning::ExtraAudioTracksDropped));
+        let args = body(&film(), &request, "film.mkv");
+        let joined = args.join(" ");
+        assert!(joined.starts_with("-map 0:0 -map 0:2 -map 0:1 -map 0:3 "), "{joined}");
+        assert!(joined.contains(
+            "-c:s:0 mov_text -metadata:s:s:0 language=ita -metadata:s:s:0 title= -disposition:s:0 0"
+        ), "{joined}");
+        assert!(joined.contains("-metadata:s:a:0 language=eng -metadata:s:a:0 title= -disposition:a:0 default"), "{joined}");
+        assert!(joined.contains("-metadata:s:a:1 language=ita -metadata:s:a:1 title= -disposition:a:1 0"), "{joined}");
+        // MP4 holds AAC and AC-3: both copied.
+        assert!(joined.contains("-c:v copy -c:a copy"), "{joined}");
+        // DTS cannot be copied into MP4: every audio track is encoded.
+        let mut dts = film();
+        dts.audio[1].codec = "dts".into();
+        let joined = body(&dts, &request, "film.mkv").join(" ");
+        assert!(joined.contains("-c:a aac"), "{joined}");
+
+        // Matroska holds every track, subtitles as they are.
+        let mkv = ConversionRequest { target: TargetFormat::Mkv, ..request.clone() };
+        let plan = plan_conversion(&film(), &mkv, Path::new("film.mkv")).unwrap();
+        assert_eq!(plan.tracks.len(), 5);
+        assert!(plan.tracks.iter().all(|t| t.subtitle_codec.is_none()));
+        assert!(!plan.warnings.contains(&crate::plan::ConversionWarning::SubtitlesDropped));
+
+        // An audio format keeps one audio track.
+        let mp3 = ConversionRequest { target: TargetFormat::Mp3, ..request };
+        let plan = plan_conversion(&film(), &mp3, Path::new("film.mkv")).unwrap();
+        assert_eq!(plan.audio_stream, Some(2));
+        assert!(plan.warnings.contains(&crate::plan::ConversionWarning::ExtraAudioTracksDropped));
+    }
+
+    #[test]
+    fn edited_copies_of_videos_copy_their_tracks() {
+        use crate::request::MediaEdit;
+        // Matroska → Matroska without the commentary: nothing re-encoded.
+        let request = ConversionRequest {
+            media: Some(MediaEdit {
+                tracks: Some(vec![
+                    keep(0, None, true),
+                    keep(1, Some("ita"), true),
+                    keep(3, None, false),
+                ]),
+                copy: true,
+                label: Some("mod".into()),
+            }),
+            ..req(TargetFormat::Mkv, QualityPreset::Balanced)
+        };
+        let plan = plan_conversion(&film(), &request, Path::new("film.mkv")).unwrap();
+        assert!(plan.is_remux(), "{plan:?}");
+        assert_eq!(
+            crate::edit::edit_format(&film(), Path::new("film.mkv")),
+            Some(TargetFormat::Mkv)
+        );
+        // Without a video track, a video cannot be made.
+        let request = ConversionRequest {
+            media: Some(MediaEdit {
+                tracks: Some(vec![keep(1, None, true)]),
+                ..MediaEdit::default()
+            }),
+            ..req(TargetFormat::Mp4, QualityPreset::Balanced)
+        };
+        assert!(plan_conversion(&film(), &request, Path::new("film.mkv")).is_err());
     }
 }

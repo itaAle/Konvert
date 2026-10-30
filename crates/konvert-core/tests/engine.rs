@@ -570,6 +570,7 @@ async fn advanced_options_are_applied() {
         pdf: None,
         compress: None,
         edit: None,
+        media: None,
     };
     let (_, out) = convert(&bins, &tmp, &input, request).await;
     let video = out.primary_video().unwrap();
@@ -2886,4 +2887,160 @@ async fn pictures_are_turned_cropped_and_resized() {
     assert!(r > 200 && b < 60);
     let [r, _, _] = picture.get_pixel(50, 50).0;
     assert!(r < 60);
+}
+
+// --- Tracks ---------------------------------------------------------------------
+
+/// A 2 s Matroska film: video, Italian and English audio, Italian subtitles.
+fn sample_film(bins: &Binaries, tmp: &TempDir) -> PathBuf {
+    let srt = tmp.path("sottotitoli.srt");
+    std::fs::write(&srt, "1\n00:00:00,000 --> 00:00:01,500\nCiao a tutti\n").unwrap();
+    let path = tmp.path("Film è.mkv");
+    let srt = srt.to_string_lossy().into_owned();
+    generate(
+        bins,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=s=320x240:d=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=f=440:d=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=f=880:d=2",
+            "-i",
+            &srt,
+            "-map",
+            "0",
+            "-map",
+            "1",
+            "-map",
+            "2",
+            "-map",
+            "3",
+            "-c:v",
+            "libvpx",
+            "-c:a",
+            "libopus",
+            "-c:s",
+            "subrip",
+            "-metadata:s:a:0",
+            "language=ita",
+            "-metadata:s:a:1",
+            "language=eng",
+            "-metadata:s:a:1",
+            "title=Commento",
+            "-metadata:s:s:0",
+            "language=ita",
+            "-disposition:a:0",
+            "default",
+            "-disposition:a:1",
+            "0",
+        ],
+        &path,
+    );
+    path
+}
+
+#[tokio::test]
+async fn tracks_are_chosen_ordered_and_labelled() {
+    use konvert_core::probe::TrackKind;
+    use konvert_core::request::{MediaEdit, TrackChoice};
+    let bins = engine();
+    let tmp = TempDir::new("tracks");
+    let film = sample_film(&bins, &tmp);
+    let media = probe(&bins, &film).await.unwrap();
+    let kinds: Vec<_> = media.tracks.iter().map(|t| t.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            TrackKind::Video,
+            TrackKind::Audio,
+            TrackKind::Audio,
+            TrackKind::Subtitle
+        ]
+    );
+    assert_eq!(media.tracks[2].title.as_deref(), Some("Commento"));
+    let keep = |index, language: &str, default| TrackChoice {
+        index,
+        language: Some(language.into()),
+        title: None,
+        default,
+    };
+
+    // English first and by default, then Italian; subtitles as mov_text.
+    let request = ConversionRequest {
+        media: Some(MediaEdit {
+            tracks: Some(vec![
+                keep(0, "ita", true),
+                keep(2, "eng", true),
+                keep(1, "ita", false),
+                keep(3, "ita", true),
+            ]),
+            ..MediaEdit::default()
+        }),
+        ..req(TargetFormat::Mp4, QualityPreset::Balanced)
+    };
+    let (out, converted) = convert(&bins, &tmp, &film, request).await;
+    let tracks: Vec<_> = converted
+        .tracks
+        .iter()
+        .map(|t| (t.kind, t.codec.clone(), t.language.clone(), t.default))
+        .collect();
+    assert_eq!(
+        tracks,
+        [
+            (
+                TrackKind::Video,
+                "h264".to_string(),
+                Some("ita".to_string()),
+                true
+            ),
+            (
+                TrackKind::Audio,
+                "aac".to_string(),
+                Some("eng".to_string()),
+                true
+            ),
+            (
+                TrackKind::Audio,
+                "aac".to_string(),
+                Some("ita".to_string()),
+                false
+            ),
+            (
+                TrackKind::Subtitle,
+                "mov_text".to_string(),
+                Some("ita".to_string()),
+                true
+            ),
+        ],
+        "{:?}",
+        out.output
+    );
+
+    // An edited copy without the commentary: copied, named "-mod".
+    let request = ConversionRequest {
+        media: Some(MediaEdit {
+            tracks: Some(vec![
+                keep(0, "ita", true),
+                keep(1, "ita", true),
+                keep(3, "ita", false),
+            ]),
+            copy: true,
+            label: Some("mod".into()),
+        }),
+        ..req(TargetFormat::Mkv, QualityPreset::Balanced)
+    };
+    let plan = plan_conversion(&media, &request, &film).unwrap();
+    assert!(plan.is_remux());
+    let (out, copy) = convert(&bins, &tmp, &film, request).await;
+    assert!(out.output.ends_with("Film è-mod.mkv"), "{:?}", out.output);
+    let codecs: Vec<_> = copy.tracks.iter().map(|t| t.codec.as_str()).collect();
+    assert_eq!(codecs, ["vp8", "opus", "subrip"]);
+    assert!(!copy.tracks[2].default);
 }

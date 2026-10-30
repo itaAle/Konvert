@@ -11,6 +11,7 @@ import {
   canEditCopy,
   canStart,
   combines,
+  currentTracks,
   commonTargets,
   editedDocuments,
   editScope,
@@ -20,6 +21,7 @@ import {
   plannedItems,
   readyItems,
   totalEstimate,
+  trackScope,
 } from "../state/queue";
 import type { QueueController } from "../state/useQueue";
 import { AdvancedPanel } from "./AdvancedPanel";
@@ -41,6 +43,7 @@ import { PdfPanel } from "./PdfPanel";
 import { PlanFooterInfo, PlanSummary, hasStrongWarning, isRemux } from "./PlanSummary";
 import { ProtectPanel } from "./ProtectPanel";
 import { StampPanel } from "./StampPanel";
+import { TracksPanel } from "./TracksPanel";
 import { QualityPicker } from "./QualityPicker";
 import { SplitPanel } from "./SplitPanel";
 import { Button } from "./ui/Button";
@@ -124,6 +127,8 @@ export function SetupScreen({ q }: { q: QueueController }) {
   const editFormats = new Set(files.map((i) => i.file!.edit));
   const sharedEditFormat = editFormats.size === 1 ? (files[0]?.name.split(".").pop()?.toUpperCase() ?? null) : null;
   const scope = editScope(state);
+  const tracks = trackScope(state);
+  const mediaCopy = files.length > 0 && files.every((i) => i.file!.media.kind !== "image");
   const onlyFile = ready.length === 1 ? ready[0] : null;
   const loneStream = onlyFile?.file?.media.video[0];
   const loneSize = loneStream?.width && loneStream.height ? { width: loneStream.width, height: loneStream.height } : null;
@@ -215,7 +220,7 @@ export function SetupScreen({ q }: { q: QueueController }) {
             <SectionTitle>{editable ? t("edit.sameFormat") : t("compress.title")}</SectionTitle>
             <div className={compressible && editable ? "grid grid-cols-2 gap-2.5" : ""}>
               {compressible && <CompressCard selected={compressing} onSelect={q.selectCompress} format={sharedFormat} />}
-              {editable && <EditCard selected={editingCopy} onSelect={q.selectEditCopy} format={sharedEditFormat} />}
+              {editable && <EditCard selected={editingCopy} onSelect={q.selectEditCopy} format={sharedEditFormat} media={mediaCopy} />}
             </div>
           </section>
         )}
@@ -263,6 +268,18 @@ export function SetupScreen({ q }: { q: QueueController }) {
                     onChange={q.setCompression}
                     largestBytes={largest}
                     documents={documents.length > 0}
+                  />
+                </section>
+              )}
+              {tracks && (
+                <section>
+                  <SectionTitle>{t("tracks.heading")}</SectionTitle>
+                  <p className="-mt-2 mb-3 px-1 text-[13px] text-label-secondary">{t("tracks.hint")}</p>
+                  <TracksPanel
+                    tracks={tracks.file.media.tracks}
+                    value={currentTracks(state)}
+                    onChange={q.setTracks}
+                    audioOnly={tracks.audio}
                   />
                 </section>
               )}

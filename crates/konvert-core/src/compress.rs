@@ -80,6 +80,7 @@ pub(crate) fn plan(
             document: None,
             remove_location: false,
             compress: Some(options.clone()),
+            tracks: Vec::new(),
             warnings: if options.pages_as_pictures && format == TargetFormat::Pdf {
                 vec![ConversionWarning::PdfPagesAsPictures]
             } else {
@@ -765,6 +766,7 @@ mod tests {
             video,
             cover_art: None,
             subtitle_streams: 0,
+            tracks: Vec::new(),
             picture: None,
             has_tags: false,
             has_location: false,

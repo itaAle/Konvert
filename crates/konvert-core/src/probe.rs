@@ -82,6 +82,44 @@ impl CoverArt {
     }
 }
 
+/// Kind of a track of an audio or video file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum TrackKind {
+    Video,
+    Audio,
+    Subtitle,
+}
+
+/// A track of an audio or video file, as the file describes it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Track {
+    pub index: u32,
+    pub kind: TrackKind,
+    pub codec: String,
+    /// ISO 639-2 language code (`ita`, `eng`), if the file says.
+    pub language: Option<String>,
+    pub title: Option<String>,
+    /// Played or shown by default.
+    pub default: bool,
+    /// Audio channels.
+    pub channels: Option<u32>,
+    /// Subtitles drawn as pictures (DVD, Blu-ray, DVB): they cannot become text.
+    pub bitmap: bool,
+}
+
+/// Subtitle codecs drawn as pictures.
+const BITMAP_SUBTITLES: [&str; 5] = [
+    "dvd_subtitle",
+    "hdmv_pgs_subtitle",
+    "dvb_subtitle",
+    "xsub",
+    "dvb_teletext",
+];
+
 /// Details of a still picture ([`MediaKind::Image`]).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -119,6 +157,10 @@ pub struct MediaInfo {
     /// Embedded cover picture (e.g. album art in MP3/M4A/FLAC).
     pub cover_art: Option<CoverArt>,
     pub subtitle_streams: u32,
+    /// Every video, audio and subtitle track, in file order (cover pictures
+    /// left out); empty for pictures and documents.
+    #[serde(default)]
+    pub tracks: Vec<Track>,
     /// Picture details, for [`MediaKind::Image`] only.
     #[serde(default)]
     pub picture: Option<PictureInfo>,
@@ -280,9 +322,36 @@ pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
     let mut video = Vec::new();
     let mut cover_art = None;
     let mut subtitle_streams = 0;
+    let mut tracks = Vec::new();
 
     for s in raw.streams.iter().cloned() {
         let codec = s.codec_name.clone().unwrap_or_default();
+        let kind = match s.codec_type.as_deref() {
+            Some("video") if !s.is_attached_picture() => Some(TrackKind::Video),
+            Some("audio") => Some(TrackKind::Audio),
+            Some("subtitle") => Some(TrackKind::Subtitle),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            let tag = |key: &str| {
+                s.tags
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(key))
+                    .map(|(_, v)| v.trim().to_string())
+                    .filter(|v| !v.is_empty() && v != "und")
+            };
+            tracks.push(Track {
+                index: s.index,
+                kind,
+                codec: codec.clone(),
+                language: tag("language"),
+                title: tag("title")
+                    .or_else(|| tag("handler_name").filter(|h| !is_generic_handler(h))),
+                default: s.is_default(),
+                channels: s.channels.filter(|_| kind == TrackKind::Audio),
+                bitmap: kind == TrackKind::Subtitle && BITMAP_SUBTITLES.contains(&codec.as_str()),
+            });
+        }
         match s.codec_type.as_deref() {
             Some("audio") => audio.push(AudioStream {
                 index: s.index,
@@ -366,12 +435,28 @@ pub fn parse_ffprobe_json(json: &[u8]) -> Result<MediaInfo, CoreError> {
         video,
         cover_art,
         subtitle_streams,
+        tracks,
         picture: None,
         has_tags,
         has_location,
         document: None,
         text: None,
     })
+}
+
+/// Names muxers give every track (`SoundHandler`, `VideoHandler`): not titles.
+fn is_generic_handler(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    [
+        "handler",
+        "core media",
+        "mainconcept",
+        "gpac",
+        "l-smash",
+        "apple",
+    ]
+    .iter()
+    .any(|w| lower.contains(w))
 }
 
 /// Location tags of videos (`location`, `location-eng`, Apple's ISO 6709 key).
@@ -512,6 +597,7 @@ fn parse_picture(
         video: vec![stream],
         cover_art: None,
         subtitle_streams: 0,
+        tracks: Vec::new(),
         picture: Some(picture),
         has_tags: false,
         has_location: false,

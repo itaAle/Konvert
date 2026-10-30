@@ -71,7 +71,18 @@ const CODEC_NAMES: Record<string, string> = {
   wmav2: "WMA",
   ac3: "AC-3",
   eac3: "E-AC-3",
+  dts: "DTS",
+  truehd: "TrueHD",
+  mpeg2video: "MPEG-2",
   gif: "GIF",
+  subrip: "SRT",
+  ass: "ASS",
+  ssa: "SSA",
+  webvtt: "WebVTT",
+  mov_text: "MP4 Timed Text",
+  dvd_subtitle: "VobSub",
+  hdmv_pgs_subtitle: "PGS",
+  dvb_subtitle: "DVB",
 };
 
 export function codecName(codec: string): string {

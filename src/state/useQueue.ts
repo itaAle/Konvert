@@ -26,6 +26,7 @@ import {
   totalEstimate,
   type QueueItem,
 } from "./queue";
+import type { TrackChoice } from "../bindings/TrackChoice";
 import type { EditState } from "./edit";
 
 const ANALYSIS_CONCURRENCY = 3;
@@ -257,6 +258,7 @@ export function useQueue() {
     setCompression: (compression: CompressOptions) => dispatch({ type: "setCompression", compression }),
     selectEditCopy: () => dispatch({ type: "selectEditCopy" }),
     setEdit: (edit: EditState) => dispatch({ type: "setEdit", edit }),
+    setTracks: (tracks: TrackChoice[] | null) => dispatch({ type: "setTracks", tracks }),
     selectPreset: (preset: QualityPreset) => dispatch({ type: "selectPreset", preset }),
     setAdvanced: (advanced: AdvancedOptions) => dispatch({ type: "setAdvanced", advanced }),
     setFrames: (frames: FrameOptions) => dispatch({ type: "setFrames", frames }),

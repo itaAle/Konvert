@@ -200,6 +200,7 @@ pub fn probe_with(path: &Path, password: Option<&Secret>) -> Result<MediaInfo, C
         video: Vec::new(),
         cover_art: None,
         subtitle_streams: 0,
+        tracks: Vec::new(),
         picture: None,
         has_tags: false,
         has_location: false,
