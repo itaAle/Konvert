@@ -3033,6 +3033,7 @@ async fn tracks_are_chosen_ordered_and_labelled() {
                 keep(3, "ita", false),
             ]),
             trim: None,
+            audio_file: None,
             copy: true,
             label: Some("mod".into()),
         }),
@@ -3180,4 +3181,80 @@ async fn tracks_are_extracted_into_files() {
         .unwrap();
     assert!(video.audio.is_empty() && video.video.len() == 1);
     assert_eq!(files_in(ws.dir()), [".lock"], "temporary files left behind");
+}
+
+#[tokio::test]
+async fn audio_of_another_file_is_added_or_replaces() {
+    use konvert_core::request::{AudioFile, MediaEdit};
+    let bins = engine();
+    let tmp = TempDir::new("added audio");
+    let input = tmp.path("Clip.mp4");
+    generate(
+        &bins,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=s=320x240:r=25:d=4",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=f=440:d=4",
+            "-c:v",
+            "libopenh264",
+            "-c:a",
+            "aac",
+            "-shortest",
+        ],
+        &input,
+    );
+    // Longer than the video: the result still lasts 4 s.
+    let music = tmp.path("Musica.flac");
+    generate(&bins, &["-f", "lavfi", "-i", "sine=f=880:d=10"], &music);
+    let with = |replace, copy| ConversionRequest {
+        media: Some(MediaEdit {
+            audio_file: Some(AudioFile {
+                path: music.clone(),
+                codec: "flac".into(),
+                channels: Some(1),
+                replace,
+                offset_ms: 1000,
+                language: Some("ita".into()),
+            }),
+            copy,
+            label: copy.then(|| "mod".into()),
+            ..MediaEdit::default()
+        }),
+        ..req(TargetFormat::Mp4, QualityPreset::Balanced)
+    };
+
+    // Added after the video's own audio.
+    let (_, media) = convert(&bins, &tmp, &input, with(false, false)).await;
+    assert_eq!(media.audio.len(), 2);
+    let added = media
+        .tracks
+        .iter()
+        .filter(|t| t.language.as_deref() == Some("ita"))
+        .count();
+    assert_eq!(added, 1, "{:?}", media.tracks);
+    let length = media.duration_secs.unwrap();
+    assert!((3.8..=4.3).contains(&length), "{length}");
+
+    // Instead of it, in an edited copy whose video is copied.
+    let (out, media) = convert(&bins, &tmp, &input, with(true, true)).await;
+    assert!(out.output.ends_with("Clip-mod.mp4"), "{:?}", out.output);
+    assert_eq!(media.audio.len(), 1);
+    assert_eq!(media.video[0].codec, "h264");
+    assert_eq!(
+        media
+            .tracks
+            .iter()
+            .find(|t| t.kind == konvert_core::probe::TrackKind::Audio)
+            .unwrap()
+            .language
+            .as_deref(),
+        Some("ita")
+    );
+    let length = media.duration_secs.unwrap();
+    assert!((3.8..=4.3).contains(&length), "{length}");
 }

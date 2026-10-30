@@ -21,6 +21,7 @@ const COMMANDS: &[&str] = &[
     "pdf_thumbnails",
     "picture_thumbnail",
     "video_frame",
+    "pick_audio_file",
     "audio_waveform",
     "start_conversion",
     "start_combined",

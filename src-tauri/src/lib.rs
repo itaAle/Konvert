@@ -84,6 +84,7 @@ pub fn run() {
             commands::pdf_thumbnails,
             commands::picture_thumbnail,
             commands::video_frame,
+            commands::pick_audio_file,
             commands::audio_waveform,
             commands::start_conversion,
             commands::start_combined,

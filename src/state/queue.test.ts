@@ -6,6 +6,7 @@ import {
   currentTracks,
   trackScope,
   trimScope,
+  audioFileScope,
   canEditCopy,
   canExtract,
   editScope,
@@ -703,6 +704,7 @@ describe("queue state machine", () => {
         { index: 3, language: "ita", title: null, default: false },
       ],
       trim: null,
+      audioFile: null,
       copy: false,
       label: null,
     });
@@ -733,7 +735,7 @@ describe("queue state machine", () => {
     let s = run(initialQueue(), { type: "add", paths: ["clip.mp4"] }, { type: "analyzed", key: 1, file: clip }, { type: "selectTarget", target: "mkv" });
     expect(trimScope(s)).toMatchObject({ duration: 60, video: true });
     s = reduce(s, { type: "setTrim", trim: { start: 5, end: 20, precise: null } });
-    expect(requestOf(s)?.media).toEqual({ tracks: null, trim: { startSecs: 5, endSecs: 20, precise: true }, copy: false, label: null });
+    expect(requestOf(s)?.media).toEqual({ tracks: null, trim: { startSecs: 5, endSecs: 20, precise: true }, audioFile: null, copy: false, label: null });
     s = reduce(s, { type: "selectEditCopy" });
     expect(requestFor(s, s.items[0])?.media?.trim).toEqual({ startSecs: 5, endSecs: 20, precise: false });
     s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("mp4", 50) });
@@ -745,6 +747,30 @@ describe("queue state machine", () => {
     // Pictures taken from the video have their own moment.
     s = reduce(s, { type: "selectTarget", target: "jpg" });
     expect(trimScope(s)).toBeNull();
+  });
+
+  it("adds the audio of another file to a lone video", () => {
+    const clip = file("clip.mp4", "videoWithAudio", 60);
+    clip.edit = "mp4";
+    const music = { path: "music.flac", codec: "flac", channels: 2, replace: false, offsetMs: 0, language: null };
+    let s = run(initialQueue(), { type: "add", paths: ["clip.mp4"] }, { type: "analyzed", key: 1, file: clip }, { type: "selectTarget", target: "mkv" });
+    expect(audioFileScope(s)).toBe(true);
+    s = reduce(s, { type: "setAudioFile", audioFile: music });
+    expect(requestOf(s)?.media).toEqual({ tracks: null, trim: null, audioFile: music, copy: false, label: null });
+    // An edited copy with only the added audio can start.
+    s = reduce(s, { type: "selectEditCopy" });
+    expect(requestFor(s, s.items[0])?.media).toMatchObject({ audioFile: music, copy: true });
+    s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("mp4", 50) });
+    expect(canStart(s)).toBe(true);
+    // Not into an audio format or pictures.
+    s = reduce(s, { type: "selectTarget", target: "mp3" });
+    expect(audioFileScope(s)).toBe(false);
+    expect(requestOf(s)?.media ?? null).toBeNull();
+    s = reduce(s, { type: "selectTarget", target: "jpg" });
+    expect(audioFileScope(s)).toBe(false);
+    // Another file: the choice is forgotten.
+    s = run(s, { type: "add", paths: ["b.mp4"] });
+    expect(s.audioFile).toBeNull();
   });
 
   it("extracts tracks of a lone file", () => {

@@ -12,8 +12,8 @@ use std::path::Path;
 use crate::error::CoreError;
 use crate::formats::{self, AudioCodec, FormatSpec, ImageCodec, VideoCodec};
 use crate::plan::{
-    AudioEncode, AudioPlan, AudioRate, ConversionPlan, FramePlan, ImagePlan, ImageQuality,
-    VideoEncode, VideoPlan, VideoRate, plan_conversion,
+    AddedAudio, AudioEncode, AudioPlan, AudioRate, ConversionPlan, FramePlan, ImagePlan,
+    ImageQuality, VideoEncode, VideoPlan, VideoRate, plan_conversion,
 };
 use crate::probe::{MediaInfo, TrackKind};
 use crate::request::{ConversionRequest, FrameMode};
@@ -94,6 +94,18 @@ pub fn build_from_plan_with(
     }
     a.push(&["-i"]);
     a.push_os(file_url(input));
+    if let Some(added) = &plan.added_audio {
+        // Aligned with the output: skipped into when it starts earlier,
+        // delayed when it starts later.
+        a.push(&["-protocol_whitelist", "file"]);
+        if added.delay_secs < 0.0 {
+            a.push(&["-ss", &format_number(-added.delay_secs)]);
+        } else if added.delay_secs > 0.0 {
+            a.push(&["-itsoffset", &format_number(added.delay_secs)]);
+        }
+        a.push(&["-i"]);
+        a.push_os(file_url(&added.path));
+    }
     if let Some(comment) = cover_comment {
         a.push(&["-protocol_whitelist", "file", "-f", "ffmetadata", "-i"]);
         a.push_os(file_url(comment));
@@ -182,10 +194,18 @@ fn media_args(a: &mut Args, plan: &ConversionPlan, spec: &FormatSpec, cover_comm
     }
 
     track_args(a, plan);
-    if let Some((_, length)) = plan.trim {
-        a.push(&["-t", &format_number(length)]);
-        // Copied streams starting before zero would confuse players.
-        a.push(&["-avoid_negative_ts", "make_zero"]);
+    if let Some(added) = &plan.added_audio {
+        added_audio_args(a, plan, added, spec);
+    }
+    match (plan.trim, &plan.added_audio) {
+        (Some((_, length)), _) => {
+            a.push(&["-t", &format_number(length)]);
+            // Copied streams starting before zero would confuse players.
+            a.push(&["-avoid_negative_ts", "make_zero"]);
+        }
+        // Never longer than the video because of the added audio.
+        (None, Some(_)) => a.push(&["-shortest"]),
+        _ => {}
     }
 
     // Cover art is only planned for audio outputs, so `v:0` is the picture.
@@ -284,6 +304,47 @@ pub fn waveform_args(input: &Path, width: u32, height: u32, output: &Path) -> Ve
     ]);
     a.push_os(file_url(output));
     a.0
+}
+
+/// The added audio track: mapped after the others, with its own codec
+/// options (numbered after the video's audio tracks) and language; the
+/// default track when it replaces the video's audio.
+fn added_audio_args(a: &mut Args, plan: &ConversionPlan, added: &AddedAudio, spec: &FormatSpec) {
+    let before = match (&plan.audio, plan.tracks.is_empty()) {
+        (None, _) => 0,
+        (Some(_), true) => 1,
+        (Some(_), false) => plan
+            .tracks
+            .iter()
+            .filter(|t| t.kind == TrackKind::Audio)
+            .count(),
+    };
+    a.push(&["-map", "1:a:0"]);
+    let mut own = Args::default();
+    match &added.audio {
+        AudioPlan::Copy { .. } => own.push(&["-c:a", "copy"]),
+        AudioPlan::Encode(enc) => audio_args(&mut own, enc, spec),
+    }
+    // Every option of this track only: `-c:a` → `-c:a:N`, `-ar` → `-ar:a:N`.
+    for item in own.0 {
+        let text = item.to_string_lossy();
+        if text.starts_with('-') {
+            let specifier = if text.ends_with(":a") {
+                format!("{text}:{before}")
+            } else {
+                format!("{text}:a:{before}")
+            };
+            a.push(&[&specifier]);
+        } else {
+            a.push_os(item);
+        }
+    }
+    a.push(&[
+        &format!("-metadata:s:a:{before}"),
+        &format!("language={}", added.language.as_deref().unwrap_or("")),
+        &format!("-disposition:a:{before}"),
+        if added.replace { "default" } else { "0" },
+    ]);
 }
 
 /// Subtitle codecs, then the language, title and default flag of each track
@@ -1421,6 +1482,7 @@ mod tests {
                     keep(3, None, false),
                 ]),
                 trim: None,
+                audio_file: None,
                 copy: true,
                 label: Some("mod".into()),
             }),
@@ -1507,6 +1569,80 @@ mod tests {
         .bytes;
         let part = plan.estimate.unwrap().bytes;
         assert!(part * 20 < whole, "{part} vs {whole}");
+    }
+
+    #[test]
+    fn audio_of_another_file_is_added_or_replaces() {
+        use crate::request::{AudioFile, MediaEdit, Trim};
+        let with = |replace, offset_ms, trim: Option<Trim>, target| ConversionRequest {
+            media: Some(MediaEdit {
+                audio_file: Some(AudioFile {
+                    path: "music.flac".into(),
+                    codec: "flac".into(),
+                    channels: Some(2),
+                    replace,
+                    offset_ms,
+                    language: Some("ita".into()),
+                }),
+                trim,
+                ..MediaEdit::default()
+            }),
+            ..req(target, QualityPreset::Balanced)
+        };
+        let args = |request: &ConversionRequest| {
+            build_command(&mp4(), request, Path::new("a.mp4"), Path::new("o.mp4"))
+                .unwrap()
+                .args_lossy()
+                .join(" ")
+        };
+        // Added half a second later, after the video's own audio, encoded for MP4.
+        let request = with(false, 500, None, TargetFormat::Mp4);
+        let plan = plan_conversion(&mp4(), &request, Path::new("a.mp4")).unwrap();
+        let added = plan.added_audio.as_ref().unwrap();
+        assert_eq!(added.delay_secs, 0.5);
+        assert!(matches!(added.audio, AudioPlan::Encode(_)));
+        assert!(plan.audio.is_some());
+        let a = args(&request);
+        assert!(a.contains("-itsoffset 0.5 -i file:music.flac"), "{a}");
+        assert!(a.contains("-map 1:a:0 -c:a:1 aac"), "{a}");
+        assert!(
+            a.contains("-metadata:s:a:1 language=ita -disposition:a:1 0"),
+            "{a}"
+        );
+        assert!(a.contains("-shortest"), "{a}");
+        // Replacing, with the first two seconds trimmed: the music is
+        // skipped into by 1.5 s and becomes the only (default) audio.
+        let trim = Trim {
+            start_secs: 2.0,
+            end_secs: Some(10.0),
+            precise: true,
+        };
+        let request = with(true, 500, Some(trim), TargetFormat::Mp4);
+        let plan = plan_conversion(&mp4(), &request, Path::new("a.mp4")).unwrap();
+        assert!(plan.audio.is_none() && plan.audio_stream.is_none());
+        let a = args(&request);
+        assert!(a.contains("-ss 1.5 -i file:music.flac"), "{a}");
+        assert!(!a.contains("-map 0:a"), "{a}");
+        assert!(a.contains("-map 1:a:0 -c:a:0 aac"), "{a}");
+        assert!(a.contains("-disposition:a:0 default"), "{a}");
+        assert!(a.contains("-t 8") && !a.contains("-shortest"), "{a}");
+        // Audio outputs and moves of more than an hour are refused.
+        assert!(
+            plan_conversion(
+                &mp4(),
+                &with(false, 0, None, TargetFormat::Mp3),
+                Path::new("a.mp4")
+            )
+            .is_err()
+        );
+        assert!(
+            plan_conversion(
+                &mp4(),
+                &with(false, 3_600_001, None, TargetFormat::Mp4),
+                Path::new("a.mp4")
+            )
+            .is_err()
+        );
     }
 
     #[test]

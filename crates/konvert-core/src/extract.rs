@@ -113,6 +113,7 @@ pub(crate) fn plan(
                     default: true,
                 }]),
                 trim,
+                audio_file: None,
                 // Copied when it can be: never re-encoded only because the
                 // container is the same.
                 copy: true,

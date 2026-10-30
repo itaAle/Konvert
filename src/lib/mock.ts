@@ -508,6 +508,10 @@ export const mockBackend: Backend = {
     const shown = analysis(path).media.video[0];
     return mockPhoto(path, shown?.width ?? 3, shown?.height ?? 4, size);
   },
+  async pickAudioFile() {
+    await sleep(150);
+    return "C:\\Musica\\Colonna sonora.mp3";
+  },
   async videoFrame(_path, atSecs, size) {
     await sleep(150);
     // A colored card with the time on it.

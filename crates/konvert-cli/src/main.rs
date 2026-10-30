@@ -21,6 +21,8 @@
 //!          --resize 50% | 1920x1080 | 1920x | x1080 | 1920x1080! | long:1920  --enlarge
 //!          --edit-copy   (an edited copy in the same format, name-mod.ext: no --to needed)
 //!          --tracks "0, 2:eng*, 1:ita, 3"   (tracks kept in this order: index, language, * default)
+//!          --audio-file FILE  --replace-audio  --audio-offset MS  --audio-language ita
+//!                   (videos: the audio of another file added, or instead of theirs)
 //!          --page-size a4|letter|fit  --orientation auto|portrait|landscape
 //!          --margin none|small|normal   (pictures to PDF)
 //!          --dpi N  --pages "1-3, 5"   (PDF to pictures)
@@ -44,7 +46,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use konvert_core::request::{CropRect, MediaEdit, PictureEdit, Resize, TrackChoice};
+use konvert_core::request::{AudioFile, CropRect, MediaEdit, PictureEdit, Resize, TrackChoice};
 use konvert_core::{
     AdvancedOptions, Binaries, ChannelLayout, CombinedJob, CompressLevel, CompressOptions,
     ConversionJob, ConversionRequest, CoreError, FrameMode, FrameOptions, MediaInfo, PageMargin,
@@ -73,6 +75,8 @@ OPTIONS: --preset max|balanced|small  --height N  --fps N
          --resize 50% | 1920x1080 | 1920x | x1080 | 1920x1080! | long:1920  --enlarge
          --edit-copy   (an edited copy in the same format, name-mod.ext: no --to needed)
          --tracks \"0, 2:eng*, 1:ita, 3\"   (tracks kept in this order: index, language, * default)
+         --audio-file FILE  --replace-audio  --audio-offset MS  --audio-language ita
+                  (videos: the audio of another file added, or instead of theirs)
          --page-size a4|letter|fit  --orientation auto|portrait|landscape
          --margin none|small|normal   (pictures to PDF)
          --dpi N  --pages \"1-3, 5\"   (PDF to pictures)
@@ -186,6 +190,42 @@ fn rotate_pages(request: &mut ConversionRequest, media: &MediaInfo, rotate: Opti
     for page in layout {
         page.rotation = (page.rotation + turn) % 360;
     }
+}
+
+/// The audio added to a video, created by the first of its options.
+fn added_audio(media: &mut Option<MediaEdit>) -> &mut AudioFile {
+    media
+        .get_or_insert_default()
+        .audio_file
+        .get_or_insert_with(|| AudioFile {
+            path: PathBuf::new(),
+            codec: String::new(),
+            channels: None,
+            replace: false,
+            offset_ms: 0,
+            language: None,
+        })
+}
+
+/// The codec and channels of the added audio, as the app finds them.
+async fn analyse_added_audio(
+    bins: &Binaries,
+    request: &mut ConversionRequest,
+) -> Result<(), CoreError> {
+    let Some(file) = request.media.as_mut().and_then(|m| m.audio_file.as_mut()) else {
+        return Ok(());
+    };
+    let audio = probe(bins, &file.path)
+        .await?
+        .audio
+        .into_iter()
+        .next()
+        .ok_or_else(|| CoreError::UnsupportedConversion {
+            details: "--audio-file has no audio".into(),
+        })?;
+    file.codec = audio.codec;
+    file.channels = audio.channels;
+    Ok(())
 }
 
 /// A smaller copy, or an edited one, is written in the file's own format.
@@ -461,6 +501,18 @@ fn parse_args() -> Result<Cli, String> {
                     .collect::<Result<Vec<_>, String>>()?;
                 media.get_or_insert_default().tracks = Some(tracks);
             }
+            Some("--audio-file") => {
+                added_audio(&mut media).path = value("--audio-file")?.into();
+            }
+            Some("--replace-audio") => added_audio(&mut media).replace = true,
+            Some("--audio-offset") => {
+                added_audio(&mut media).offset_ms =
+                    number("--audio-offset", value("--audio-offset")?)?
+            }
+            Some("--audio-language") => {
+                added_audio(&mut media).language =
+                    value("--audio-language")?.to_str().map(String::from)
+            }
             Some("--mono") => advanced.channels = Some(ChannelLayout::Mono),
             Some("--stereo") => advanced.channels = Some(ChannelLayout::Stereo),
             Some("-h" | "--help") => return Err(String::new()),
@@ -577,12 +629,14 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
             let media = probe(&bins, &input).await?;
             rotate_pages(&mut request, &media, cli.rotate);
             compressed_format(&mut request, &media, &input)?;
+            analyse_added_audio(&bins, &mut request).await?;
             print_json(&plan_conversion(&media, &request, &input)?);
         }
         Action::Convert(input, mut request, out_dir) => {
             let media = probe(&bins, &input).await?;
             rotate_pages(&mut request, &media, cli.rotate);
             compressed_format(&mut request, &media, &input)?;
+            analyse_added_audio(&bins, &mut request).await?;
             let plan = plan_conversion(&media, &request, &input)?;
             for warning in &plan.warnings {
                 eprintln!("warning: {warning:?}");

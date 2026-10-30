@@ -547,6 +547,31 @@ pub async fn pick_picture(app: AppHandle, title: String, filter_name: String) ->
     rx.await.ok().flatten()?.into_path().ok()
 }
 
+/// Opens the native picker for the audio added to a video (any audio or
+/// video file whose audio is used); `None` if cancelled.
+#[tauri::command]
+pub async fn pick_audio_file(
+    app: AppHandle,
+    title: String,
+    filter_name: String,
+) -> Option<PathBuf> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title(title)
+        .add_filter(filter_name, AUDIO_SOURCE_EXTENSIONS)
+        .pick_file(move |picked| {
+            let _ = tx.send(picked);
+        });
+    rx.await.ok().flatten()?.into_path().ok()
+}
+
+/// Files whose audio can be added to a video.
+const AUDIO_SOURCE_EXTENSIONS: &[&str] = &[
+    "mp3", "m4a", "aac", "wav", "flac", "ogg", "oga", "opus", "wma", "aif", "aiff", "ac3", "eac3",
+    "mka", "caf", "mp2", "mp4", "mov", "mkv", "webm", "avi",
+];
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;

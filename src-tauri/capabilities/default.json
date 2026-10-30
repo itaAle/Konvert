@@ -25,6 +25,7 @@
     "allow-pdf-thumbnails",
     "allow-picture-thumbnail",
     "allow-video-frame",
+    "allow-pick-audio-file",
     "allow-audio-waveform",
     "allow-start-conversion",
     "allow-start-combined",

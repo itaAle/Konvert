@@ -3,6 +3,8 @@
 //! These types are the whole contract between the UI and the core: the UI never
 //! sends FFmpeg arguments, only a [`ConversionRequest`].
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -531,6 +533,24 @@ pub struct Trim {
     pub precise: bool,
 }
 
+/// The audio of another file, added to a video or replacing its audio.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AudioFile {
+    /// The file whose first audio track is used.
+    pub path: PathBuf,
+    /// Its codec and channels, as the analysis of the file found them.
+    pub codec: String,
+    pub channels: Option<u32>,
+    /// The video's audio tracks go (otherwise the track is added after them).
+    pub replace: bool,
+    /// Milliseconds the audio starts after the video (negative: before).
+    pub offset_ms: i64,
+    /// ISO 639-2 language of the track.
+    pub language: Option<String>,
+}
+
 /// Changes to an audio or video file.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
@@ -542,6 +562,9 @@ pub struct MediaEdit {
     /// Only a part of the file is kept.
     #[ts(optional = nullable)]
     pub trim: Option<Trim>,
+    /// Videos only: the audio of another file, added or replacing theirs.
+    #[ts(optional = nullable)]
+    pub audio_file: Option<AudioFile>,
     /// An edited copy in the file's own format ("Modifica"): `target` is
     /// that format, named `name-<label>.ext`; streams are copied when they can be.
     pub copy: bool,

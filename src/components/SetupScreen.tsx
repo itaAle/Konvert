@@ -11,6 +11,7 @@ import {
   canEditCopy,
   canExtract,
   canStart,
+  audioFileScope,
   combines,
   currentTracks,
   commonTargets,
@@ -27,6 +28,7 @@ import {
 } from "../state/queue";
 import type { QueueController } from "../state/useQueue";
 import { AdvancedPanel } from "./AdvancedPanel";
+import { AudioFilePanel } from "./AudioFilePanel";
 import { CompressCard } from "./CompressCard";
 import { CompressPanel } from "./CompressPanel";
 import { CropEditor } from "./CropEditor";
@@ -316,6 +318,12 @@ export function SetupScreen({ q }: { q: QueueController }) {
                     onChange={q.setTracks}
                     audioOnly={tracks.audio}
                   />
+                </section>
+              )}
+              {audioFileScope(state) && (
+                <section>
+                  <SectionTitle>{t("audioFile.title")}</SectionTitle>
+                  <AudioFilePanel value={state.audioFile} onChange={q.setAudioFile} />
                 </section>
               )}
               {scope && (scope.resize || scope.turn) && (

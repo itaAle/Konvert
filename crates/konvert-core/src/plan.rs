@@ -320,6 +320,11 @@ pub struct ConversionPlan {
     /// `video_stream` and `audio_stream` only).
     #[serde(default)]
     pub tracks: Vec<PlannedTrack>,
+    /// The audio of another file, added after the audio tracks (or instead
+    /// of them).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub added_audio: Option<AddedAudio>,
     /// Tracks saved as files of their own, in order.
     #[serde(default)]
     pub extract: Vec<PlannedExtract>,
@@ -328,6 +333,21 @@ pub struct ConversionPlan {
     pub trim: Option<(f64, f64)>,
     pub warnings: Vec<ConversionWarning>,
     pub estimate: Option<SizeEstimate>,
+}
+
+/// The audio of another file in the output.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AddedAudio {
+    pub path: std::path::PathBuf,
+    /// Seconds the audio file starts at in the output's time (positive:
+    /// the audio begins later), the part trimmed away included.
+    pub delay_secs: f64,
+    /// The video's audio tracks are left out.
+    pub replace: bool,
+    pub audio: AudioPlan,
+    pub language: Option<String>,
 }
 
 /// A track written into the output, with its details.
@@ -391,6 +411,7 @@ pub fn plan_conversion(
             tracks: Vec::new(),
             trim: None,
             extract: files,
+            added_audio: None,
             warnings: Vec::new(),
             estimate: estimate.map(|(bytes, approximate)| SizeEstimate { bytes, approximate }),
         }
@@ -583,6 +604,43 @@ pub(crate) fn plan_offered(
         })
         .map(|c| c.index);
 
+    // The audio of another file (videos only).
+    let added_audio = match request.media.as_ref().and_then(|m| m.audio_file.as_ref()) {
+        Some(file) if video.is_some() && !animation => {
+            if file.offset_ms.abs() > 3_600_000 {
+                return Err(unsupported("the audio may move by an hour at most".into()));
+            }
+            let source = AudioStream {
+                index: 0,
+                codec: file.codec.clone(),
+                sample_rate: None,
+                channels: file.channels,
+                bit_rate: None,
+                bit_depth: None,
+            };
+            let start = trim.map_or(0.0, |(start, _)| start);
+            Some(AddedAudio {
+                path: file.path.clone(),
+                delay_secs: file.offset_ms as f64 / 1000.0 - start,
+                replace: file.replace,
+                audio: plan_audio(spec, &source, request, force_encode)?,
+                language: file.language.clone().filter(|l| !l.trim().is_empty()),
+            })
+        }
+        Some(_) => return Err(unsupported("audio can be added to videos only".into())),
+        None => None,
+    };
+    // The video's own audio goes when the added one replaces it.
+    let replaced = added_audio.as_ref().is_some_and(|a| a.replace);
+    let (audio_stream, audio) = if replaced {
+        (None, None)
+    } else {
+        (audio_stream, audio)
+    };
+    if replaced {
+        tracks.retain(|t| t.kind != TrackKind::Audio);
+    }
+
     let mut plan = ConversionPlan {
         target: request.target,
         video_stream: video_stream.map(|v| v.index),
@@ -597,6 +655,7 @@ pub(crate) fn plan_offered(
         compress: None,
         tracks,
         trim,
+        added_audio,
         extract: Vec::new(),
         warnings: Vec::new(),
         estimate: None,
@@ -807,6 +866,7 @@ fn plan_document(
         tracks: Vec::new(),
         trim: None,
         extract: Vec::new(),
+        added_audio: None,
         warnings,
         estimate: None,
     };
@@ -938,6 +998,7 @@ fn plan_document(
                 tracks: Vec::new(),
                 trim: None,
                 extract: Vec::new(),
+                added_audio: None,
                 warnings,
                 // The pages are copied as they are, with what they use.
                 estimate: media.size_bytes.map(|bytes| SizeEstimate {
@@ -1230,6 +1291,7 @@ fn plan_still(
         tracks: Vec::new(),
         trim: None,
         extract: Vec::new(),
+        added_audio: None,
         warnings,
         estimate: None,
     };

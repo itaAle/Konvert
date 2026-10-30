@@ -43,6 +43,8 @@ export interface Backend {
   pdfThumbnails(path: string, pages: number[], size: number): Promise<Thumbnail[]>;
   /** Native dialog choosing a PNG or JPEG picture (a watermark). */
   pickPicture(title: string, filterName: string): Promise<string | null>;
+  /** The native picker for the audio added to a video. */
+  pickAudioFile(title: string, filterName: string): Promise<string | null>;
   /** A small picture of a photo (longest side `size` pixels at most) as a `data:` URL, drawn locally. */
   pictureThumbnail(path: string, size: number): Promise<string>;
   /** A frame of a video at `atSecs`, at most `size` pixels wide, as a PNG `data:` URL. */
@@ -105,6 +107,7 @@ const tauriBackend: Backend = {
   videoFrame: (path, atSecs, size) => call("video_frame", { path, atSecs, size }),
   audioWaveform: (path, width, height) => call("audio_waveform", { path, width, height }),
   pickPicture: (title, filterName) => call("pick_picture", { title, filterName }),
+  pickAudioFile: (title, filterName) => call("pick_audio_file", { title, filterName }),
   startConversion: (path, request) => call("start_conversion", { path, request }),
   startCombined: (paths, request) => call("start_combined", { paths, request }),
   cancelConversion: (jobId) => call("cancel_conversion", { jobId }),
