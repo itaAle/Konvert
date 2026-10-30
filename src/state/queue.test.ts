@@ -3,6 +3,9 @@ import {
   allWarnings,
   arrangesPages,
   canCompress,
+  canEditCopy,
+  editScope,
+  EDIT_LABEL,
   canStart,
   combines,
   commonTargets,
@@ -89,6 +92,8 @@ function file(name: string, kind: "audio" | "videoWithAudio" | "image" | "docume
     targets,
     // Like the core: every file keeps its own format, except HEIC photos.
     compress: kind === "document" ? "pdf" : kind === "text" ? "docx" : name.endsWith(".heic") ? null : (name.split(".").pop() as TargetFormat),
+    // An edited copy: pictures in their own format, except HEIC photos.
+    edit: kind !== "image" || name.endsWith(".heic") ? null : (name.split(".").pop() as TargetFormat),
   };
 }
 
@@ -257,6 +262,7 @@ describe("queue state machine", () => {
       frames: DEFAULT_FRAMES,
       removeLocation: false,
       pdf: DEFAULT_PDF,
+      edit: null,
     });
   });
 
@@ -611,6 +617,74 @@ describe("queue state machine", () => {
     s = reduce(s, { type: "selectTarget", target: "pdf" });
     expect(s.compress).toBe(false);
     expect(requestFor(s, s.items[0])?.compress).toBeUndefined();
+  });
+
+  it("makes edited copies of pictures in their own format", () => {
+    let s = run(initialQueue(), { type: "add", paths: ["a.jpg", "b.png"] });
+    s = run(
+      s,
+      { type: "analyzed", key: 1, file: file("a.jpg", "image", null) },
+      { type: "analyzed", key: 2, file: file("b.png", "image", null) },
+    );
+    expect(canEditCopy(s.items)).toBe(true);
+    s = reduce(s, { type: "selectEditCopy" });
+    expect(s).toMatchObject({ editCopy: true, compress: false, target: null });
+    // Several pictures: turned and resized, never cropped.
+    expect(editScope(s)).toEqual({ turn: true, crop: false, resize: true });
+    // Nothing edited yet: nothing worth saving.
+    s = run(s, ...s.items.map((item): QueueAction => ({ type: "planned", key: item.key, version: s.planVersion, plan: plan("jpg", 50) })));
+    expect(canStart(s)).toBe(false);
+    s = reduce(s, {
+      type: "setEdit",
+      edit: { ...s.edit, rotation: 90, crop: { x: 0, y: 0, width: 0.5, height: 0.5 }, resize: "percent", percent: 25 },
+    });
+    expect(s.items.map((i) => requestFor(s, i)?.target)).toEqual(["jpg", "png"]);
+    expect(requestFor(s, s.items[0])?.edit).toEqual({
+      rotation: 90,
+      flipHorizontal: false,
+      flipVertical: false,
+      crop: null,
+      resize: { mode: "percent", percent: 25 },
+      enlarge: false,
+      copy: true,
+      label: EDIT_LABEL,
+    });
+    s = run(s, ...s.items.map((item): QueueAction => ({ type: "planned", key: item.key, version: s.planVersion, plan: plan("jpg", 50) })));
+    expect(canStart(s)).toBe(true);
+
+    // One photo left: it can be cropped (the crop chosen for the list is forgotten).
+    s = reduce(s, { type: "remove", key: 2 });
+    expect(editScope(s)).toEqual({ turn: true, crop: true, resize: true });
+    expect(s.edit.crop).toBeNull();
+    s = reduce(s, { type: "setEdit", edit: { ...s.edit, crop: { x: 0.1, y: 0, width: 0.5, height: 1 } } });
+    expect(requestFor(s, s.items[0])?.edit?.crop).toEqual({ x: 0.1, y: 0, width: 0.5, height: 1 });
+
+    // Into another format: the same edits, no copy.
+    s = reduce(s, { type: "selectTarget", target: "webp" });
+    expect(s.editCopy).toBe(false);
+    expect(requestOf(s)?.edit).toMatchObject({ rotation: 90, copy: false, label: null });
+    // A PDF of the photo is not edited (its pages turn in the page editor).
+    s = reduce(s, { type: "selectTarget", target: "pdf" });
+    expect(editScope(s)).toBeNull();
+    expect(requestOf(s)?.edit).toBeNull();
+    // A HEIC photo cannot be written as HEIC: no edited copy.
+    s = run(s, { type: "add", paths: ["c.heic"] }, { type: "analyzed", key: 3, file: file("c.heic", "image", null) });
+    expect(canEditCopy(s.items)).toBe(false);
+  });
+
+  it("resizes pictures taken from videos, without turning them", () => {
+    let s = run(
+      initialQueue(),
+      { type: "add", paths: ["v.mp4"] },
+      { type: "analyzed", key: 1, file: file("v.mp4", "videoWithAudio", 60) },
+      { type: "selectTarget", target: "jpg" },
+    );
+    expect(editScope(s)).toEqual({ turn: false, crop: false, resize: true });
+    s = reduce(s, { type: "setEdit", edit: { ...s.edit, rotation: 90, resize: "longSide", side: 640 } });
+    expect(requestOf(s)?.edit).toMatchObject({ rotation: 0, resize: { mode: "longSide", side: 640 } });
+    // A video into a video: no picture edits.
+    s = reduce(s, { type: "selectTarget", target: "mp4" });
+    expect(requestOf(s)?.edit).toBeNull();
   });
 
   it("offers compression only when every file can be compressed", () => {

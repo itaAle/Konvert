@@ -20,7 +20,6 @@ const GIF_HEIGHTS = [720, 480, 360, 240];
 const FPS = [60, 50, 30, 25, 24];
 const GIF_FPS = [30, 24, 15, 10];
 const IMAGE_QUALITIES = [100, 95, 90, 85, 80, 75, 70, 60, 50, 40];
-const MAX_DIMENSIONS = [3840, 2560, 1920, 1280, 1024, 800];
 
 const HEIGHT_LABELS: Record<number, string> = { 2160: "2160p (4K)", 1080: "1080p (Full HD)", 720: "720p (HD)" };
 
@@ -64,14 +63,6 @@ export function AdvancedPanel({ option, value, onChange }: AdvancedPanelProps) {
         <Select key="iquality" label={t("advanced.imageQuality")} value={str(value.imageQuality)}
           options={[{ value: AUTO, label: autoLabel }, ...IMAGE_QUALITIES.map((q) => ({ value: String(q), label: String(q) }))]}
           onChange={(v) => set({ imageQuality: num(v) })} />,
-      );
-    }
-    // An icon has fixed sizes; pictures of PDF pages are sized by their resolution.
-    if (option.format !== "ico" && option.group !== "pages") {
-      fields.push(
-        <Select key="maxdim" label={t("advanced.maxDimension")} value={str(value.maxDimension)}
-          options={[{ value: AUTO, label: originalLabel }, ...MAX_DIMENSIONS.map((d) => ({ value: String(d), label: t("advanced.pixels", { n: d }) }))]}
-          onChange={(v) => set({ maxDimension: num(v) })} />,
       );
     }
   }

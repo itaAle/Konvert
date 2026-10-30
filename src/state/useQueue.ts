@@ -26,6 +26,7 @@ import {
   totalEstimate,
   type QueueItem,
 } from "./queue";
+import type { EditState } from "./edit";
 
 const ANALYSIS_CONCURRENCY = 3;
 
@@ -254,6 +255,8 @@ export function useQueue() {
     selectTarget: (target: TargetFormat) => dispatch({ type: "selectTarget", target }),
     selectCompress: () => dispatch({ type: "selectCompress" }),
     setCompression: (compression: CompressOptions) => dispatch({ type: "setCompression", compression }),
+    selectEditCopy: () => dispatch({ type: "selectEditCopy" }),
+    setEdit: (edit: EditState) => dispatch({ type: "setEdit", edit }),
     selectPreset: (preset: QualityPreset) => dispatch({ type: "selectPreset", preset }),
     setAdvanced: (advanced: AdvancedOptions) => dispatch({ type: "setAdvanced", advanced }),
     setFrames: (frames: FrameOptions) => dispatch({ type: "setFrames", frames }),

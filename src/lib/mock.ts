@@ -9,6 +9,7 @@ import type { ConversionWarning } from "../bindings/ConversionWarning";
 import type { FileAnalysis } from "../bindings/FileAnalysis";
 import type { JobEvent } from "../bindings/JobEvent";
 import type { PdfOptions } from "../bindings/PdfOptions";
+import type { PictureEdit } from "../bindings/PictureEdit";
 import type { Preferences } from "../bindings/Preferences";
 import type { TargetFormat } from "../bindings/TargetFormat";
 import type { TargetOption } from "../bindings/TargetOption";
@@ -176,6 +177,34 @@ function splitSizes(pdf: PdfOptions | null | undefined, pages: number): number[]
   return sizes.length > 1 ? sizes : [];
 }
 
+/** Size of an edited picture, by the core's rules (without the format limits). */
+function editedPicture(width: number, height: number, edit: PictureEdit | null) {
+  const turned = (edit?.rotation ?? 0) % 180 === 90;
+  let w = turned ? height : width;
+  let h = turned ? width : height;
+  if (edit?.crop) {
+    w = Math.max(1, edit.crop.width * w);
+    h = Math.max(1, edit.crop.height * h);
+  }
+  const resize = edit?.resize;
+  const cap = (f: number) => (edit?.enlarge ? f : Math.min(f, 1));
+  let stretched = false;
+  if (resize?.mode === "percent") [w, h] = [w * cap(resize.percent / 100), h * cap(resize.percent / 100)];
+  else if (resize?.mode === "longSide") {
+    const f = cap(resize.side / Math.max(w, h));
+    [w, h] = [w * f, h * f];
+  } else if (resize?.mode === "pixels" && resize.keepRatio) {
+    const f = cap(Math.min(resize.width != null ? resize.width / w : Infinity, resize.height != null ? resize.height / h : Infinity));
+    [w, h] = [w * f, h * f];
+  } else if (resize?.mode === "pixels") {
+    const nw = resize.width == null ? w : edit?.enlarge ? resize.width : Math.min(resize.width, w);
+    const nh = resize.height == null ? h : edit?.enlarge ? resize.height : Math.min(resize.height, h);
+    stretched = Math.abs(nw / nh / (w / h) - 1) > 0.01;
+    [w, h] = [nw, nh];
+  }
+  return { width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)), stretched };
+}
+
 /** A page drawn on a canvas: a title, lines of "text" and the page number. */
 function mockPage(number: number, widthPt: number, heightPt: number, size: number): string {
   const scale = size / Math.max(widthPt, heightPt);
@@ -252,6 +281,7 @@ function analysis(path: string): FileAnalysis {
       },
       targets: [...PAGES, PDF, DOCX, TXT],
       compress: "pdf",
+      edit: null,
     };
   }
   if (/\.docx$/i.test(name)) {
@@ -276,6 +306,7 @@ function analysis(path: string): FileAnalysis {
       },
       targets: [PDF, TXT],
       compress: "docx",
+      edit: null,
     };
   }
   if (/\.svgz?$/i.test(name)) {
@@ -300,10 +331,12 @@ function analysis(path: string): FileAnalysis {
       },
       targets: [...IMAGES, PDF],
       compress: null,
+      edit: null,
     };
   }
   if (/\.(jpe?g|png|webp|avif|heic|heif|bmp|tiff?)$/i.test(name)) {
     const heic = /\.hei[cf]$/i.test(name);
+    const ext = name.split(".").pop()!.toLowerCase();
     return {
       path,
       name,
@@ -327,6 +360,8 @@ function analysis(path: string): FileAnalysis {
       targets: [...IMAGES.map((o) => ({ ...o, sameAsInput: !heic && o.format === "jpg" })), PDF, TXT],
       // Like the core: pictures keep their format (no HEIC encoder, BMP and TIFF are not compressed).
       compress: /\.png$/i.test(name) ? "png" : /\.webp$/i.test(name) ? "webp" : /\.avif$/i.test(name) ? "avif" : /\.jpe?g$/i.test(name) ? "jpg" : null,
+      // Like the core: an edited copy keeps the picture's format (none for HEIC).
+      edit: heic ? null : (({ jpeg: "jpg", tif: "tiff" } as Record<string, TargetFormat>)[ext] ?? (ext as TargetFormat)),
     };
   }
   const isVideo = /\.(mp4|mov|mkv|webm|avi)$/i.test(name);
@@ -356,6 +391,7 @@ function analysis(path: string): FileAnalysis {
         ...FRAMES,
       ],
       compress: (name.split(".").pop()?.toLowerCase() ?? "mp4") as TargetFormat,
+      edit: null,
     };
   }
   return {
@@ -378,6 +414,7 @@ function analysis(path: string): FileAnalysis {
     },
     targets: AUDIO,
     compress: "wav",
+    edit: null,
   };
 }
 
@@ -577,6 +614,10 @@ export const mockBackend: Backend = {
           gridGroup: null,
           alphaStream: null,
           icons: [],
+          turn: 0,
+          flipHorizontal: false,
+          flipVertical: false,
+          crop: null,
           copyExif: false,
           render: null,
         },
@@ -597,6 +638,8 @@ export const mockBackend: Backend = {
       const png = request.target === "png";
       const quality = { max: 95, balanced: 82, small: 65 }[request.preset];
       const source = media.video[0];
+      const { stretched, ...size } = editedPicture(source?.width ?? 1000, source?.height ?? 1000, request.edit ?? null);
+      const edited = { ...size, stretched };
       const plan: ConversionPlan = {
         target: request.target,
         videoStream: 0,
@@ -607,8 +650,7 @@ export const mockBackend: Backend = {
         image: {
           codec: request.target === "jpg" ? "jpeg" : (request.target as "png" | "webp" | "avif"),
           quality: png ? { kind: "lossless", effort: 6 } : { kind: "lossy", quality: request.advanced.imageQuality ?? quality },
-          width: source?.width ?? null,
-          height: source?.height ?? null,
+          ...edited,
           resize: false,
           alpha: false,
           flatten: false,
@@ -617,11 +659,16 @@ export const mockBackend: Backend = {
           icons: [],
           copyExif: ["jpg", "png", "webp", "avif"].includes(request.target),
           render: null,
+          turn: request.edit?.rotation ?? 0,
+          flipHorizontal: request.edit?.flipHorizontal ?? false,
+          flipVertical: request.edit?.flipVertical ?? false,
+          crop: null,
         },
         // EXIF data is copied into JPG, PNG, WebP and AVIF; other formats leave it out.
         warnings: [
           png ? "lossyToLossless" : "lossyReencode",
           ...(["jpg", "png", "webp", "avif"].includes(request.target) ? [] : (["metadataDropped"] as const)),
+          ...(edited.stretched ? (["pictureStretched"] as const) : []),
         ],
         estimate: { bytes: Math.round((media.sizeBytes ?? 0) * (png ? 6 : quality / 100)), approximate: true },
         frames: null,
@@ -725,7 +772,13 @@ export const mockBackend: Backend = {
                         files: 1,
                         elapsed: 0.4,
                       }
-                    : { output: `C:\\Musica\\${name}.${request.target}`, sizeBytes: 5_400_000, files: 1, elapsed: 6.2 },
+                    : {
+                        // Like the core: an edited copy is `name-mod.ext`.
+                        output: `C:\\Musica\\${name}${request.edit?.copy ? `-${request.edit.label ?? "mod"}` : ""}.${request.target}`,
+                        sizeBytes: 5_400_000,
+                        files: 1,
+                        elapsed: 6.2,
+                      },
             },
           });
         }

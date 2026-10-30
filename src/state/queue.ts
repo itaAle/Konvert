@@ -16,6 +16,7 @@ import type { Progress } from "../bindings/Progress";
 import type { QualityPreset } from "../bindings/QualityPreset";
 import type { TargetFormat } from "../bindings/TargetFormat";
 import type { TargetOption } from "../bindings/TargetOption";
+import { DEFAULT_EDIT, editChanged, pictureEditOf, type EditScope, type EditState } from "./edit";
 import { cutPositions, isEdited, keptCount, layoutOf, moveFile, reconcile, type EditorPage, type PageSource } from "./pages";
 
 export type ItemStatus =
@@ -53,6 +54,10 @@ export interface QueueState {
   compress: boolean;
   /** Level, size limit and PDF pages as pictures, for smaller copies. */
   compression: CompressOptions;
+  /** An edited copy of every picture, each in its own format ("Modifica"). */
+  editCopy: boolean;
+  /** Turn, mirroring, crop and new size of pictures. */
+  edit: EditState;
   preset: QualityPreset;
   advanced: AdvancedOptions;
   /** Pictures taken from videos (frame targets only). */
@@ -86,6 +91,8 @@ export type QueueAction =
   | { type: "selectTarget"; target: TargetFormat }
   | { type: "selectCompress" }
   | { type: "setCompression"; compression: CompressOptions }
+  | { type: "selectEditCopy" }
+  | { type: "setEdit"; edit: EditState }
   | { type: "selectPreset"; preset: QualityPreset }
   | { type: "setAdvanced"; advanced: AdvancedOptions }
   | { type: "setFrames"; frames: FrameOptions }
@@ -141,6 +148,8 @@ export function initialQueue(preset: QualityPreset = "balanced"): QueueState {
     target: null,
     compress: false,
     compression: DEFAULT_COMPRESSION,
+    editCopy: false,
+    edit: DEFAULT_EDIT,
     preset,
     advanced: {},
     frames: DEFAULT_FRAMES,
@@ -199,6 +208,38 @@ export function canCompress(items: QueueItem[]): boolean {
   return files.length > 0 && files.every((i) => i.file!.compress != null);
 }
 
+/** Word after the name of an edited copy (`name-mod.jpg`). */
+export const EDIT_LABEL = "mod";
+
+/** Every analysed file is a picture Konvert can write in its own format. */
+export function canEditCopy(items: QueueItem[]): boolean {
+  const files = items.filter((i) => i.file && i.status !== "invalid");
+  return files.length > 0 && files.every((i) => i.file!.edit != null);
+}
+
+/** One photo only: it can be cropped. */
+function lonePhoto(state: QueueState): boolean {
+  const ready = readyItems(state);
+  return ready.length === 1 && state.items.length === 1 && ready[0].file!.media.kind === "image";
+}
+
+/**
+ * What can be changed in the pictures being made: photos into pictures or
+ * edited copies (turned, mirrored, cropped when alone, resized except icons),
+ * pictures taken from videos (resized). `null`: no picture edits.
+ */
+export function editScope(state: QueueState): EditScope | null {
+  if (state.compress) return null;
+  if (state.editCopy) {
+    const icons = readyItems(state).every((i) => i.file!.edit === "ico");
+    return { turn: true, crop: lonePhoto(state), resize: !icons };
+  }
+  const option = commonTargets(state.items).find((o) => o.format === state.target);
+  if (option?.group === "image") return { turn: true, crop: lonePhoto(state), resize: option.format !== "ico" };
+  if (option?.group === "frames") return { turn: false, crop: false, resize: true };
+  return null;
+}
+
 /** The only file is a PDF: as a PDF target, its pages can be edited and split. */
 export function lonePdf(items: QueueItem[]): QueueItem | null {
   const files = items.filter((i) => i.file && i.status !== "invalid");
@@ -254,7 +295,13 @@ export function requestOf(state: QueueState): ConversionRequest | null {
       pageNumbers: state.target === "pdf" ? state.pdf.pageNumbers : null,
       ocr: state.target === "pdf" && state.pdf.ocr,
     },
+    edit: editOf(state),
   };
+}
+
+function editOf(state: QueueState) {
+  const scope = editScope(state);
+  return scope ? pictureEditOf(state.edit, scope, state.editCopy ? EDIT_LABEL : null) : null;
 }
 
 /**
@@ -264,6 +311,19 @@ export function requestOf(state: QueueState): ConversionRequest | null {
  * format of the file.
  */
 export function requestFor(state: QueueState, item: QueueItem): ConversionRequest | null {
+  if (state.editCopy) {
+    const target = item.file?.edit;
+    if (!target) return null;
+    return {
+      target,
+      preset: state.preset,
+      advanced: state.advanced,
+      frames: null,
+      removeLocation: state.removeLocation,
+      pdf: null,
+      edit: editOf(state),
+    };
+  }
   if (!state.compress) {
     const request = requestOf(state);
     if (!request?.pdf || !arrangesPages(state)) return request;
@@ -340,7 +400,9 @@ export function canStart(state: QueueState): boolean {
   const planned = plannedItems(state);
   return (
     state.phase === "setup" &&
-    (state.target != null || (state.compress && canCompress(ready))) &&
+    (state.target != null || (state.compress && canCompress(ready)) || (state.editCopy && canEditCopy(ready))) &&
+    // An edited copy with nothing edited would be pointless.
+    (!state.editCopy || editChanged(state.edit, editScope(state)!)) &&
     planned.length > 0 &&
     !state.items.some((i) => i.status === "analyzing") &&
     planned.every((i) => i.plan && !i.planError) &&
@@ -419,6 +481,9 @@ function revalidateTarget(state: QueueState): QueueState {
   if (state.compress && !canCompress(state.items)) {
     return invalidate({ ...state, compress: false });
   }
+  if (state.editCopy && !canEditCopy(state.items)) {
+    return invalidate({ ...state, editCopy: false });
+  }
   return state;
 }
 
@@ -467,7 +532,14 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
         progress: null,
         outcome: null,
       }));
-      return { ...base, phase: "setup", notice: null, nextKey, items: [...base.items, ...added] };
+      return {
+        ...base,
+        phase: "setup",
+        notice: null,
+        nextKey,
+        items: [...base.items, ...added],
+        edit: { ...base.edit, crop: null },
+      };
     }
 
     case "analyzed": {
@@ -504,7 +576,7 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
 
     case "remove": {
       if (state.phase !== "setup") return state;
-      const next = withoutItems(state, state.items.filter((i) => i.key !== action.key));
+      const next = withoutItems({ ...state, edit: { ...state.edit, crop: null } }, state.items.filter((i) => i.key !== action.key));
       // The pages of the file go with it; edits are forgotten once no PDF is made of the files left.
       if (!next.pages) return next;
       return invalidate(editsPdf(next) ? next : { ...next, pages: null, cuts: [] });
@@ -526,13 +598,21 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
     }
 
     case "selectTarget":
-      if (state.phase !== "setup" || (state.target === action.target && !state.compress)) return state;
+      if (state.phase !== "setup" || (state.target === action.target && !state.compress && !state.editCopy)) return state;
       // Codec choices of another format may not apply: start from automatic.
-      return invalidate({ ...state, target: action.target, compress: false, advanced: {}, notice: null });
+      return invalidate({ ...state, target: action.target, compress: false, editCopy: false, advanced: {}, notice: null });
 
     case "selectCompress":
       if (state.phase !== "setup" || state.compress || !canCompress(state.items)) return state;
-      return invalidate({ ...state, compress: true, target: null, advanced: {}, notice: null });
+      return invalidate({ ...state, compress: true, editCopy: false, target: null, advanced: {}, notice: null });
+
+    case "selectEditCopy":
+      if (state.phase !== "setup" || state.editCopy || !canEditCopy(state.items)) return state;
+      return invalidate({ ...state, editCopy: true, compress: false, target: null, advanced: {}, notice: null });
+
+    case "setEdit":
+      if (state.phase !== "setup") return state;
+      return invalidate({ ...state, edit: action.edit, notice: null });
 
     case "setCompression":
       if (state.phase !== "setup") return state;

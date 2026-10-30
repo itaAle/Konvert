@@ -8,10 +8,12 @@ import { revealVariants } from "../lib/motion";
 import {
   allWarnings,
   canCompress,
+  canEditCopy,
   canStart,
   combines,
   commonTargets,
   editedDocuments,
+  editScope,
   editsPdf,
   lonePdf,
   pdfChanged,
@@ -23,7 +25,10 @@ import type { QueueController } from "../state/useQueue";
 import { AdvancedPanel } from "./AdvancedPanel";
 import { CompressCard } from "./CompressCard";
 import { CompressPanel } from "./CompressPanel";
+import { CropEditor } from "./CropEditor";
 import { DestinationRow } from "./DestinationRow";
+import { EditCard } from "./EditCard";
+import { EditPanel } from "./EditPanel";
 import { FileCard } from "./FileCard";
 import { FileList } from "./FileList";
 import { FormatGrid } from "./FormatGrid";
@@ -113,6 +118,15 @@ export function SetupScreen({ q }: { q: QueueController }) {
   const formats = new Set(files.map((i) => i.file!.compress));
   const sharedFormat = formats.size === 1 ? (files[0]?.name.split(".").pop()?.toUpperCase() ?? null) : null;
   const largest = Math.max(0, ...files.map((i) => i.file!.media.sizeBytes ?? 0));
+  // Edited copies of pictures, each in its own format; picture edits.
+  const editable = canEditCopy(state.items);
+  const editingCopy = state.editCopy && editable;
+  const editFormats = new Set(files.map((i) => i.file!.edit));
+  const sharedEditFormat = editFormats.size === 1 ? (files[0]?.name.split(".").pop()?.toUpperCase() ?? null) : null;
+  const scope = editScope(state);
+  const onlyFile = ready.length === 1 ? ready[0] : null;
+  const loneStream = onlyFile?.file?.media.video[0];
+  const loneSize = loneStream?.width && loneStream.height ? { width: loneStream.width, height: loneStream.height } : null;
 
   // Bring quality and warnings into view once the options have appeared, and
   // whenever an important warning shows up, so it never stays below the fold.
@@ -136,7 +150,11 @@ export function SetupScreen({ q }: { q: QueueController }) {
         )}
       </div>
       <Button variant="primary" size="lg" disabled={!canStart(state)} onClick={() => void q.start()} className="min-w-44">
-        {compressing
+        {editingCopy
+          ? ready.length > 1
+            ? t("actions.editCopyAll", { n: ready.length })
+            : t("actions.editCopy")
+          : compressing
           ? ready.length > 1
             ? t("actions.compressAll", { n: ready.length })
             : t("actions.compress")
@@ -192,10 +210,13 @@ export function SetupScreen({ q }: { q: QueueController }) {
           )}
         </AnimatePresence>
 
-        {compressible && (
+        {(compressible || editable) && (
           <section>
-            <SectionTitle>{t("compress.title")}</SectionTitle>
-            <CompressCard selected={compressing} onSelect={q.selectCompress} format={sharedFormat} />
+            <SectionTitle>{editable ? t("edit.sameFormat") : t("compress.title")}</SectionTitle>
+            <div className={compressible && editable ? "grid grid-cols-2 gap-2.5" : ""}>
+              {compressible && <CompressCard selected={compressing} onSelect={q.selectCompress} format={sharedFormat} />}
+              {editable && <EditCard selected={editingCopy} onSelect={q.selectEditCopy} format={sharedEditFormat} />}
+            </div>
           </section>
         )}
 
@@ -208,7 +229,7 @@ export function SetupScreen({ q }: { q: QueueController }) {
                 {!single && <p className="-mt-2 mb-3 px-1 text-[13px] text-label-secondary">{t("formats.common")}</p>}
                 <FormatGrid
                   options={targets}
-                  selected={compressing ? null : state.target}
+                  selected={compressing || editingCopy ? null : state.target}
                   onSelect={q.selectTarget}
                   groupTitles={lone ? { document: "formats.groupEditPdf" } : undefined}
                   notes={lone ? { pdf: "formats.editPdf" } : undefined}
@@ -221,7 +242,7 @@ export function SetupScreen({ q }: { q: QueueController }) {
         )}
 
         <AnimatePresence initial={false}>
-          {(option || compressing) && (
+          {(option || compressing || editingCopy) && (
             <motion.div
               variants={revealVariants}
               initial="initial"
@@ -243,6 +264,24 @@ export function SetupScreen({ q }: { q: QueueController }) {
                     largestBytes={largest}
                     documents={documents.length > 0}
                   />
+                </section>
+              )}
+              {scope && (scope.resize || scope.turn) && (
+                <section>
+                  <SectionTitle>{scope.turn ? t("edit.title") : t("edit.size")}</SectionTitle>
+                  <EditPanel value={state.edit} onChange={q.setEdit} scope={scope} size={loneSize} />
+                </section>
+              )}
+              {scope?.crop && onlyFile && loneSize && (
+                <section>
+                  <SectionTitle>{t("edit.crop")}</SectionTitle>
+                  <CropEditor path={onlyFile.path} size={loneSize} value={state.edit} onChange={q.setEdit} />
+                </section>
+              )}
+              {editingCopy && (
+                <section>
+                  <SectionTitle>{t("quality.title")}</SectionTitle>
+                  <QualityPicker value={state.preset} onChange={q.selectPreset} />
                 </section>
               )}
               {option?.group === "frames" && (
