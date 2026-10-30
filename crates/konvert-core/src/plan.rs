@@ -248,6 +248,9 @@ pub enum ConversionWarning {
     PictureStretched,
     /// Louder audio: its loudest moments are held down so that it does not distort.
     VolumeLimited,
+    /// Joined files that differ: encoded again at the size and frame rate of
+    /// the first one, with black bars and silence where needed.
+    JoinReencoded,
 }
 
 /// Pictures taken from a video.
@@ -336,6 +339,10 @@ pub struct ConversionPlan {
     #[serde(skip)]
     #[ts(skip)]
     pub loudness: Vec<Option<crate::volume::Loudness>>,
+    /// Several files joined into one.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub join: Option<crate::join::JoinPlan>,
     /// Tracks saved as files of their own, in order.
     #[serde(default)]
     pub extract: Vec<PlannedExtract>,
@@ -391,6 +398,9 @@ pub fn plan_conversion(
     request: &ConversionRequest,
     input: &Path,
 ) -> Result<ConversionPlan, CoreError> {
+    if let Some(join) = &request.join {
+        return crate::join::plan(&join.files, request);
+    }
     let mut plan = if let Some(options) = &request.compress {
         compress::plan(media, request, options, input)?
     } else if let Some(options) = &request.extract {
@@ -425,6 +435,7 @@ pub fn plan_conversion(
             added_audio: None,
             volume: None,
             loudness: Vec::new(),
+            join: None,
             warnings: Vec::new(),
             estimate: estimate.map(|(bytes, approximate)| SizeEstimate { bytes, approximate }),
         }
@@ -694,6 +705,7 @@ pub(crate) fn plan_offered(
         added_audio,
         volume,
         loudness: Vec::new(),
+        join: None,
         extract: Vec::new(),
         warnings: Vec::new(),
         estimate: None,
@@ -910,6 +922,7 @@ fn plan_document(
         added_audio: None,
         volume: None,
         loudness: Vec::new(),
+        join: None,
         warnings,
         estimate: None,
     };
@@ -1044,6 +1057,7 @@ fn plan_document(
                 added_audio: None,
                 volume: None,
                 loudness: Vec::new(),
+                join: None,
                 warnings,
                 // The pages are copied as they are, with what they use.
                 estimate: media.size_bytes.map(|bytes| SizeEstimate {
@@ -1339,6 +1353,7 @@ fn plan_still(
         added_audio: None,
         volume: None,
         loudness: Vec::new(),
+        join: None,
         warnings,
         estimate: None,
     };
@@ -1401,7 +1416,7 @@ fn fit_within(width: u32, height: u32, limit: Option<u32>) -> (u32, u32) {
 
 // --- Audio ---------------------------------------------------------------------
 
-fn plan_audio(
+pub(crate) fn plan_audio(
     spec: &FormatSpec,
     src: &AudioStream,
     request: &ConversionRequest,
@@ -1531,7 +1546,7 @@ fn pick<T>(preset: QualityPreset, max: T, balanced: T, small: T) -> T {
 
 // --- Video ---------------------------------------------------------------------
 
-fn plan_video(
+pub(crate) fn plan_video(
     spec: &FormatSpec,
     src: &VideoStream,
     request: &ConversionRequest,

@@ -812,11 +812,14 @@ export const mockBackend: Backend = {
     return plan;
   },
   async startCombined(paths, request) {
-    return mockBackend.startConversion(paths[0], { ...request, target: "pdf" });
+    // Joined audio or video keep their format; anything else becomes one PDF.
+    return mockBackend.startConversion(paths[0], request.join ? request : { ...request, target: "pdf" });
   },
   async startConversion(path, request) {
     const jobId = nextJob++;
-    const name = (path.split(/[\\/]/).pop() ?? "file").replace(/\.\w+$/, "");
+    const stem = (path.split(/[\\/]/).pop() ?? "file").replace(/\.\w+$/, "");
+    // Joined files are named after the first one: "name-joined".
+    const name = request.join ? `${stem}-${request.join.label ?? "joined"}` : stem;
     // Pages of a PDF: one picture next to it, or a folder of pictures.
     const pages = /\.pdf$/i.test(path) && request.target !== "pdf" ? parsePages(request.pdf?.pages, MOCK_PAGES) : null;
     const label = request.pdf?.pageLabel ?? "page";

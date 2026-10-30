@@ -10,6 +10,8 @@
 //! konvert-cli [--ffmpeg-dir DIR] plan    <FILE> --to <FORMAT> [OPTIONS]
 //! konvert-cli [--ffmpeg-dir DIR] convert <FILE> --to <FORMAT> [OPTIONS] [--out-dir DIR]
 //! konvert-cli [--ffmpeg-dir DIR] combine <FILE>... [OPTIONS] [--out-dir DIR]   (one PDF)
+//! konvert-cli [--ffmpeg-dir DIR] join <FILE>... --to <FORMAT> [OPTIONS] [--out-dir DIR]
+//!                   (audio or video files one after the other)
 //! konvert-cli fonts <FILE.pdf>   (embedded fonts and how much Compress reduces them)
 //!
 //! OPTIONS: --preset max|balanced|small  --height N  --fps N
@@ -48,7 +50,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use konvert_core::request::{
-    AudioFile, CropRect, MediaEdit, PictureEdit, Resize, TrackChoice, Volume,
+    AudioFile, CropRect, JoinOptions, MediaEdit, PictureEdit, Resize, TrackChoice, Volume,
 };
 use konvert_core::{
     AdvancedOptions, Binaries, ChannelLayout, CombinedJob, CompressLevel, CompressOptions,
@@ -67,6 +69,8 @@ const USAGE: &str = "usage:
   konvert-cli [--ffmpeg-dir DIR] plan    <FILE> --to <FORMAT> [OPTIONS]
   konvert-cli [--ffmpeg-dir DIR] convert <FILE> --to <FORMAT> [OPTIONS] [--out-dir DIR]
   konvert-cli [--ffmpeg-dir DIR] combine <FILE>... [OPTIONS] [--out-dir DIR]   (one PDF)
+  konvert-cli [--ffmpeg-dir DIR] join <FILE>... --to <FORMAT> [OPTIONS] [--out-dir DIR]
+                  (audio or video files one after the other)
   konvert-cli fonts <FILE.pdf>   (embedded fonts and how much Compress reduces them)
 
 OPTIONS: --preset max|balanced|small  --height N  --fps N
@@ -560,6 +564,7 @@ fn parse_args() -> Result<Cli, String> {
             edit: edit.clone(),
             media: media.clone(),
             extract: None,
+            join: None,
             preset,
             advanced: advanced.clone(),
             frames,
@@ -580,6 +585,21 @@ fn parse_args() -> Result<Cli, String> {
                 return Err("missing <FILE>...".into());
             }
             Action::Combine(files, request()?, out_dir)
+        }
+        Some("join") => {
+            let files: Vec<PathBuf> = positional.map(PathBuf::from).collect();
+            if files.len() < 2 {
+                return Err("join needs two <FILE>s or more".into());
+            }
+            // The files are analysed when the job runs.
+            let request = ConversionRequest {
+                join: Some(JoinOptions {
+                    files: Vec::new(),
+                    label: None,
+                }),
+                ..request()?
+            };
+            Action::Combine(files, request, out_dir)
         }
         _ => return Err(String::new()),
     };

@@ -68,6 +68,12 @@ export const it = {
     common: "Formati disponibili per tutti i file selezionati.",
     none: "Non esiste un formato comune a tutti i file: rimuovi i file non compatibili.",
   },
+  join: {
+    heading: "Unisci",
+    title: "Un solo file",
+    hint: "Metti i file uno dopo l'altro, nell'ordine dell'elenco. Se sono diversi, vengono ricodificati con le dimensioni del primo.",
+    fileLabel: "uniti",
+  },
   volume: {
     heading: "Volume",
     original: "Originale",
@@ -442,12 +448,14 @@ export const it = {
       "Testo e immagini diventano modificabili; impaginazione, tabelle e disegni vengono semplificati. Le pagine scansionate vengono lette con l'OCR.",
     ocrReading:
       "Il testo di foto e pagine scansionate viene letto con l'OCR: ricontrollalo. Riconosce le lingue con l'alfabeto latino (italiano, inglese, francese, tedesco, spagnolo…), non la scrittura a mano.",
+    joinReencoded: "I file sono diversi tra loro: verranno ricodificati con dimensioni e fotogrammi del primo, con bande nere e silenzio dove servono.",
     volumeLimited: "Alzando il volume, i punti più forti vengono contenuti per non distorcere.",
     pictureStretched: "Con larghezza e altezza esatte le proporzioni cambiano: l'immagine risulterà deformata.",
   },
   actions: {
     convert: "Converti",
     convertAll: "Converti {n} file",
+    join: "Unisci {n} file",
     makePdf: "Crea PDF",
     savePdf: "Salva PDF",
     splitPdf: "Dividi PDF",

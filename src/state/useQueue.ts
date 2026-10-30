@@ -20,6 +20,7 @@ import {
   combines,
   initialQueue,
   queueReducer,
+  plannedItems,
   readyItems,
   requestFor,
   requestOf,
@@ -103,7 +104,7 @@ export function useQueue() {
   useEffect(() => {
     setLowSpace(null);
     if (state.phase !== "setup") return;
-    const items = readyItems(state);
+    const items = plannedItems(state);
     if (items.length === 0 || !totalEstimate(items)) return;
     const perDir = new Map<string, number>();
     // A combined PDF is saved next to the first file.
@@ -165,6 +166,7 @@ export function useQueue() {
       ...request,
       pdf: request.pdf ? { ...request.pdf, pageLabel: t("pdf.pageLabel"), pagesLabel: t("pdf.pagesLabel") } : request.pdf,
       compress: request.compress ? { ...request.compress, label: t("compress.fileLabel") } : request.compress,
+      join: request.join ? { ...request.join, label: t("join.fileLabel") } : request.join,
     });
     const items = readyItems(s);
     cancelling.current = false;
@@ -266,6 +268,7 @@ export function useQueue() {
     setTrim: (trim: TrimState | null) => dispatch({ type: "setTrim", trim }),
     setAudioFile: (audioFile: AudioFile | null) => dispatch({ type: "setAudioFile", audioFile }),
     setVolume: (volume: Volume | null) => dispatch({ type: "setVolume", volume }),
+    setJoin: (join: boolean) => dispatch({ type: "setJoin", join }),
     selectExtract: () => dispatch({ type: "selectExtract" }),
     setExtract: (tracks: ExtractTrack[]) => dispatch({ type: "setExtract", tracks }),
     selectPreset: (preset: QualityPreset) => dispatch({ type: "selectPreset", preset }),

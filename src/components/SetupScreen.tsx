@@ -12,6 +12,8 @@ import {
   canExtract,
   canStart,
   audioFileScope,
+  canJoin,
+  joins,
   volumeScope,
   combines,
   currentTracks,
@@ -30,6 +32,7 @@ import {
 import type { QueueController } from "../state/useQueue";
 import { AdvancedPanel } from "./AdvancedPanel";
 import { AudioFilePanel } from "./AudioFilePanel";
+import { JoinPanel } from "./JoinPanel";
 import { CompressCard } from "./CompressCard";
 import { CompressPanel } from "./CompressPanel";
 import { CropEditor } from "./CropEditor";
@@ -183,6 +186,8 @@ export function SetupScreen({ q }: { q: QueueController }) {
           ? t("actions.splitPdf")
           : editing && !together
             ? t("actions.savePdf")
+          : joins(state)
+          ? t("actions.join", { n: ready.length })
           : together || (state.target === "pdf" && ready.length === 1)
           ? t("actions.makePdf")
           : ready.length > 1
@@ -326,6 +331,12 @@ export function SetupScreen({ q }: { q: QueueController }) {
                 <section>
                   <SectionTitle>{t("audioFile.title")}</SectionTitle>
                   <AudioFilePanel value={state.audioFile} onChange={q.setAudioFile} />
+                </section>
+              )}
+              {canJoin(state) && (
+                <section>
+                  <SectionTitle>{t("join.heading")}</SectionTitle>
+                  <JoinPanel value={state.join} onChange={q.setJoin} />
                 </section>
               )}
               {volumeScope(state) && (

@@ -572,6 +572,7 @@ async fn advanced_options_are_applied() {
         edit: None,
         media: None,
         extract: None,
+        join: None,
     };
     let (_, out) = convert(&bins, &tmp, &input, request).await;
     let video = out.primary_video().unwrap();
@@ -3319,4 +3320,98 @@ async fn audio_is_normalized_or_made_quieter() {
     let (out, _) = convert(&bins, &tmp, &input, with(Volume::Gain { db: 12.0 })).await;
     let after = loudness_of(&bins, &out.output);
     assert!((after - (before + 12.0)).abs() <= 1.0, "{before} → {after}");
+}
+
+/// Joins `files` into one file of `target`, in order.
+async fn join(
+    bins: &Binaries,
+    tmp: &TempDir,
+    files: &[PathBuf],
+    target: TargetFormat,
+) -> (ConversionOutcome, MediaInfo, konvert_core::ConversionPlan) {
+    use konvert_core::request::JoinOptions;
+    let mut inputs = Vec::new();
+    for path in files {
+        inputs.push((path.clone(), probe(bins, path).await.unwrap()));
+    }
+    let request = ConversionRequest {
+        join: Some(JoinOptions {
+            files: inputs.iter().map(|(_, m)| m.clone()).collect(),
+            label: Some("uniti".into()),
+        }),
+        ..req(target, QualityPreset::Balanced)
+    };
+    let plan = plan_conversion(&inputs[0].1, &request, &inputs[0].0).unwrap();
+    let out_dir = tmp.path("out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ws = Workspace::create(&tmp.path("ws")).unwrap();
+    let job = konvert_core::CombinedJob {
+        id: 7,
+        inputs,
+        request,
+        output_dir: out_dir,
+        passwords: Default::default(),
+    };
+    let outcome = konvert_core::run_combined(bins, &ws, &job, &CancellationToken::new(), |_| {})
+        .await
+        .unwrap_or_else(|e| panic!("join failed: {e} {:?}", e.details()));
+    assert_eq!(files_in(ws.dir()), [".lock"], "temporary files left behind");
+    let joined = probe(bins, &outcome.output).await.unwrap();
+    (outcome, joined, plan)
+}
+
+#[tokio::test]
+async fn files_are_joined_copied_or_encoded() {
+    let bins = engine();
+    let tmp = TempDir::new("join");
+    let clip = |name: &str, size: &str, rate: &str, secs: &str, sound: bool| {
+        let path = tmp.path(name);
+        let mut args = vec![
+            "-f".to_string(),
+            "lavfi".into(),
+            "-i".into(),
+            format!("testsrc2=s={size}:r={rate}:d={secs}"),
+        ];
+        if sound {
+            args.extend(["-f", "lavfi", "-i"].map(String::from));
+            args.push(format!("sine=f=440:d={secs}"));
+            args.extend(["-c:a", "aac", "-ar", "48000", "-ac", "2"].map(String::from));
+        }
+        args.extend(["-c:v", "libopenh264", "-pix_fmt", "yuv420p"].map(String::from));
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        generate(&bins, &args, &path);
+        path
+    };
+    // Alike clips: copied one after the other.
+    let a = clip("L'inizio.mp4", "320x240", "25", "2", true);
+    let b = clip("Seguito.mp4", "320x240", "25", "3", true);
+    let (out, joined, plan) = join(&bins, &tmp, &[a.clone(), b], TargetFormat::Mp4).await;
+    assert!(plan.join.as_ref().unwrap().copy);
+    assert!(
+        out.output.ends_with("L'inizio-uniti.mp4"),
+        "{:?}",
+        out.output
+    );
+    let length = joined.duration_secs.unwrap();
+    assert!((4.8..=5.3).contains(&length), "{length}");
+    assert_eq!(joined.audio.len(), 1);
+
+    // A bigger clip without sound: fitted into the first one's size, silent.
+    let c = clip("Altro.mp4", "640x480", "30", "2", false);
+    let (_, joined, plan) = join(&bins, &tmp, &[a.clone(), c], TargetFormat::Mp4).await;
+    assert!(!plan.join.as_ref().unwrap().copy);
+    let length = joined.duration_secs.unwrap();
+    assert!((3.8..=4.3).contains(&length), "{length}");
+    assert_eq!(
+        (joined.video[0].width, joined.video[0].height),
+        (Some(320), Some(240))
+    );
+    assert_eq!(joined.audio[0].channels, Some(2));
+
+    // Only the sound, into MP3.
+    let (out, joined, _) = join(&bins, &tmp, &[a.clone(), a], TargetFormat::Mp3).await;
+    assert!(out.output.extension().is_some_and(|e| e == "mp3"));
+    assert!(joined.video.is_empty());
+    let length = joined.duration_secs.unwrap();
+    assert!((3.8..=4.3).contains(&length), "{length}");
 }

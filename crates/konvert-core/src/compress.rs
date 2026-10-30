@@ -86,6 +86,7 @@ pub(crate) fn plan(
             added_audio: None,
             volume: None,
             loudness: Vec::new(),
+            join: None,
             warnings: if options.pages_as_pictures && format == TargetFormat::Pdf {
                 vec![ConversionWarning::PdfPagesAsPictures]
             } else {

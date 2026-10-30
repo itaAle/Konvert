@@ -422,9 +422,9 @@ pub fn start_combined(
     if paths.iter().any(|p| !p.is_file()) {
         return Err(payload(CoreError::InputNotFound));
     }
-    if request.target != TargetFormat::Pdf {
+    if request.target != TargetFormat::Pdf && request.join.is_none() {
         return Err(payload(CoreError::UnsupportedConversion {
-            details: "only a PDF can combine files".into(),
+            details: "only a PDF or a join can combine files".into(),
         }));
     }
     let output_dir = output_dir(&state, first)?;

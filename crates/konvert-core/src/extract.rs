@@ -122,6 +122,7 @@ pub(crate) fn plan(
             }),
             compress: None,
             extract: None,
+            join: None,
             edit: None,
             pdf: None,
             ..request.clone()

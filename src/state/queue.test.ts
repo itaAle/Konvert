@@ -8,6 +8,7 @@ import {
   trimScope,
   audioFileScope,
   volumeScope,
+  canJoin,
   canEditCopy,
   canExtract,
   editScope,
@@ -274,6 +275,7 @@ describe("queue state machine", () => {
       pdf: DEFAULT_PDF,
       edit: null,
       media: null,
+      join: null,
     });
   });
 
@@ -793,6 +795,32 @@ describe("queue state machine", () => {
     // Another file: the choice is forgotten.
     s = run(s, { type: "add", paths: ["b.mp3"] });
     expect(s.volume).toBeNull();
+  });
+
+  it("joins audio and video files into one", () => {
+    const a = file("a.mp4", "videoWithAudio", 60);
+    const b = file("b.mov", "videoWithAudio", 30);
+    let s = run(
+      initialQueue(),
+      { type: "add", paths: ["a.mp4", "b.mov"] },
+      { type: "analyzed", key: 1, file: a },
+      { type: "analyzed", key: 2, file: b },
+      { type: "selectTarget", target: "mp4" },
+    );
+    expect(canJoin(s)).toBe(true);
+    expect(combines(s)).toBe(false);
+    s = reduce(s, { type: "setJoin", join: true });
+    expect(combines(s)).toBe(true);
+    // Planned once, with the first file, as a whole.
+    expect(requestFor(s, s.items[0])?.join).toEqual({ files: [a.media, b.media], label: null });
+    expect(requestFor(s, s.items[1])).toBeNull();
+    s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("mp4", 9000) });
+    expect(canStart(s)).toBe(true);
+    expect(totalEstimate(plannedItems(s))).toEqual({ bytes: 9000, approximate: false });
+    // Not into pictures or animations.
+    s = reduce(s, { type: "selectTarget", target: "gif" });
+    expect(canJoin(s)).toBe(false);
+    expect(requestOf(s)?.join).toBeNull();
   });
 
   it("extracts tracks of a lone file", () => {

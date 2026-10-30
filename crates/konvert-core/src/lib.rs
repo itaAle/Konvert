@@ -26,6 +26,7 @@ pub mod estimate;
 pub mod exif;
 pub mod extract;
 pub mod formats;
+pub mod join;
 pub mod metadata;
 pub mod naming;
 pub mod ocr;

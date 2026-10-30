@@ -3,6 +3,7 @@ import type { AdvancedOptions } from "./AdvancedOptions";
 import type { CompressOptions } from "./CompressOptions";
 import type { ExtractOptions } from "./ExtractOptions";
 import type { FrameOptions } from "./FrameOptions";
+import type { JoinOptions } from "./JoinOptions";
 import type { MediaEdit } from "./MediaEdit";
 import type { PdfOptions } from "./PdfOptions";
 import type { PictureEdit } from "./PictureEdit";
@@ -44,4 +45,8 @@ media?: MediaEdit | null,
  * Audio and video only: tracks saved as files of their own (`target`
  * is then the file's own format; the trim of `media` applies).
  */
-extract?: ExtractOptions | null, };
+extract?: ExtractOptions | null, 
+/**
+ * Several audio or video files joined into one (a combined job).
+ */
+join?: JoinOptions | null, };

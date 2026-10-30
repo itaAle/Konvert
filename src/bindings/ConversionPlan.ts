@@ -6,6 +6,7 @@ import type { ConversionWarning } from "./ConversionWarning";
 import type { DocumentPlan } from "./DocumentPlan";
 import type { FramePlan } from "./FramePlan";
 import type { ImagePlan } from "./ImagePlan";
+import type { JoinPlan } from "./JoinPlan";
 import type { PlannedExtract } from "./PlannedExtract";
 import type { PlannedTrack } from "./PlannedTrack";
 import type { SizeEstimate } from "./SizeEstimate";
@@ -64,6 +65,10 @@ addedAudio?: AddedAudio | null,
  * The loudness of every audio track written.
  */
 volume?: Volume | null, 
+/**
+ * Several files joined into one.
+ */
+join?: JoinPlan | null, 
 /**
  * Tracks saved as files of their own, in order.
  */

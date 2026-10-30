@@ -629,6 +629,22 @@ pub struct ConversionRequest {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub extract: Option<ExtractOptions>,
+    /// Several audio or video files joined into one (a combined job).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub join: Option<JoinOptions>,
+}
+
+/// Several audio or video files joined into one, in order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct JoinOptions {
+    /// What the analysis found about every file, in order (for the plan).
+    pub files: Vec<crate::probe::MediaInfo>,
+    /// Word after the first file's name (`"joined"`).
+    #[ts(optional = nullable)]
+    pub label: Option<String>,
 }
 
 impl ConversionRequest {
@@ -654,6 +670,7 @@ impl ConversionRequest {
             edit: None,
             media: None,
             extract: None,
+            join: None,
         }
     }
 }

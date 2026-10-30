@@ -7,10 +7,11 @@
 //! [`build_from_plan`] translates them into arguments.
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::CoreError;
 use crate::formats::{self, AudioCodec, FormatSpec, ImageCodec, VideoCodec};
+use crate::join::JoinPlan;
 use crate::plan::{
     AddedAudio, AudioEncode, AudioPlan, AudioRate, ConversionPlan, FramePlan, ImagePlan,
     ImageQuality, VideoEncode, VideoPlan, VideoRate, plan_conversion,
@@ -347,6 +348,112 @@ fn added_audio_args(a: &mut Args, plan: &ConversionPlan, added: &AddedAudio, spe
         &format!("-disposition:a:{before}"),
         if added.replace { "default" } else { "0" },
     ]);
+}
+
+/// Files joined into one (see [`crate::join`]): copied through the concat
+/// demuxer reading `list`, or encoded again through the concat filter, each
+/// picture fitted into the first one's size and the sound made 48 kHz stereo.
+pub fn join_args(
+    plan: &ConversionPlan,
+    join: &JoinPlan,
+    inputs: &[PathBuf],
+    list: &Path,
+    output: &Path,
+) -> FfmpegCommand {
+    let spec = formats::spec(plan.target);
+    let mut a = Args::default();
+    a.push(&[
+        "-hide_banner",
+        "-nostdin",
+        "-nostats",
+        "-loglevel",
+        "warning",
+        "-progress",
+        "pipe:1",
+    ]);
+    if join.copy {
+        a.push(&[
+            "-protocol_whitelist",
+            "file",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+        ]);
+        a.push_os(file_url(list));
+        for index in [plan.video_stream, plan.audio_stream].into_iter().flatten() {
+            a.push(&["-map", &format!("0:{index}")]);
+        }
+        a.push(&["-c", "copy"]);
+    } else {
+        for input in inputs {
+            a.push(&["-protocol_whitelist", "file", "-i"]);
+            a.push_os(file_url(input));
+        }
+        let (video, audio) = (plan.video.is_some(), plan.audio.is_some());
+        let (w, h) = (join.width.unwrap_or(1280), join.height.unwrap_or(720));
+        let fps = format_number(join.fps.unwrap_or(30.0));
+        let mut graph = String::new();
+        let mut segments = String::new();
+        for (i, file) in join.files.iter().enumerate() {
+            if let (true, Some(index)) = (video, file.video_stream) {
+                graph.push_str(&format!(
+                    "[{i}:{index}]scale={w}:{h}:force_original_aspect_ratio=decrease:flags=bicubic,\
+                     pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p[v{i}];"
+                ));
+                segments.push_str(&format!("[v{i}]"));
+            }
+            if audio {
+                match file.audio_stream {
+                    Some(index) => graph.push_str(&format!(
+                        "[{i}:{index}]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];"
+                    )),
+                    // Silence as long as the file.
+                    None => graph.push_str(&format!(
+                        "anullsrc=r=48000:cl=stereo,atrim=duration={}[a{i}];",
+                        format_number(file.duration_secs)
+                    )),
+                }
+                segments.push_str(&format!("[a{i}]"));
+            }
+        }
+        graph.push_str(&format!(
+            "{segments}concat=n={}:v={}:a={}{}{}",
+            join.files.len(),
+            u8::from(video),
+            u8::from(audio),
+            if video { "[v]" } else { "" },
+            if audio { "[a]" } else { "" },
+        ));
+        a.push(&["-filter_complex", &graph]);
+        if video {
+            a.push(&["-map", "[v]"]);
+        }
+        if audio {
+            a.push(&["-map", "[a]"]);
+        }
+        if let Some(VideoPlan::Encode(enc)) = &plan.video {
+            video_args(&mut a, enc);
+        }
+        if let Some(AudioPlan::Encode(enc)) = &plan.audio {
+            audio_args(&mut a, enc, spec);
+        }
+    }
+    a.push(&["-map_metadata", "0"]);
+    if plan.remove_location {
+        for key in [
+            "location",
+            "location-eng",
+            "com.apple.quicktime.location.ISO6709",
+        ] {
+            a.push(&["-metadata", &format!("{key}=")]);
+        }
+    }
+    a.push(spec.muxer_args);
+    a.push(&["-f", spec.muxer, "-y"]);
+    a.push_os(file_url(output));
+    FfmpegCommand { args: a.0 }
 }
 
 /// Audio tracks of the input written into the output.

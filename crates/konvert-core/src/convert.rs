@@ -950,6 +950,9 @@ pub async fn run_combined(
     if !job.output_dir.is_dir() {
         return Err(CoreError::OutputUnavailable);
     }
+    if job.request.join.is_some() {
+        return run_join(bins, workspace, job, cancel, on_progress, started).await;
+    }
     let request = ConversionRequest {
         target: TargetFormat::Pdf,
         ..job.request.clone()
@@ -972,6 +975,71 @@ pub async fn run_combined(
         started,
     )
     .await
+}
+
+/// Several audio or video files joined into one (see [`crate::join`]),
+/// named after the first file (`name-joined.ext`).
+async fn run_join(
+    bins: &Binaries,
+    workspace: &Workspace,
+    job: &CombinedJob,
+    cancel: &CancellationToken,
+    mut on_progress: impl FnMut(Progress) + Send,
+    started: Instant,
+) -> Result<ConversionOutcome, CoreError> {
+    let files: Vec<MediaInfo> = job.inputs.iter().map(|(_, media)| media.clone()).collect();
+    let plan = crate::join::plan(&files, &job.request)?;
+    let join = plan.join.clone().ok_or_else(nothing_written)?;
+    let paths: Vec<PathBuf> = job.inputs.iter().map(|(path, _)| path.clone()).collect();
+    let ext = formats::spec(plan.target).extension;
+    let list = workspace.job_output(job.id, "ffconcat");
+    if join.copy {
+        std::fs::write(&list, crate::join::concat_list(&paths)).map_err(CoreError::Io)?;
+    }
+    let temp_output = workspace.job_output(job.id, ext);
+    let command = crate::command::join_args(&plan, &join, &paths, &list, &temp_output);
+    let duration: f64 = join.files.iter().map(|f| f.duration_secs).sum();
+    let result = run_ffmpeg(
+        bins,
+        &command.args,
+        Some(duration),
+        cancel,
+        &mut on_progress,
+    )
+    .await;
+    let _ = std::fs::remove_file(&list);
+    let result = result.and_then(|()| match std::fs::metadata(&temp_output) {
+        Ok(m) if m.len() > 0 => Ok(()),
+        _ => Err(nothing_written()),
+    });
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(&temp_output);
+        return Err(e);
+    }
+
+    let mut stem = output_stem(&paths[0]);
+    let word = job.request.join.as_ref().and_then(|j| j.label.as_deref());
+    stem.push(format!("-{}", label(word, "joined")));
+    let output_dir = job.output_dir.clone();
+    let temp = temp_output.clone();
+    let moved =
+        tokio::task::spawn_blocking(move || naming::move_to_unique(&temp, &output_dir, &stem, ext))
+            .await
+            .map_err(|e| CoreError::Io(std::io::Error::other(e)))?;
+    let output = match moved {
+        Ok(path) => path,
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp_output);
+            return Err(e.into());
+        }
+    };
+    let size_bytes = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+    Ok(ConversionOutcome {
+        output,
+        size_bytes,
+        files: 1,
+        elapsed: started.elapsed(),
+    })
 }
 
 /// New PDFs from pictures (each encoded as JPEG by FFmpeg, turned the right

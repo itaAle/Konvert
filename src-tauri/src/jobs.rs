@@ -122,8 +122,8 @@ impl JobQueue {
         id
     }
 
-    /// Queues several files (pictures and PDFs, in order) that become one PDF,
-    /// and returns the id of that single job.
+    /// Queues several files that become one (pictures and PDFs into a PDF,
+    /// audio and video joined), in order, and returns the id of that single job.
     #[allow(clippy::too_many_arguments)]
     pub fn enqueue_combined(
         self: &Arc<Self>,
@@ -140,8 +140,9 @@ impl JobQueue {
         lock(&self.cancels).insert(id, token.clone());
         emit(&app, id, JobUpdate::Queued);
         self.log.write(&format!(
-            "job {id}: queued, {} files into one PDF, preset {:?}, pdf {:?}",
+            "job {id}: queued, {} files into one {:?}, preset {:?}, pdf {:?}",
             inputs.len(),
+            request.target,
             request.preset,
             request.pdf
         ));

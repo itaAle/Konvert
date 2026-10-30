@@ -69,6 +69,12 @@ export const en: Messages = {
     common: "Formats available for all the selected files.",
     none: "No format is common to all the files: remove the incompatible ones.",
   },
+  join: {
+    heading: "Join",
+    title: "One file",
+    hint: "Puts the files one after the other, in the order of the list. When they differ, they are encoded again at the size of the first one.",
+    fileLabel: "joined",
+  },
   volume: {
     heading: "Volume",
     original: "Original",
@@ -437,12 +443,14 @@ export const en: Messages = {
       "Text and pictures become editable; layout, tables and drawings are simplified. Scanned pages are read by OCR.",
     ocrReading:
       "Text in photos and scanned pages is read by OCR: check it. Languages written in the Latin alphabet (English, Italian, French, German, Spanish…) are recognized; handwriting is not.",
+    joinReencoded: "The files differ: they will be encoded again at the size and frame rate of the first one, with black bars and silence where needed.",
     volumeLimited: "Louder audio: its loudest moments are held down so they do not distort.",
     pictureStretched: "With an exact width and height the proportions change: the picture will look stretched.",
   },
   actions: {
     convert: "Convert",
     convertAll: "Convert {n} files",
+    join: "Join {n} files",
     makePdf: "Create PDF",
     savePdf: "Save PDF",
     splitPdf: "Split PDF",

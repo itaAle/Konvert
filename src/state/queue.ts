@@ -71,6 +71,8 @@ export interface QueueState {
   trim: TrimState | null;
   /** The audio of another file added to the only video, or replacing its audio. */
   audioFile: AudioFile | null;
+  /** Several audio or video files joined into one, in the order of the list. */
+  join: boolean;
   /** The loudness of the audio of the only file (`null`: as it is). */
   volume: Volume | null;
   /** Tracks of the only audio or video file saved as files of their own (instead of a target format). */
@@ -116,6 +118,7 @@ export type QueueAction =
   | { type: "setTrim"; trim: TrimState | null }
   | { type: "setAudioFile"; audioFile: AudioFile | null }
   | { type: "setVolume"; volume: Volume | null }
+  | { type: "setJoin"; join: boolean }
   | { type: "selectExtract" }
   | { type: "setExtract"; tracks: ExtractTrack[] }
   | { type: "selectPreset"; preset: QualityPreset }
@@ -179,6 +182,7 @@ export function initialQueue(preset: QualityPreset = "balanced"): QueueState {
     trim: null,
     audioFile: null,
     volume: null,
+    join: false,
     extract: false,
     extractTracks: [],
     preset,
@@ -335,6 +339,20 @@ export function volumeScope(state: QueueState): boolean {
   return format != null && !ANIMATIONS.includes(format);
 }
 
+/** Several audio or video files, all ready, made into audio or video (not an animation): they can be joined. */
+export function canJoin(state: QueueState): boolean {
+  const ready = readyItems(state);
+  if (state.compress || state.editCopy || state.extract || ready.length < 2 || ready.length !== state.items.length) return false;
+  if (!ready.every((i) => MEDIA_KINDS.includes(i.file!.media.kind))) return false;
+  const option = commonTargets(state.items).find((o) => o.format === state.target);
+  return option != null && ["video", "audio", "audioOnly"].includes(option.group) && !ANIMATIONS.includes(option.format);
+}
+
+/** The files are joined into one. */
+export function joins(state: QueueState): boolean {
+  return state.join && canJoin(state);
+}
+
 /** Formats of animations, which have no audio. */
 const ANIMATIONS: TargetFormat[] = ["gif", "animatedWebp", "apng"];
 
@@ -425,6 +443,7 @@ export function requestOf(state: QueueState): ConversionRequest | null {
     },
     edit: editOf(state),
     media: mediaOf(state, false),
+    join: joins(state) ? { files: readyItems(state).map((i) => i.file!.media), label: null } : null,
   };
 }
 
@@ -473,6 +492,8 @@ export function requestFor(state: QueueState, item: QueueItem): ConversionReques
   }
   if (!state.compress) {
     const request = requestOf(state);
+    // A join is planned once, as a whole, with the first file.
+    if (joins(state)) return readyItems(state)[0]?.key === item.key ? request : null;
     if (!request?.pdf || !arrangesPages(state)) return request;
     const index = pageSources(state).findIndex((s) => s.key === item.key);
     const own = request.pdf.layout?.filter((p) => p.file === index).map((p) => ({ ...p, file: 0 })) ?? null;
@@ -530,9 +551,8 @@ export function combines(state: QueueState): boolean {
   const ready = readyItems(state);
   const kinds = new Set(ready.map((i) => i.file!.media.kind));
   return (
-    state.target === "pdf" &&
-    ready.length > 1 &&
-    (kinds.has("document") || (state.pdf.combine && kinds.has("image")))
+    joins(state) ||
+    (state.target === "pdf" && ready.length > 1 && (kinds.has("document") || (state.pdf.combine && kinds.has("image"))))
   );
 }
 
@@ -773,6 +793,10 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
     case "setAudioFile":
       if (state.phase !== "setup") return state;
       return invalidate({ ...state, audioFile: action.audioFile, notice: null });
+
+    case "setJoin":
+      if (state.phase !== "setup") return state;
+      return invalidate({ ...state, join: action.join, notice: null });
 
     case "setVolume":
       if (state.phase !== "setup") return state;
