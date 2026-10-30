@@ -18,4 +18,8 @@ targets: Array<TargetOption>,
 /**
  * Format of a smaller copy of the file (its own), when Konvert can make one.
  */
-compress: TargetFormat | null, };
+compress: TargetFormat | null, 
+/**
+ * Format of an edited copy of a picture (its own), when Konvert can write it.
+ */
+edit: TargetFormat | null, };

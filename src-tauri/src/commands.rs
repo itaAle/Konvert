@@ -196,6 +196,8 @@ pub struct FileAnalysis {
     pub targets: Vec<TargetOption>,
     /// Format of a smaller copy of the file (its own), when Konvert can make one.
     pub compress: Option<TargetFormat>,
+    /// Format of an edited copy of a picture (its own), when Konvert can write it.
+    pub edit: Option<TargetFormat>,
 }
 
 /// Analyses a local media file and lists the sensible output formats.
@@ -254,11 +256,13 @@ async fn analysis(
         })
         .await;
     let targets = supported_targets(available_targets(&media, &path), encoders);
-    let compress = compress_format(&media, &path).filter(|format| {
+    let encodable = |format: &TargetFormat| {
         konvert_core::formats::spec(*format)
             .requires_encoder
             .is_none_or(|encoder| encoders.contains(encoder))
-    });
+    };
+    let compress = compress_format(&media, &path).filter(encodable);
+    let edit = konvert_core::edit::edit_format(&media, &path).filter(encodable);
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -269,6 +273,7 @@ async fn analysis(
         media,
         targets,
         compress,
+        edit,
     })
 }
 
