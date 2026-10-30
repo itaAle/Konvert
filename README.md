@@ -20,13 +20,13 @@ Linux x86_64 and arm64.
    the ones they all have in common).
 3. Pick the format and the quality (**Best quality**, **Balanced**, **Small file**): the
    estimated size and any warnings appear right away. Under **Advanced** you can adjust
-   bitrate, sample rate, channels, resolution, frame rate and codec (for pictures: quality
-   and maximum size).
+   bitrate, sample rate, channels, resolution, frame rate and codec (for pictures: quality).
 4. Press **Convert**: progress for each file and overall, time remaining, and **Cancel**
    at any moment. When it is done you can open the files or show them in their folder.
 
 To make files smaller instead, pick **Compress** above the formats (see
-[Compress](#compress)).
+[Compress](#compress)); to resize, turn or crop pictures in their own format, pick **Edit**
+(see [Resize, turn and crop](#resize-turn-and-crop)).
 
 Converted files are saved next to the original (or in a folder of your choice) and never
 overwrite other files (`song.mp3` already exists? → `song (1).mp3`).
@@ -96,9 +96,33 @@ Pictures:
   phone video location), a switch lets you leave it out of the converted file. It is off
   by default; when on, the coordinates are overwritten, not just unlinked.
 - **SVG** drawings are drawn by Konvert (with resvg, the same on every system) and then
-  converted like any picture. They scale without loss: **Maximum size** can also enlarge
-  them, and an icon gets every size up to 256 px.
+  converted like any picture. They scale without loss: a new size can also enlarge them,
+  and an icon gets every size up to 256 px.
 - Animated GIF, WebP and PNG files are treated as videos.
+
+### Resize, turn and crop
+
+When pictures are converted into a picture format, or with **Edit** (a copy in the
+picture's own format, named `name-mod.ext`, PNG to PNG included), a **Size and
+orientation** section changes them, always in this order:
+
+- **Turn** a quarter left or right (or half a turn) and **mirror** left to right or top to
+  bottom.
+- **Crop** (one photo at a time): a frame dragged on the photo as it will come out, free or
+  with fixed proportions (original, 1:1, 4:3, 3:2, 16:9, landscape or portrait), moved with
+  the arrow keys and resized with Shift + arrow keys.
+- **Resize** by a **percentage**, a **width and/or height** in pixels (proportions kept by
+  default: one side is enough; unlinked, the exact size is used and Konvert warns that
+  the picture will look stretched) or the **long side**. **Don't enlarge** is on by
+  default. With several pictures of different sizes, each keeps its own proportions.
+  Pictures are scaled with the Lanczos filter, never beyond 16384 pixels on a side or 100
+  megapixels when enlarged, nor beyond the limits of their format.
+
+Transparency, EXIF data (with the new size, orientation normal) and the location switch
+work as for any conversion. An icon (ICO) can be turned and cropped; its sizes stay the
+standard ones. Pictures taken from a video can be resized. Photos made into a PDF are
+turned in the page editor instead. Edited copies of HEIC photos and SVG drawings cannot be
+made (Konvert cannot write those formats): convert them into another format instead.
 - Camera RAW files (DNG, CR2, NEF…) are not supported: FFmpeg cannot develop them and no
   small, permissively licensed alternative does it well enough.
 
