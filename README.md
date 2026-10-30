@@ -328,12 +328,12 @@ The `.sha256` file contains the fingerprint of the package. On Windows, in Power
 your downloads folder:
 
 ```powershell
-(Get-FileHash .\Konvert_0.6.0_x64-setup.exe -Algorithm SHA256).Hash
-Get-Content .\Konvert_0.6.0_x64-setup.exe.sha256
+(Get-FileHash .\Konvert_0.7.0_x64-setup.exe -Algorithm SHA256).Hash
+Get-Content .\Konvert_0.7.0_x64-setup.exe.sha256
 ```
 
 The two fingerprints must match (upper/lower case does not matter). Alternatively:
-`certutil -hashfile Konvert_0.6.0_x64-setup.exe SHA256`. On Linux, in the folder with
+`certutil -hashfile Konvert_0.7.0_x64-setup.exe SHA256`. On Linux, in the folder with
 both files: `sha256sum -c <package>.sha256`; on macOS: `shasum -a 256 -c <package>.sha256`.
 If they do not match, do not open the file.
 

@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/konvert-core", "crates/konvert-cli", "src-tauri"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 license = "MIT"
 # rten (OCR) needs 1.94; Typst (DOCX to PDF) 1.92.
