@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::compress;
+use crate::edit;
 use crate::error::CoreError;
 use crate::estimate::{SizeEstimate, estimate_size};
 use crate::formats::{
@@ -22,7 +23,7 @@ use crate::probe::{
     AudioStream, MediaInfo, MediaKind, PictureInfo, VideoStream, pix_fmt_has_alpha,
 };
 use crate::request::{
-    AdvancedOptions, CompressOptions, ConversionRequest, FrameMode, QualityPreset,
+    AdvancedOptions, CompressOptions, ConversionRequest, FrameMode, QualityPreset, Resize,
 };
 
 /// How the audio stream is produced.
@@ -141,6 +142,18 @@ pub struct ImagePlan {
     /// Vector picture (SVG) drawn by Konvert at this size before encoding.
     #[serde(default)]
     pub render: Option<(u32, u32)>,
+    /// Clockwise turn asked by the user (0, 90, 180, 270), then mirrored
+    /// left to right and top to bottom.
+    #[serde(default)]
+    pub turn: u16,
+    #[serde(default)]
+    pub flip_horizontal: bool,
+    #[serde(default)]
+    pub flip_vertical: bool,
+    /// Part kept `(x, y, width, height)`, in pixels of the turned picture
+    /// (drawn at `render` for a vector picture), before it is scaled.
+    #[serde(default)]
+    pub crop: Option<(u32, u32, u32, u32)>,
 }
 
 /// One picture of a Windows icon: the source fitted into a transparent square.
@@ -228,6 +241,8 @@ pub enum ConversionWarning {
     /// Text read by OCR (photos, scanned pages): to check; Latin script only,
     /// no handwriting.
     OcrReading,
+    /// The picture is given exact sizes: its proportions change.
+    PictureStretched,
 }
 
 /// Pictures taken from a video.
@@ -319,6 +334,15 @@ pub fn plan_conversion(
 ) -> Result<ConversionPlan, CoreError> {
     let mut plan = if let Some(options) = &request.compress {
         compress::plan(media, request, options, input)?
+    } else if request.edit.as_ref().is_some_and(|e| e.copy) {
+        // An edited copy in the file's own format (PNG to PNG too).
+        if edit::edit_format(media, input) != Some(request.target) {
+            return Err(unsupported(format!(
+                "an edited {} cannot be made from this file",
+                formats::spec(request.target).label
+            )));
+        }
+        plan_offered(media, request, input)?
     } else if !formats::is_offered(media, input, request.target) {
         return Err(unsupported(format!(
             "{} is not offered for this input",
@@ -604,6 +628,8 @@ fn plan_document(
                         .min(),
                     ..AdvancedOptions::default()
                 },
+                // A page is turned in the page editor.
+                edit: None,
                 ..request.clone()
             };
             let mut plan = plan_still(
@@ -721,6 +747,7 @@ fn plan_pages(
             image_quality: request.advanced.image_quality,
             ..AdvancedOptions::default()
         },
+        edit: None,
         ..request.clone()
     };
     let mut plan = plan_still(media, &request, spec, &page, PictureInfo::default())?;
@@ -802,29 +829,90 @@ fn plan_still(
     let source_size = src.width.zip(src.height).filter(|(w, h)| *w > 0 && *h > 0);
     // A vector picture (SVG) is drawn at the size asked for, larger too.
     let vector = src.codec == "svg";
-    let icons = match (codec, source_size) {
+    let edit = request.edit.clone().unwrap_or_default();
+    edit::check(&edit)?;
+    let turn = edit.rotation % 360;
+    // The picture turned and cropped, in its own units.
+    let area = source_size.map(|(w, h)| {
+        let turned = edit::turned(f64::from(w), f64::from(h), turn);
+        edit::crop_area(turned, edit.crop.as_ref())
+    });
+    let edited = area.map(|(_, _, w, h)| edit::whole((w, h)));
+    let icons = match (codec, edited) {
         (ImageCodec::Ico, Some((w, h))) => icon_frames(w, h, wanted, vector),
         _ => Vec::new(),
     };
+    // A drawing given only a longest side (pictures of the page editor) is
+    // drawn at that size.
+    let resize_to = edit.resize.or(wanted
+        .filter(|_| vector)
+        .map(|side| Resize::LongSide { side }));
+    let mut asked = None;
+    let mut stretched = false;
     let size = match icons.last() {
         Some(largest) => Some((largest.size, largest.size)),
-        None => source_size.map(|(w, h)| {
-            let (w, h) = match wanted {
-                Some(side) if vector => fit_exactly(w, h, side),
-                _ => (w, h),
-            };
-            let limit = [wanted, codec.max_dimension()].into_iter().flatten().min();
-            fit_within(w, h, limit)
+        None => area.map(|(_, _, w, h)| {
+            let (size, changed) = edit::resized((w, h), resize_to.as_ref(), edit.enlarge || vector);
+            stretched = changed;
+            asked = Some(edit::whole(size));
+            // Larger than it was: within 16384 pixels and 100 megapixels too.
+            let enlarged = size.0 > w + 0.5 || size.1 > h + 0.5;
+            let limit = [
+                (!vector).then_some(wanted).flatten(),
+                codec.max_dimension(),
+                enlarged.then_some(edit::MAX_SIDE),
+            ]
+            .into_iter()
+            .flatten()
+            .fold(u32::MAX, u32::min);
+            edit::whole(edit::within_limits(size, limit, enlarged))
         }),
     };
-    // Konvert renders a vector picture at its final size: nothing left to scale
-    // (an icon is drawn at its largest size, the smaller ones are scaled from it).
-    let render = match (vector, icons.last(), size) {
-        (false, _, _) => None,
-        (true, Some(largest), _) => Some((largest.width, largest.height)),
-        (true, None, size) => size,
+    // The picture itself (inside the largest icon's square).
+    let picture_size = icons.last().map(|i| (i.width, i.height)).or(size);
+    // Konvert draws a vector picture so that its kept part has the final size
+    // (an icon at its largest size, the smaller ones are scaled from it).
+    let scale = match (area, picture_size) {
+        (Some((_, _, aw, ah)), Some((pw, ph))) if vector => {
+            Some((f64::from(pw) / aw).max(f64::from(ph) / ah))
+        }
+        _ => None,
     };
-    let resize = render.is_none() && size.is_some() && size != source_size;
+    let render = match (scale, source_size) {
+        (Some(scale), Some((w, h))) => {
+            Some(edit::whole((f64::from(w) * scale, f64::from(h) * scale)))
+        }
+        _ => None,
+    };
+    // The kept part in pixels of the picture entering the filters.
+    let crop = match (area, edit.crop) {
+        (Some((x, y, w, h)), Some(_)) => {
+            let scale = scale.unwrap_or(1.0);
+            let (input_w, input_h) = match (render, source_size) {
+                (Some((w, h)), _) | (None, Some((w, h))) => {
+                    edit::turned(f64::from(w), f64::from(h), turn)
+                }
+                (None, None) => (0.0, 0.0),
+            };
+            let (x, y) = ((x * scale).round(), (y * scale).round());
+            let (cw, ch) = edit::whole((w * scale, h * scale));
+            Some((
+                x as u32,
+                y as u32,
+                cw.min((input_w - x).max(1.0) as u32),
+                ch.min((input_h - y).max(1.0) as u32),
+            ))
+        }
+        _ => None,
+    };
+    // What the filters get before the scale: the kept part, or the whole
+    // (turned) picture.
+    let before_scale = crop.map(|(_, _, w, h)| (w, h)).or_else(|| {
+        render
+            .or(source_size)
+            .map(|(w, h)| if turn % 180 == 90 { (h, w) } else { (w, h) })
+    });
+    let resize = icons.is_empty() && size.is_some() && size != before_scale;
 
     let image = ImagePlan {
         codec,
@@ -838,6 +926,10 @@ fn plan_still(
         alpha_stream: picture.alpha_stream,
         render,
         icons,
+        turn,
+        flip_horizontal: edit.flip_horizontal,
+        flip_vertical: edit.flip_vertical,
+        crop,
         // Konvert writes EXIF data into the formats with a standard place for it.
         copy_exif: picture.exif
             && picture.exif_copyable
@@ -858,16 +950,24 @@ fn plan_still(
     if image.flatten {
         warnings.push(W::TransparencyLost);
     }
-    let longest = source_size.map_or(0, |(w, h)| w.max(h));
-    let format_limit = codec.max_dimension().filter(|max| longest > *max);
-    // An icon is small by nature: nothing to tell.
-    if codec != ImageCodec::Ico && format_limit.is_some_and(|max| wanted.is_none_or(|w| w > max)) {
+    // Made smaller than asked to fit the format or the limits (an icon is
+    // small by nature; Compress asks for its own smaller sides).
+    let longest = size.map_or(0, |(w, h)| w.max(h));
+    let intended = asked.map_or(0, |(w, h)| w.max(h));
+    let intended = match wanted {
+        Some(side) if !vector => intended.min(side),
+        _ => intended,
+    };
+    if codec != ImageCodec::Ico && longest < intended {
         warnings.push(W::PictureDownscaled);
+    }
+    if stretched {
+        warnings.push(W::PictureStretched);
     }
     if codec == ImageCodec::Gif {
         warnings.push(W::FewColors);
     }
-    if codec == ImageCodec::Ico && source_size.is_some_and(|(w, h)| w != h) {
+    if codec == ImageCodec::Ico && edited.is_some_and(|(w, h)| w != h) {
         warnings.push(W::PaddedToSquare);
     }
     // Without Konvert's copy, FFmpeg still carries EXIF data from JPEG/PNG/WebP
@@ -2388,5 +2488,221 @@ mod tests {
             false,
         );
         assert_eq!(wrong.unwrap_err().code(), "invalid_pages");
+    }
+
+    fn edited(edit: crate::request::PictureEdit) -> ConversionRequest {
+        ConversionRequest {
+            edit: Some(edit),
+            ..req(TargetFormat::Jpg, QualityPreset::Balanced)
+        }
+    }
+
+    #[test]
+    fn photos_are_turned_cropped_then_resized() {
+        use crate::request::{CropRect, PictureEdit, Resize};
+        // 4032×3024 turned a quarter: 3024×4032; the top half kept:
+        // 3024×2016; then half the size.
+        let request = edited(PictureEdit {
+            rotation: 90,
+            crop: Some(CropRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 0.5,
+            }),
+            resize: Some(Resize::Percent { percent: 50.0 }),
+            ..PictureEdit::default()
+        });
+        let p = plan(&photo(), &request, "IMG_1.jpg");
+        let image = image_plan(&p);
+        assert_eq!(
+            (
+                image.turn,
+                image.crop,
+                image.width,
+                image.height,
+                image.resize
+            ),
+            (90, Some((0, 0, 3024, 2016)), Some(1512), Some(1008), true)
+        );
+
+        // Turned and mirrored only: nothing to scale.
+        let request = edited(PictureEdit {
+            rotation: 270,
+            flip_horizontal: true,
+            ..PictureEdit::default()
+        });
+        let image = image_plan(&plan(&photo(), &request, "IMG_1.jpg")).clone();
+        assert_eq!(
+            (
+                image.turn,
+                image.flip_horizontal,
+                image.width,
+                image.height,
+                image.resize
+            ),
+            (270, true, Some(3024), Some(4032), false)
+        );
+
+        // Exact sizes: a warning that the proportions change.
+        let request = edited(PictureEdit {
+            resize: Some(Resize::Pixels {
+                width: Some(1000),
+                height: Some(1000),
+                keep_ratio: false,
+            }),
+            ..PictureEdit::default()
+        });
+        let p = plan(&photo(), &request, "IMG_1.jpg");
+        assert_eq!(
+            (image_plan(&p).width, image_plan(&p).height),
+            (Some(1000), Some(1000))
+        );
+        assert!(p.warnings.contains(&ConversionWarning::PictureStretched));
+
+        // Larger only when asked, and within the format's limits.
+        let double = |enlarge| {
+            edited(PictureEdit {
+                resize: Some(Resize::Percent { percent: 500.0 }),
+                enlarge,
+                ..PictureEdit::default()
+            })
+        };
+        let image = image_plan(&plan(&photo(), &double(false), "IMG_1.jpg")).clone();
+        assert_eq!((image.width, image.resize), (Some(4032), false));
+        let webp = ConversionRequest {
+            target: TargetFormat::Webp,
+            ..double(true)
+        };
+        let p = plan(&photo(), &webp, "IMG_1.jpg");
+        let (w, h) = (
+            image_plan(&p).width.unwrap(),
+            image_plan(&p).height.unwrap(),
+        );
+        // At most 100 megapixels, proportions kept.
+        assert!(
+            w < 16383 && u64::from(w) * u64::from(h) <= 100_000_000 && w * 3 / 4 == h,
+            "{w}×{h}"
+        );
+        assert!(p.warnings.contains(&ConversionWarning::PictureDownscaled));
+    }
+
+    #[test]
+    fn drawings_and_icons_are_edited_before_they_are_drawn() {
+        use crate::request::{CropRect, PictureEdit, Resize};
+        let svg = picture("svg", "svg_pipe", (40, 20), "rgba", false);
+        // The right half of the drawing, 400 pixels wide: drawn at 800×400
+        // and cropped there, nothing left to scale.
+        let crop = Some(CropRect {
+            x: 0.5,
+            y: 0.0,
+            width: 0.5,
+            height: 1.0,
+        });
+        let request = ConversionRequest {
+            target: TargetFormat::Png,
+            ..edited(PictureEdit {
+                crop,
+                resize: Some(Resize::Pixels {
+                    width: Some(400),
+                    height: None,
+                    keep_ratio: true,
+                }),
+                ..PictureEdit::default()
+            })
+        };
+        let image = image_plan(&plan(&svg, &request, "logo.svg")).clone();
+        assert_eq!(
+            (
+                image.render,
+                image.crop,
+                image.width,
+                image.height,
+                image.resize
+            ),
+            (
+                Some((800, 400)),
+                Some((400, 0, 400, 400)),
+                Some(400),
+                Some(400),
+                false
+            )
+        );
+        // An icon of a square crop of a photo: every size.
+        let request = ConversionRequest {
+            target: TargetFormat::Ico,
+            ..edited(PictureEdit {
+                crop: Some(CropRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.75,
+                    height: 1.0,
+                }),
+                ..PictureEdit::default()
+            })
+        };
+        let p = plan(&photo(), &request, "IMG_1.jpg");
+        let image = image_plan(&p);
+        assert_eq!(image.crop, Some((0, 0, 3024, 3024)));
+        assert_eq!(
+            image.icons.last().map(|i| (i.size, i.width, i.height)),
+            Some((256, 256, 256))
+        );
+        // Square once cropped: nothing padded.
+        assert!(!p.warnings.contains(&ConversionWarning::PaddedToSquare));
+    }
+
+    #[test]
+    fn edited_copies_keep_the_format_of_the_file() {
+        use crate::request::{PictureEdit, Resize};
+        let copy = |target| ConversionRequest {
+            target,
+            edit: Some(PictureEdit {
+                resize: Some(Resize::LongSide { side: 400 }),
+                copy: true,
+                ..PictureEdit::default()
+            }),
+            ..req(target, QualityPreset::Balanced)
+        };
+        // PNG to PNG is not "offered", but an edited copy is.
+        let png = transparent_png();
+        assert!(!crate::formats::is_offered(
+            &png,
+            Path::new("a.png"),
+            TargetFormat::Png
+        ));
+        let p = plan(&png, &copy(TargetFormat::Png), "a.png");
+        assert_eq!(
+            (image_plan(&p).width, image_plan(&p).height),
+            (Some(400), Some(300))
+        );
+        assert_eq!(
+            crate::edit::edit_format(&png, Path::new("a.png")),
+            Some(TargetFormat::Png)
+        );
+        // Only in the file's own format.
+        assert!(plan_conversion(&png, &copy(TargetFormat::Jpg), Path::new("a.png")).is_err());
+        // HEIC and SVG cannot be written: no edited copy.
+        let heic = picture(
+            "hevc",
+            "mov,mp4,m4a,3gp,3g2,mj2",
+            (4032, 3024),
+            "yuvj420p",
+            true,
+        );
+        assert_eq!(crate::edit::edit_format(&heic, Path::new("a.heic")), None);
+        let svg = picture("svg", "svg_pipe", (40, 20), "rgba", false);
+        assert_eq!(crate::edit::edit_format(&svg, Path::new("a.svg")), None);
+        // A PDF made of a photo ignores edits: pages are turned in the editor.
+        let pdf = ConversionRequest {
+            target: TargetFormat::Pdf,
+            edit: Some(PictureEdit {
+                rotation: 90,
+                ..PictureEdit::default()
+            }),
+            ..req(TargetFormat::Pdf, QualityPreset::Balanced)
+        };
+        let p = plan(&photo(), &pdf, "IMG_1.jpg");
+        assert_eq!(image_plan(&p).turn, 0);
     }
 }

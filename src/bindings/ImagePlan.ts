@@ -43,4 +43,14 @@ copyExif: boolean,
 /**
  * Vector picture (SVG) drawn by Konvert at this size before encoding.
  */
-render: [number, number] | null, };
+render: [number, number] | null, 
+/**
+ * Clockwise turn asked by the user (0, 90, 180, 270), then mirrored
+ * left to right and top to bottom.
+ */
+turn: number, flipHorizontal: boolean, flipVertical: boolean, 
+/**
+ * Part kept `(x, y, width, height)`, in pixels of the turned picture
+ * (drawn at `render` for a vector picture), before it is scaled.
+ */
+crop: [number, number, number, number] | null, };

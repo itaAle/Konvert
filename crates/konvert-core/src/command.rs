@@ -191,11 +191,12 @@ fn picture_args(a: &mut Args, image: &ImagePlan, index: u32, frames: Option<&Fra
         ),
         (None, None) => (format!("[0:{index}]"), Vec::new()),
     };
-    if !image.icons.is_empty() {
-        return icon_args(a, image, &inputs, steps);
-    }
     if let Some(every) = frames.and_then(|f| f.every_secs) {
         steps.push(format!("fps=1/{}", format_number(every)));
+    }
+    edit_steps(&mut steps, image);
+    if !image.icons.is_empty() {
+        return icon_args(a, image, &inputs, steps);
     }
     if let (true, Some(w), Some(h)) = (image.resize, image.width, image.height) {
         steps.push(format!("scale={w}:{h}:flags=lanczos"));
@@ -346,6 +347,25 @@ fn picture_args(a: &mut Args, image: &ImagePlan, index: u32, frames: Option<&Fra
             ]);
         }
         (codec, quality) => unreachable!("invalid plan: {codec:?} with {quality:?}"),
+    }
+}
+
+/// The turn, mirroring and crop asked by the user, before the scale.
+fn edit_steps(steps: &mut Vec<String>, image: &ImagePlan) {
+    match image.turn % 360 {
+        90 => steps.push("transpose=clock".to_owned()),
+        180 => steps.push("hflip,vflip".to_owned()),
+        270 => steps.push("transpose=cclock".to_owned()),
+        _ => {}
+    }
+    if image.flip_horizontal {
+        steps.push("hflip".to_owned());
+    }
+    if image.flip_vertical {
+        steps.push("vflip".to_owned());
+    }
+    if let Some((x, y, w, h)) = image.crop {
+        steps.push(format!("crop={w}:{h}:{x}:{y}:exact=1"));
     }
 }
 
@@ -1122,5 +1142,27 @@ mod tests {
         assert_eq!(format_number(25.0), "25");
         assert_eq!(format_number(29.97), "29.97");
         assert_eq!(format_number(23.976_023), "23.976");
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn edits_come_before_the_scale() {
+        use crate::request::{CropRect, PictureEdit, Resize};
+        let request = ConversionRequest {
+            edit: Some(PictureEdit {
+                rotation: 90,
+                flip_vertical: true,
+                crop: Some(CropRect { x: 0.0, y: 0.25, width: 1.0, height: 0.5 }),
+                resize: Some(Resize::LongSide { side: 1000 }),
+                ..PictureEdit::default()
+            }),
+            ..req(TargetFormat::Png, QualityPreset::Balanced)
+        };
+        let (args, _) = picture_body(&jpeg(), &request, "a.jpg");
+        assert_eq!(
+            args[..2],
+            strings(&["-filter_complex",
+                "[0:0]transpose=clock,vflip,crop=3000:2000:0:1000:exact=1,scale=1000:667:flags=lanczos[img]"])
+        );
     }
 }

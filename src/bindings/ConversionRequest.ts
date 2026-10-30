@@ -3,6 +3,7 @@ import type { AdvancedOptions } from "./AdvancedOptions";
 import type { CompressOptions } from "./CompressOptions";
 import type { FrameOptions } from "./FrameOptions";
 import type { PdfOptions } from "./PdfOptions";
+import type { PictureEdit } from "./PictureEdit";
 import type { QualityPreset } from "./QualityPreset";
 import type { TargetFormat } from "./TargetFormat";
 
@@ -26,4 +27,9 @@ pdf?: PdfOptions | null,
  * A smaller copy in the same format: `target` is the input's own format,
  * and the preset and advanced options are chosen by Konvert.
  */
-compress?: CompressOptions | null, };
+compress?: CompressOptions | null, 
+/**
+ * Pictures only: turned, mirrored, cropped or resized (or an edited
+ * copy in the same format).
+ */
+edit?: PictureEdit | null, };

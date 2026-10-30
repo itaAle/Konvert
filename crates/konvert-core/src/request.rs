@@ -396,6 +396,79 @@ pub struct CompressOptions {
     pub label: Option<String>,
 }
 
+/// How a picture is resized (after it is turned and cropped). The sizes are
+/// those of the edited picture; "fit" sizes keep the aspect ratio.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+#[ts(export)]
+pub enum Resize {
+    /// A percentage of the size (`50`: half as wide and as high).
+    #[serde(rename_all = "camelCase")]
+    Percent { percent: f32 },
+    /// A width and/or a height in pixels. With `keep_ratio`, a missing side
+    /// follows the picture's proportions, and both sides make a box the
+    /// picture fits in; without, both sides are exact (the proportions may
+    /// change) and a missing one stays as it is.
+    #[serde(rename_all = "camelCase")]
+    Pixels {
+        width: Option<u32>,
+        height: Option<u32>,
+        keep_ratio: bool,
+    },
+    /// The longest side, in pixels.
+    #[serde(rename_all = "camelCase")]
+    LongSide { side: u32 },
+}
+
+/// The part of a picture that is kept, as fractions (0 to 1) of the picture
+/// as it is shown after its turn.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CropRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// Changes made to a picture before it is encoded, in this order: turned,
+/// mirrored, cropped, resized.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct PictureEdit {
+    /// Clockwise turn in degrees: 0, 90, 180 or 270.
+    pub rotation: u16,
+    /// Mirrored left to right, after the turn.
+    pub flip_horizontal: bool,
+    /// Mirrored top to bottom, after the turn.
+    pub flip_vertical: bool,
+    #[ts(optional = nullable)]
+    pub crop: Option<CropRect>,
+    #[ts(optional = nullable)]
+    pub resize: Option<Resize>,
+    /// The picture may become larger than it is (a drawing always may).
+    pub enlarge: bool,
+    /// An edited copy in the file's own format ("Modifica"): `target` is
+    /// that format, named `name-<label>.ext`.
+    pub copy: bool,
+    /// Word after the name of the copy (`"mod"`).
+    #[ts(optional = nullable)]
+    pub label: Option<String>,
+}
+
+impl PictureEdit {
+    /// Nothing changes the picture.
+    pub fn is_empty(&self) -> bool {
+        self.rotation.is_multiple_of(360)
+            && !self.flip_horizontal
+            && !self.flip_vertical
+            && self.crop.is_none()
+            && self.resize.is_none()
+    }
+}
+
 /// A conversion requested by the user.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -422,6 +495,11 @@ pub struct ConversionRequest {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub compress: Option<CompressOptions>,
+    /// Pictures only: turned, mirrored, cropped or resized (or an edited
+    /// copy in the same format).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub edit: Option<PictureEdit>,
 }
 
 impl ConversionRequest {
@@ -435,6 +513,7 @@ impl ConversionRequest {
             remove_location: false,
             pdf: None,
             compress: None,
+            edit: None,
         }
     }
 }

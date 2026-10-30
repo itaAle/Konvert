@@ -569,6 +569,7 @@ async fn advanced_options_are_applied() {
         remove_location: false,
         pdf: None,
         compress: None,
+        edit: None,
     };
     let (_, out) = convert(&bins, &tmp, &input, request).await;
     let video = out.primary_video().unwrap();
@@ -2804,4 +2805,85 @@ async fn word_documents_become_text() {
         "Relazione annuale\nTesto con grassetto e una nota[1].\n1. Primo punto\n2. Secondo punto\n\
          Alta\tCella unita\nB\tC\n\nSeconda pagina\n\n\n[1] Testo della nota.\n"
     );
+}
+
+// --- Picture edits ---------------------------------------------------------------
+
+#[tokio::test]
+async fn pictures_are_turned_cropped_and_resized() {
+    use konvert_core::request::{CropRect, PictureEdit, Resize};
+    let bins = engine();
+    let tmp = TempDir::new("edit");
+    // 400×300, blue with a red top left quarter.
+    let input = tmp.path("Quadro.png");
+    generate(
+        &bins,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:s=400x300",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=200x150",
+            "-filter_complex",
+            "[0][1]overlay=0:0",
+            "-frames:v",
+            "1",
+        ],
+        &input,
+    );
+    // Turned a quarter clockwise the red quarter is at the top right
+    // (300×400); the top half kept (300×200); half the size: 150×100 with
+    // the right half red.
+    let edit = PictureEdit {
+        rotation: 90,
+        crop: Some(CropRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 0.5,
+        }),
+        resize: Some(Resize::Percent { percent: 50.0 }),
+        copy: true,
+        label: Some("mod".into()),
+        ..PictureEdit::default()
+    };
+    let request = ConversionRequest {
+        edit: Some(edit),
+        ..req(TargetFormat::Png, QualityPreset::Balanced)
+    };
+    let (out, media) = convert(&bins, &tmp, &input, request).await;
+    assert!(out.output.ends_with("Quadro-mod.png"), "{:?}", out.output);
+    let video = media.primary_video().unwrap();
+    assert_eq!((video.width, video.height), (Some(150), Some(100)));
+    let picture = image::open(&out.output).unwrap().to_rgb8();
+    let red = |x, y| {
+        let [r, _, b] = picture.get_pixel(x, y).0;
+        r > 200 && b < 60
+    };
+    assert!(
+        red(120, 50) && red(80, 10),
+        "the red quarter is on the right"
+    );
+    assert!(!red(30, 50) && !red(60, 90), "the left stays blue");
+
+    // Mirrored left to right, in another format: the red quarter is at the
+    // top right of the 400×300 picture.
+    let request = ConversionRequest {
+        edit: Some(PictureEdit {
+            flip_horizontal: true,
+            ..PictureEdit::default()
+        }),
+        ..req(TargetFormat::Jpg, QualityPreset::Max)
+    };
+    let (out, media) = convert(&bins, &tmp, &input, request).await;
+    assert!(out.output.ends_with("Quadro.jpg"));
+    assert_eq!(media.primary_video().unwrap().width, Some(400));
+    let picture = image::open(&out.output).unwrap().to_rgb8();
+    let [r, _, b] = picture.get_pixel(350, 50).0;
+    assert!(r > 200 && b < 60);
+    let [r, _, _] = picture.get_pixel(50, 50).0;
+    assert!(r < 60);
 }
