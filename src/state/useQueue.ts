@@ -27,6 +27,7 @@ import {
   type QueueItem,
 } from "./queue";
 import type { AudioFile } from "../bindings/AudioFile";
+import type { Volume } from "../bindings/Volume";
 import type { ExtractTrack } from "../bindings/ExtractTrack";
 import type { TrackChoice } from "../bindings/TrackChoice";
 import type { EditState } from "./edit";
@@ -264,6 +265,7 @@ export function useQueue() {
     setTracks: (tracks: TrackChoice[] | null) => dispatch({ type: "setTracks", tracks }),
     setTrim: (trim: TrimState | null) => dispatch({ type: "setTrim", trim }),
     setAudioFile: (audioFile: AudioFile | null) => dispatch({ type: "setAudioFile", audioFile }),
+    setVolume: (volume: Volume | null) => dispatch({ type: "setVolume", volume }),
     selectExtract: () => dispatch({ type: "selectExtract" }),
     setExtract: (tracks: ExtractTrack[]) => dispatch({ type: "setExtract", tracks }),
     selectPreset: (preset: QualityPreset) => dispatch({ type: "selectPreset", preset }),

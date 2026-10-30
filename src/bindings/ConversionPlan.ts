@@ -11,6 +11,7 @@ import type { PlannedTrack } from "./PlannedTrack";
 import type { SizeEstimate } from "./SizeEstimate";
 import type { TargetFormat } from "./TargetFormat";
 import type { VideoPlan } from "./VideoPlan";
+import type { Volume } from "./Volume";
 
 /**
  * Every decision taken for one conversion.
@@ -59,6 +60,10 @@ tracks: Array<PlannedTrack>,
  * of them).
  */
 addedAudio?: AddedAudio | null, 
+/**
+ * The loudness of every audio track written.
+ */
+volume?: Volume | null, 
 /**
  * Tracks saved as files of their own, in order.
  */

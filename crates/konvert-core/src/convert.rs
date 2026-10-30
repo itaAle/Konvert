@@ -34,7 +34,7 @@ use crate::probe::{MediaInfo, MediaKind};
 use crate::process;
 use crate::progress::{Progress, ProgressParser};
 use crate::request::{
-    CompressOptions, ConversionRequest, FrameMode, PdfOptions, PdfPage, QualityPreset,
+    CompressOptions, ConversionRequest, FrameMode, PdfOptions, PdfPage, QualityPreset, Volume,
 };
 use crate::secret::Passwords;
 use crate::svg;
@@ -314,14 +314,46 @@ async fn encode(
         None => None,
     };
     let source = drawing.as_deref().unwrap_or(&job.input);
-    let command = build_from_plan_with(plan, source, cover_comment.as_deref(), output);
 
     // Progress follows the part kept.
     let duration = plan
         .trim
         .map(|(_, length)| length)
         .or(job.media.duration_secs);
-    let result = run_ffmpeg(bins, &command.args, duration, cancel, on_progress).await;
+    // A normalization measures every audio track first (a quarter of the bar).
+    let measured;
+    let (plan, share) = if plan.volume == Some(Volume::Normalize) {
+        let sources = crate::volume::sources(plan, &job.input);
+        let mut loudness = Vec::with_capacity(sources.len());
+        for (i, source) in sources.iter().enumerate() {
+            let (from, part) = (
+                0.25 * i as f64 / sources.len() as f64,
+                0.25 / sources.len() as f64,
+            );
+            let mut on_part = |p: Progress| on_progress(scaled(p, from, part));
+            let args = crate::command::loudness_args(source);
+            let stderr = run_ffmpeg_tail(bins, &args, duration, cancel, &mut on_part).await;
+            match stderr {
+                Ok(stderr) => loudness.push(crate::volume::parse(&stderr)),
+                Err(e) => {
+                    for temporary in [&cover_comment, &drawing].into_iter().flatten() {
+                        let _ = std::fs::remove_file(temporary);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        measured = ConversionPlan {
+            loudness,
+            ..plan.clone()
+        };
+        (&measured, 0.25)
+    } else {
+        (plan, 0.0)
+    };
+    let command = build_from_plan_with(plan, source, cover_comment.as_deref(), output);
+    let mut on_encode = |p: Progress| on_progress(scaled(p, share, 1.0 - share));
+    let result = run_ffmpeg(bins, &command.args, duration, cancel, &mut on_encode).await;
     for temporary in [&cover_comment, &drawing].into_iter().flatten() {
         let _ = std::fs::remove_file(temporary);
     }
@@ -1521,6 +1553,28 @@ async fn run_ffmpeg(
     cancel: &CancellationToken,
     on_progress: &mut (impl FnMut(Progress) + Send),
 ) -> Result<(), CoreError> {
+    run_ffmpeg_tail(bins, args, duration_secs, cancel, on_progress)
+        .await
+        .map(drop)
+}
+
+/// Progress of one step, `from` + `part` of the whole bar.
+fn scaled(mut progress: Progress, from: f64, part: f64) -> Progress {
+    progress.fraction = progress.fraction.map(|f| from + f * part);
+    if part < 1.0 {
+        progress.eta_secs = None;
+    }
+    progress
+}
+
+/// Like [`run_ffmpeg`], returning the last lines FFmpeg wrote on stderr.
+async fn run_ffmpeg_tail(
+    bins: &Binaries,
+    args: &[OsString],
+    duration_secs: Option<f64>,
+    cancel: &CancellationToken,
+    on_progress: &mut (impl FnMut(Progress) + Send),
+) -> Result<String, CoreError> {
     let mut cmd = process::engine_command(&bins.ffmpeg);
     cmd.args(args);
     let mut child = process::spawn(&mut cmd)?;
@@ -1563,7 +1617,7 @@ async fn run_ffmpeg(
     let stderr_tail = stderr_task.await.unwrap_or_default();
 
     if status.success() {
-        Ok(())
+        Ok(stderr_tail)
     } else {
         Err(CoreError::from_engine_output(&stderr_tail))
     }

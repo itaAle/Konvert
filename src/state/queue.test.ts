@@ -7,6 +7,7 @@ import {
   trackScope,
   trimScope,
   audioFileScope,
+  volumeScope,
   canEditCopy,
   canExtract,
   editScope,
@@ -705,6 +706,7 @@ describe("queue state machine", () => {
       ],
       trim: null,
       audioFile: null,
+      volume: null,
       copy: false,
       label: null,
     });
@@ -735,7 +737,7 @@ describe("queue state machine", () => {
     let s = run(initialQueue(), { type: "add", paths: ["clip.mp4"] }, { type: "analyzed", key: 1, file: clip }, { type: "selectTarget", target: "mkv" });
     expect(trimScope(s)).toMatchObject({ duration: 60, video: true });
     s = reduce(s, { type: "setTrim", trim: { start: 5, end: 20, precise: null } });
-    expect(requestOf(s)?.media).toEqual({ tracks: null, trim: { startSecs: 5, endSecs: 20, precise: true }, audioFile: null, copy: false, label: null });
+    expect(requestOf(s)?.media).toEqual({ tracks: null, trim: { startSecs: 5, endSecs: 20, precise: true }, audioFile: null, volume: null, copy: false, label: null });
     s = reduce(s, { type: "selectEditCopy" });
     expect(requestFor(s, s.items[0])?.media?.trim).toEqual({ startSecs: 5, endSecs: 20, precise: false });
     s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("mp4", 50) });
@@ -756,7 +758,7 @@ describe("queue state machine", () => {
     let s = run(initialQueue(), { type: "add", paths: ["clip.mp4"] }, { type: "analyzed", key: 1, file: clip }, { type: "selectTarget", target: "mkv" });
     expect(audioFileScope(s)).toBe(true);
     s = reduce(s, { type: "setAudioFile", audioFile: music });
-    expect(requestOf(s)?.media).toEqual({ tracks: null, trim: null, audioFile: music, copy: false, label: null });
+    expect(requestOf(s)?.media).toEqual({ tracks: null, trim: null, audioFile: music, volume: null, copy: false, label: null });
     // An edited copy with only the added audio can start.
     s = reduce(s, { type: "selectEditCopy" });
     expect(requestFor(s, s.items[0])?.media).toMatchObject({ audioFile: music, copy: true });
@@ -771,6 +773,26 @@ describe("queue state machine", () => {
     // Another file: the choice is forgotten.
     s = run(s, { type: "add", paths: ["b.mp4"] });
     expect(s.audioFile).toBeNull();
+  });
+
+  it("changes the loudness of a lone file with audio", () => {
+    const song = file("song.flac", "audio", 180);
+    song.edit = "flac";
+    song.media.audio = [{ index: 0, codec: "flac", sampleRate: 44100, channels: 2, bitRate: null, bitDepth: 16 }];
+    let s = run(initialQueue(), { type: "add", paths: ["song.flac"] }, { type: "analyzed", key: 1, file: song }, { type: "selectTarget", target: "mp3" });
+    expect(volumeScope(s)).toBe(true);
+    s = reduce(s, { type: "setVolume", volume: { mode: "normalize" } });
+    expect(requestOf(s)?.media).toMatchObject({ volume: { mode: "normalize" }, copy: false });
+    // An edited copy with only a new loudness can start.
+    s = reduce(s, { type: "selectEditCopy" });
+    expect(requestFor(s, s.items[0])?.media).toMatchObject({ volume: { mode: "normalize" }, copy: true });
+    s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("flac", 50) });
+    expect(canStart(s)).toBe(true);
+    // Not for extracted tracks.
+    expect(volumeScope({ ...s, editCopy: false, extract: true })).toBe(false);
+    // Another file: the choice is forgotten.
+    s = run(s, { type: "add", paths: ["b.mp3"] });
+    expect(s.volume).toBeNull();
   });
 
   it("extracts tracks of a lone file", () => {

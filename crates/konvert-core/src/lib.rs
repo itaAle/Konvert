@@ -40,6 +40,7 @@ pub mod progress;
 pub mod request;
 pub mod secret;
 pub mod svg;
+pub mod volume;
 pub mod workspace;
 
 mod process;

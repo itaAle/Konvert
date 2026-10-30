@@ -17,6 +17,7 @@ import type { QualityPreset } from "../bindings/QualityPreset";
 import type { TargetFormat } from "../bindings/TargetFormat";
 import type { TargetOption } from "../bindings/TargetOption";
 import type { AudioFile } from "../bindings/AudioFile";
+import type { Volume } from "../bindings/Volume";
 import type { ExtractTrack } from "../bindings/ExtractTrack";
 import type { MediaEdit } from "../bindings/MediaEdit";
 import type { TrackChoice } from "../bindings/TrackChoice";
@@ -70,6 +71,8 @@ export interface QueueState {
   trim: TrimState | null;
   /** The audio of another file added to the only video, or replacing its audio. */
   audioFile: AudioFile | null;
+  /** The loudness of the audio of the only file (`null`: as it is). */
+  volume: Volume | null;
   /** Tracks of the only audio or video file saved as files of their own (instead of a target format). */
   extract: boolean;
   /** The tracks chosen for that, in file order. */
@@ -112,6 +115,7 @@ export type QueueAction =
   | { type: "setTracks"; tracks: TrackChoice[] | null }
   | { type: "setTrim"; trim: TrimState | null }
   | { type: "setAudioFile"; audioFile: AudioFile | null }
+  | { type: "setVolume"; volume: Volume | null }
   | { type: "selectExtract" }
   | { type: "setExtract"; tracks: ExtractTrack[] }
   | { type: "selectPreset"; preset: QualityPreset }
@@ -174,6 +178,7 @@ export function initialQueue(preset: QualityPreset = "balanced"): QueueState {
     tracks: null,
     trim: null,
     audioFile: null,
+    volume: null,
     extract: false,
     extractTracks: [],
     preset,
@@ -320,6 +325,16 @@ export function audioFileScope(state: QueueState): boolean {
   return state.editCopy || commonTargets(state.items).find((o) => o.format === format)?.group === "video";
 }
 
+/** The only file has audio (its own or added) made into audio or video, or an edited copy: its loudness can change. */
+export function volumeScope(state: QueueState): boolean {
+  const scope = trimScope(state);
+  if (!scope || state.extract) return false;
+  const added = audioFileScope(state) && state.audioFile != null;
+  if (scope.file.media.audio.length === 0 && !added) return false;
+  const format = state.editCopy ? scope.file.edit : state.target;
+  return format != null && !ANIMATIONS.includes(format);
+}
+
 /** Formats of animations, which have no audio. */
 const ANIMATIONS: TargetFormat[] = ["gif", "animatedWebp", "apng"];
 
@@ -337,8 +352,9 @@ function mediaOf(state: QueueState, copy: boolean): MediaEdit | null {
   // Fast for a copy, precise for a conversion (which encodes anyway), unless chosen.
   const trim = kept && { startSecs: kept.start, endSecs: kept.end, precise: kept.precise ?? !copy };
   const audioFile = audioFileScope(state) ? state.audioFile : null;
-  if (!copy && tracks == null && trim == null && audioFile == null) return null;
-  return { tracks, trim, audioFile, copy, label: copy ? EDIT_LABEL : null };
+  const volume = volumeScope(state) ? state.volume : null;
+  if (!copy && tracks == null && trim == null && audioFile == null && volume == null) return null;
+  return { tracks, trim, audioFile, volume, copy, label: copy ? EDIT_LABEL : null };
 }
 
 /** An edited copy changes something in the pictures or in the tracks. */
@@ -347,6 +363,7 @@ function copyChanged(state: QueueState): boolean {
   if (scope && editChanged(state.edit, scope)) return true;
   if (trimScope(state) && isTrimmed(state.trim)) return true;
   if (audioFileScope(state) && state.audioFile != null) return true;
+  if (volumeScope(state) && state.volume != null) return true;
   const tracks = trackScope(state);
   return tracks != null && state.tracks != null && !sameTracks(state.tracks, defaultTracks(tracks.file.media.tracks, true));
 }
@@ -435,7 +452,7 @@ export function requestFor(state: QueueState, item: QueueItem): ConversionReques
       frames: null,
       removeLocation: state.removeLocation,
       pdf: null,
-      media: trim ? { tracks: null, trim, audioFile: null, copy: false, label: null } : null,
+      media: trim ? { tracks: null, trim, audioFile: null, volume: null, copy: false, label: null } : null,
       extract: { tracks: state.extractTracks },
     };
   }
@@ -678,6 +695,7 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
         tracks: null,
         trim: null,
         audioFile: null,
+        volume: null,
         // Tracks are extracted from one file only.
         extract: false,
         extractTracks: [],
@@ -718,7 +736,7 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
 
     case "remove": {
       if (state.phase !== "setup") return state;
-      const next = withoutItems({ ...state, edit: { ...state.edit, crop: null }, tracks: null, trim: null, audioFile: null, extractTracks: [] }, state.items.filter((i) => i.key !== action.key));
+      const next = withoutItems({ ...state, edit: { ...state.edit, crop: null }, tracks: null, trim: null, audioFile: null, volume: null, extractTracks: [] }, state.items.filter((i) => i.key !== action.key));
       // The pages of the file go with it; edits are forgotten once no PDF is made of the files left.
       if (!next.pages) return next;
       return invalidate(editsPdf(next) ? next : { ...next, pages: null, cuts: [] });
@@ -755,6 +773,10 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
     case "setAudioFile":
       if (state.phase !== "setup") return state;
       return invalidate({ ...state, audioFile: action.audioFile, notice: null });
+
+    case "setVolume":
+      if (state.phase !== "setup") return state;
+      return invalidate({ ...state, volume: action.volume, notice: null });
 
     case "selectExtract":
       if (state.phase !== "setup" || state.extract || !canExtract(state)) return state;

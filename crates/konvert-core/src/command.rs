@@ -197,6 +197,16 @@ fn media_args(a: &mut Args, plan: &ConversionPlan, spec: &FormatSpec, cover_comm
     if let Some(added) = &plan.added_audio {
         added_audio_args(a, plan, added, spec);
     }
+    if let Some(volume) = plan.volume {
+        let tracks = own_audio_tracks(plan) + usize::from(plan.added_audio.is_some());
+        for i in 0..tracks {
+            let measured = plan.loudness.get(i).copied().flatten();
+            a.push(&[
+                &format!("-filter:a:{i}"),
+                &crate::volume::filter(volume, measured.as_ref()),
+            ]);
+        }
+    }
     match (plan.trim, &plan.added_audio) {
         (Some((_, length)), _) => {
             a.push(&["-t", &format_number(length)]);
@@ -310,15 +320,7 @@ pub fn waveform_args(input: &Path, width: u32, height: u32, output: &Path) -> Ve
 /// options (numbered after the video's audio tracks) and language; the
 /// default track when it replaces the video's audio.
 fn added_audio_args(a: &mut Args, plan: &ConversionPlan, added: &AddedAudio, spec: &FormatSpec) {
-    let before = match (&plan.audio, plan.tracks.is_empty()) {
-        (None, _) => 0,
-        (Some(_), true) => 1,
-        (Some(_), false) => plan
-            .tracks
-            .iter()
-            .filter(|t| t.kind == TrackKind::Audio)
-            .count(),
-    };
+    let before = own_audio_tracks(plan);
     a.push(&["-map", "1:a:0"]);
     let mut own = Args::default();
     match &added.audio {
@@ -345,6 +347,53 @@ fn added_audio_args(a: &mut Args, plan: &ConversionPlan, added: &AddedAudio, spe
         &format!("-disposition:a:{before}"),
         if added.replace { "default" } else { "0" },
     ]);
+}
+
+/// Audio tracks of the input written into the output.
+fn own_audio_tracks(plan: &ConversionPlan) -> usize {
+    match (&plan.audio, plan.tracks.is_empty()) {
+        (None, _) => 0,
+        (Some(_), true) => 1,
+        (Some(_), false) => plan
+            .tracks
+            .iter()
+            .filter(|t| t.kind == TrackKind::Audio)
+            .count(),
+    }
+}
+
+/// A measuring pass of one audio track (see [`crate::volume`]): nothing is
+/// written, the findings are printed on stderr.
+pub fn loudness_args(source: &crate::volume::Source) -> Vec<OsString> {
+    let mut a = Args::default();
+    a.push(&[
+        "-hide_banner",
+        "-nostdin",
+        "-nostats",
+        "-loglevel",
+        "info",
+        "-progress",
+        "pipe:1",
+    ]);
+    a.push(&["-protocol_whitelist", "file"]);
+    if let Some(start) = source.start_secs {
+        a.push(&["-ss", &format_number(start)]);
+    }
+    a.push(&["-i"]);
+    a.push_os(file_url(&source.path));
+    if let Some(length) = source.length_secs {
+        a.push(&["-t", &format_number(length)]);
+    }
+    a.push(&[
+        "-map",
+        &source.map,
+        "-af",
+        &crate::volume::measuring_filter(),
+        "-f",
+        "null",
+        "-",
+    ]);
+    a.0
 }
 
 /// Subtitle codecs, then the language, title and default flag of each track
@@ -1483,6 +1532,7 @@ mod tests {
                 ]),
                 trim: None,
                 audio_file: None,
+                volume: None,
                 copy: true,
                 label: Some("mod".into()),
             }),
@@ -1643,6 +1693,79 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn volume_encodes_only_the_audio() {
+        use crate::plan::ConversionWarning;
+        use crate::request::{AudioFile, MediaEdit, Volume};
+        let with = |volume, copy, audio_file: Option<AudioFile>| ConversionRequest {
+            media: Some(MediaEdit {
+                volume: Some(volume),
+                audio_file,
+                copy,
+                label: copy.then(|| "mod".into()),
+                ..MediaEdit::default()
+            }),
+            ..req(TargetFormat::Mp4, QualityPreset::Balanced)
+        };
+        let args = |request: &ConversionRequest| {
+            build_command(&mp4(), request, Path::new("a.mp4"), Path::new("o.mp4"))
+                .unwrap()
+                .args_lossy()
+                .join(" ")
+        };
+        // An edited copy: the video is copied, the audio normalized at its own rate.
+        let request = with(Volume::Normalize, true, None);
+        let plan = plan_conversion(&mp4(), &request, Path::new("a.mp4")).unwrap();
+        assert!(matches!(plan.video, Some(VideoPlan::Copy { .. })));
+        assert!(matches!(&plan.audio, Some(AudioPlan::Encode(e)) if e.sample_rate == Some(48_000)));
+        let a = args(&request);
+        assert!(a.contains("-c:v copy"), "{a}");
+        assert!(
+            a.contains("-filter:a:0 loudnorm=I=-16:TP=-1.5:LRA=11 "),
+            "{a}"
+        );
+        // Measured: one linear step.
+        let mut measured = plan.clone();
+        measured.loudness = vec![Some(crate::volume::Loudness {
+            integrated: -30.0,
+            true_peak: -12.0,
+            range: 5.0,
+            threshold: -40.0,
+            offset: 0.1,
+        })];
+        let a = build_from_plan(&measured, Path::new("a.mp4"), Path::new("o.mp4"))
+            .args_lossy()
+            .join(" ");
+        assert!(a.contains("measured_I=-30:measured_TP=-12"), "{a}");
+        assert!(a.contains("linear=true"), "{a}");
+        // Every audio track of the result, the added one too.
+        let music = AudioFile {
+            path: "music.mp3".into(),
+            codec: "mp3".into(),
+            channels: Some(2),
+            replace: false,
+            offset_ms: 0,
+            language: None,
+        };
+        let a = args(&with(Volume::Gain { db: -6.0 }, false, Some(music)));
+        assert!(
+            a.contains("-filter:a:0 volume=-6dB -filter:a:1 volume=-6dB"),
+            "{a}"
+        );
+        // Louder: limited, with a warning.
+        let request = with(Volume::Gain { db: 6.0 }, true, None);
+        let plan = plan_conversion(&mp4(), &request, Path::new("a.mp4")).unwrap();
+        assert!(plan.warnings.contains(&ConversionWarning::VolumeLimited));
+        assert!(args(&request).contains("volume=6dB,alimiter"));
+        // Out of range, or nothing to make louder.
+        let request = with(Volume::Gain { db: 25.0 }, true, None);
+        assert!(plan_conversion(&mp4(), &request, Path::new("a.mp4")).is_err());
+        let mut silent = mp4();
+        silent.audio.clear();
+        let request = with(Volume::Normalize, true, None);
+        assert!(plan_conversion(&silent, &request, Path::new("a.mp4")).is_err());
     }
 
     #[test]

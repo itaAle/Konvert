@@ -2,6 +2,7 @@
 import type { AudioFile } from "./AudioFile";
 import type { TrackChoice } from "./TrackChoice";
 import type { Trim } from "./Trim";
+import type { Volume } from "./Volume";
 
 /**
  * Changes to an audio or video file.
@@ -19,6 +20,10 @@ trim?: Trim | null,
  * Videos only: the audio of another file, added or replacing theirs.
  */
 audioFile?: AudioFile | null, 
+/**
+ * The loudness of every audio track of the result (encoded again).
+ */
+volume?: Volume | null, 
 /**
  * An edited copy in the file's own format ("Modifica"): `target` is
  * that format, named `name-<label>.ext`; streams are copied when they can be.

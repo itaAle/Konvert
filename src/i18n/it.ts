@@ -68,6 +68,16 @@ export const it = {
     common: "Formati disponibili per tutti i file selezionati.",
     none: "Non esiste un formato comune a tutti i file: rimuovi i file non compatibili.",
   },
+  volume: {
+    heading: "Volume",
+    original: "Originale",
+    normalize: "Normalizza",
+    gain: "Regola",
+    amount: "Variazione",
+    originalHint: "L'audio resta com'è.",
+    normalizeHint: "Porta l'audio a −16 LUFS, il volume dei servizi di streaming: utile per file troppo bassi o diversi tra loro. L'audio viene ricodificato.",
+    gainHint: "Più alto o più basso fino a 20 dB. Alzandolo, i punti più forti vengono contenuti per non distorcere.",
+  },
   audioFile: {
     title: "Audio da un altro file",
     hint: "Aggiungi una traccia audio (musica, doppiaggio, commento) o sostituisci quella del video.",
@@ -432,6 +442,7 @@ export const it = {
       "Testo e immagini diventano modificabili; impaginazione, tabelle e disegni vengono semplificati. Le pagine scansionate vengono lette con l'OCR.",
     ocrReading:
       "Il testo di foto e pagine scansionate viene letto con l'OCR: ricontrollalo. Riconosce le lingue con l'alfabeto latino (italiano, inglese, francese, tedesco, spagnolo…), non la scrittura a mano.",
+    volumeLimited: "Alzando il volume, i punti più forti vengono contenuti per non distorcere.",
     pictureStretched: "Con larghezza e altezza esatte le proporzioni cambiano: l'immagine risulterà deformata.",
   },
   actions: {

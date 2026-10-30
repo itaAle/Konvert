@@ -3034,6 +3034,7 @@ async fn tracks_are_chosen_ordered_and_labelled() {
             ]),
             trim: None,
             audio_file: None,
+            volume: None,
             copy: true,
             label: Some("mod".into()),
         }),
@@ -3257,4 +3258,65 @@ async fn audio_of_another_file_is_added_or_replaces() {
     );
     let length = media.duration_secs.unwrap();
     assert!((3.8..=4.3).contains(&length), "{length}");
+}
+
+/// Integrated loudness of a file's first audio track, in LUFS.
+fn loudness_of(bins: &Binaries, path: &Path) -> f64 {
+    let source = konvert_core::volume::Source {
+        path: path.to_path_buf(),
+        map: "0:a:0".into(),
+        start_secs: None,
+        length_secs: None,
+    };
+    let out = Command::new(&bins.ffmpeg)
+        .args(konvert_core::command::loudness_args(&source))
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    konvert_core::volume::parse(&String::from_utf8_lossy(&out.stderr))
+        .unwrap()
+        .integrated
+}
+
+#[tokio::test]
+async fn audio_is_normalized_or_made_quieter() {
+    use konvert_core::request::{MediaEdit, Volume};
+    let bins = engine();
+    let tmp = TempDir::new("volume");
+    // A quiet voice-like sound with pauses, well under the target.
+    let input = tmp.path("Quiet.wav");
+    generate(
+        &bins,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=f=330:d=8,volume='0.05*(1+0.5*sin(3*t))':eval=frame",
+            "-ar",
+            "44100",
+        ],
+        &input,
+    );
+    let before = loudness_of(&bins, &input);
+    assert!(before < -30.0, "{before}");
+    let with = |volume| ConversionRequest {
+        media: Some(MediaEdit {
+            volume: Some(volume),
+            ..MediaEdit::default()
+        }),
+        ..req(TargetFormat::Flac, QualityPreset::Balanced)
+    };
+    // Normalized: -16 LUFS, the sample rate kept.
+    let (out, media) = convert(&bins, &tmp, &input, with(Volume::Normalize)).await;
+    let after = loudness_of(&bins, &out.output);
+    assert!((after - -16.0).abs() <= 1.0, "{after}");
+    assert_eq!(media.audio[0].sample_rate, Some(44100));
+    // 6 dB quieter.
+    let (out, _) = convert(&bins, &tmp, &input, with(Volume::Gain { db: -6.0 })).await;
+    let after = loudness_of(&bins, &out.output);
+    assert!((after - (before - 6.0)).abs() <= 0.5, "{before} → {after}");
+    // 12 dB louder: the peaks are held under -1 dBFS.
+    let (out, _) = convert(&bins, &tmp, &input, with(Volume::Gain { db: 12.0 })).await;
+    let after = loudness_of(&bins, &out.output);
+    assert!((after - (before + 12.0)).abs() <= 1.0, "{before} → {after}");
 }

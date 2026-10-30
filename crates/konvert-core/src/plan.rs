@@ -246,6 +246,8 @@ pub enum ConversionWarning {
     OcrReading,
     /// The picture is given exact sizes: its proportions change.
     PictureStretched,
+    /// Louder audio: its loudest moments are held down so that it does not distort.
+    VolumeLimited,
 }
 
 /// Pictures taken from a video.
@@ -325,6 +327,15 @@ pub struct ConversionPlan {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub added_audio: Option<AddedAudio>,
+    /// The loudness of every audio track written.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub volume: Option<crate::request::Volume>,
+    /// What the measuring pass of a normalization found, per audio track
+    /// written (filled just before encoding).
+    #[serde(skip)]
+    #[ts(skip)]
+    pub loudness: Vec<Option<crate::volume::Loudness>>,
     /// Tracks saved as files of their own, in order.
     #[serde(default)]
     pub extract: Vec<PlannedExtract>,
@@ -412,6 +423,8 @@ pub fn plan_conversion(
             trim: None,
             extract: files,
             added_audio: None,
+            volume: None,
+            loudness: Vec::new(),
             warnings: Vec::new(),
             estimate: estimate.map(|(bytes, approximate)| SizeEstimate { bytes, approximate }),
         }
@@ -500,6 +513,14 @@ pub(crate) fn plan_offered(
         .and_then(|m| m.trim)
         .is_some_and(|t| t.precise);
     let force_encode = request.preset == QualityPreset::Small || same_format || precise;
+    // A new loudness: the audio is encoded again (the video can still be copied).
+    let volume = request.media.as_ref().and_then(|m| m.volume);
+    if let Some(crate::request::Volume::Gain { db }) = volume
+        && !(db.is_finite() && db.abs() <= crate::volume::MAX_GAIN_DB)
+    {
+        return Err(unsupported(format!("a gain of {db} dB is out of range")));
+    }
+    let encode_audio = force_encode || volume.is_some();
 
     // Tracks chosen by the user, by kind, in their order.
     let choice = chosen_tracks(media, request);
@@ -552,7 +573,7 @@ pub(crate) fn plan_offered(
         Vec::new()
     };
     let mut audio = audio_stream
-        .map(|a| plan_audio(spec, a, request, force_encode))
+        .map(|a| plan_audio(spec, a, request, encode_audio))
         .transpose()?;
     // One codec for every audio track: copied only if all can be.
     if matches!(audio, Some(AudioPlan::Copy { .. }))
@@ -623,7 +644,7 @@ pub(crate) fn plan_offered(
                 path: file.path.clone(),
                 delay_secs: file.offset_ms as f64 / 1000.0 - start,
                 replace: file.replace,
-                audio: plan_audio(spec, &source, request, force_encode)?,
+                audio: plan_audio(spec, &source, request, encode_audio)?,
                 language: file.language.clone().filter(|l| !l.trim().is_empty()),
             })
         }
@@ -639,6 +660,21 @@ pub(crate) fn plan_offered(
     };
     if replaced {
         tracks.retain(|t| t.kind != TrackKind::Audio);
+    }
+    let mut audio = audio;
+    let mut added_audio = added_audio;
+    if volume.is_some() && audio.is_none() && added_audio.is_none() {
+        return Err(unsupported("the result has no audio".into()));
+    }
+    // Normalizing works at 192 kHz: the result keeps the input's rate.
+    if volume == Some(crate::request::Volume::Normalize) {
+        if let Some(AudioPlan::Encode(enc)) = &mut audio {
+            enc.sample_rate
+                .get_or_insert(audio_stream.and_then(|a| a.sample_rate).unwrap_or(48_000));
+        }
+        if let Some(AudioPlan::Encode(enc)) = added_audio.as_mut().map(|a| &mut a.audio) {
+            enc.sample_rate.get_or_insert(48_000);
+        }
     }
 
     let mut plan = ConversionPlan {
@@ -656,11 +692,16 @@ pub(crate) fn plan_offered(
         tracks,
         trim,
         added_audio,
+        volume,
+        loudness: Vec::new(),
         extract: Vec::new(),
         warnings: Vec::new(),
         estimate: None,
     };
     plan.warnings = collect_warnings(media, request, &plan);
+    if matches!(volume, Some(crate::request::Volume::Gain { db }) if db > 0.0) {
+        plan.warnings.push(ConversionWarning::VolumeLimited);
+    }
     plan.estimate = estimate_size(media, &plan);
     Ok(plan)
 }
@@ -867,6 +908,8 @@ fn plan_document(
         trim: None,
         extract: Vec::new(),
         added_audio: None,
+        volume: None,
+        loudness: Vec::new(),
         warnings,
         estimate: None,
     };
@@ -999,6 +1042,8 @@ fn plan_document(
                 trim: None,
                 extract: Vec::new(),
                 added_audio: None,
+                volume: None,
+                loudness: Vec::new(),
                 warnings,
                 // The pages are copied as they are, with what they use.
                 estimate: media.size_bytes.map(|bytes| SizeEstimate {
@@ -1292,6 +1337,8 @@ fn plan_still(
         trim: None,
         extract: Vec::new(),
         added_audio: None,
+        volume: None,
+        loudness: Vec::new(),
         warnings,
         estimate: None,
     };

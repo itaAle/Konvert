@@ -23,6 +23,7 @@
 //!          --tracks "0, 2:eng*, 1:ita, 3"   (tracks kept in this order: index, language, * default)
 //!          --audio-file FILE  --replace-audio  --audio-offset MS  --audio-language ita
 //!                   (videos: the audio of another file added, or instead of theirs)
+//!          --normalize | --gain DB   (loudness: -16 LUFS, or -20 to +20 dB)
 //!          --page-size a4|letter|fit  --orientation auto|portrait|landscape
 //!          --margin none|small|normal   (pictures to PDF)
 //!          --dpi N  --pages "1-3, 5"   (PDF to pictures)
@@ -46,7 +47,9 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use konvert_core::request::{AudioFile, CropRect, MediaEdit, PictureEdit, Resize, TrackChoice};
+use konvert_core::request::{
+    AudioFile, CropRect, MediaEdit, PictureEdit, Resize, TrackChoice, Volume,
+};
 use konvert_core::{
     AdvancedOptions, Binaries, ChannelLayout, CombinedJob, CompressLevel, CompressOptions,
     ConversionJob, ConversionRequest, CoreError, FrameMode, FrameOptions, MediaInfo, PageMargin,
@@ -77,6 +80,7 @@ OPTIONS: --preset max|balanced|small  --height N  --fps N
          --tracks \"0, 2:eng*, 1:ita, 3\"   (tracks kept in this order: index, language, * default)
          --audio-file FILE  --replace-audio  --audio-offset MS  --audio-language ita
                   (videos: the audio of another file added, or instead of theirs)
+         --normalize | --gain DB   (loudness: -16 LUFS, or -20 to +20 dB)
          --page-size a4|letter|fit  --orientation auto|portrait|landscape
          --margin none|small|normal   (pictures to PDF)
          --dpi N  --pages \"1-3, 5\"   (PDF to pictures)
@@ -512,6 +516,12 @@ fn parse_args() -> Result<Cli, String> {
             Some("--audio-language") => {
                 added_audio(&mut media).language =
                     value("--audio-language")?.to_str().map(String::from)
+            }
+            Some("--normalize") => media.get_or_insert_default().volume = Some(Volume::Normalize),
+            Some("--gain") => {
+                media.get_or_insert_default().volume = Some(Volume::Gain {
+                    db: number("--gain", value("--gain")?)?,
+                })
             }
             Some("--mono") => advanced.channels = Some(ChannelLayout::Mono),
             Some("--stereo") => advanced.channels = Some(ChannelLayout::Stereo),

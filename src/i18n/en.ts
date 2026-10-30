@@ -69,6 +69,16 @@ export const en: Messages = {
     common: "Formats available for all the selected files.",
     none: "No format is common to all the files: remove the incompatible ones.",
   },
+  volume: {
+    heading: "Volume",
+    original: "Original",
+    normalize: "Normalize",
+    gain: "Adjust",
+    amount: "Change",
+    originalHint: "The audio stays as it is.",
+    normalizeHint: "Brings the audio to −16 LUFS, the loudness of streaming services: useful for files that are too quiet or uneven. The audio is encoded again.",
+    gainHint: "Louder or quieter by up to 20 dB. When louder, the loudest moments are held down so they do not distort.",
+  },
   audioFile: {
     title: "Audio from another file",
     hint: "Add an audio track (music, dubbing, commentary) or replace the video's own.",
@@ -427,6 +437,7 @@ export const en: Messages = {
       "Text and pictures become editable; layout, tables and drawings are simplified. Scanned pages are read by OCR.",
     ocrReading:
       "Text in photos and scanned pages is read by OCR: check it. Languages written in the Latin alphabet (English, Italian, French, German, Spanish…) are recognized; handwriting is not.",
+    volumeLimited: "Louder audio: its loudest moments are held down so they do not distort.",
     pictureStretched: "With an exact width and height the proportions change: the picture will look stretched.",
   },
   actions: {

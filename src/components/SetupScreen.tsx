@@ -12,6 +12,7 @@ import {
   canExtract,
   canStart,
   audioFileScope,
+  volumeScope,
   combines,
   currentTracks,
   commonTargets,
@@ -51,6 +52,7 @@ import { ProtectPanel } from "./ProtectPanel";
 import { StampPanel } from "./StampPanel";
 import { TracksPanel } from "./TracksPanel";
 import { TrimPanel } from "./TrimPanel";
+import { VolumePanel } from "./VolumePanel";
 import { QualityPicker } from "./QualityPicker";
 import { SplitPanel } from "./SplitPanel";
 import { Button } from "./ui/Button";
@@ -324,6 +326,12 @@ export function SetupScreen({ q }: { q: QueueController }) {
                 <section>
                   <SectionTitle>{t("audioFile.title")}</SectionTitle>
                   <AudioFilePanel value={state.audioFile} onChange={q.setAudioFile} />
+                </section>
+              )}
+              {volumeScope(state) && (
+                <section>
+                  <SectionTitle>{t("volume.heading")}</SectionTitle>
+                  <VolumePanel value={state.volume} onChange={q.setVolume} />
                 </section>
               )}
               {scope && (scope.resize || scope.turn) && (

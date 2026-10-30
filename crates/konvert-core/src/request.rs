@@ -533,6 +533,18 @@ pub struct Trim {
     pub precise: bool,
 }
 
+/// How loud the audio of the result is.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", tag = "mode")]
+#[ts(export)]
+pub enum Volume {
+    /// Every track brought to -16 LUFS with peaks under -1.5 dBTP, the
+    /// loudness of streaming services.
+    Normalize,
+    /// Louder or quieter by this many decibels (-20 to +20).
+    Gain { db: f32 },
+}
+
 /// The audio of another file, added to a video or replacing its audio.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -565,6 +577,9 @@ pub struct MediaEdit {
     /// Videos only: the audio of another file, added or replacing theirs.
     #[ts(optional = nullable)]
     pub audio_file: Option<AudioFile>,
+    /// The loudness of every audio track of the result (encoded again).
+    #[ts(optional = nullable)]
+    pub volume: Option<Volume>,
     /// An edited copy in the file's own format ("Modifica"): `target` is
     /// that format, named `name-<label>.ext`; streams are copied when they can be.
     pub copy: bool,
