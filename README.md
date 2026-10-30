@@ -26,7 +26,9 @@ Linux x86_64 and arm64.
 
 To make files smaller instead, pick **Compress** above the formats (see
 [Compress](#compress)); to resize, turn or crop pictures in their own format, pick **Edit**
-(see [Resize, turn and crop](#resize-turn-and-crop)).
+(see [Resize, turn and crop](#resize-turn-and-crop)). Audio and video files can be trimmed,
+get their tracks chosen, extracted, a new loudness or the audio of another file, and be
+joined together (see [Audio and video tools](#audio-and-video-tools)).
 
 Converted files are saved next to the original (or in a folder of your choice) and never
 overwrite other files (`song.mp3` already exists? → `song (1).mp3`).
@@ -125,6 +127,39 @@ turned in the page editor instead. Edited copies of HEIC photos and SVG drawings
 made (Konvert cannot write those formats): convert them into another format instead.
 - Camera RAW files (DNG, CR2, NEF…) are not supported: FFmpeg cannot develop them and no
   small, permissively licensed alternative does it well enough.
+
+### Audio and video tools
+
+For a single audio or video file, a conversion, or **Edit** (a copy in the file's own
+format, named `name-mod.ext`, which copies the streams whenever it can), offers:
+
+- **Tracks**: which video, audio and subtitle tracks to keep, in which order, with their
+  language, title and default track. Subtitles are copied into MKV, become `mov_text` in
+  MP4 and MOV and WebVTT in WebM; picture subtitles (DVD, Blu-ray) only fit MKV.
+- **Trim**: keep a part, chosen on a frame of the video or on the waveform of the audio.
+  **Fast** copies the streams (a video then starts at the key frame before the start);
+  **Precise** encodes again and cuts exactly. Edited copies are fast by default,
+  conversions precise.
+- **Audio from another file** (videos): a song, a dubbing or a voice-over added after the
+  video's own audio, or instead of it, moved earlier or later by milliseconds, with its
+  language. The result never lasts longer than the video.
+- **Volume**: **Normalize** brings every audio track to −16 LUFS with peaks under
+  −1.5 dBTP (EBU R128: measured first, then corrected in one linear step, at the file's
+  own sample rate); **Adjust** makes it louder or quieter by up to 20 dB, with a limiter
+  when louder so that it does not distort. Only the audio is encoded again.
+- **Extract tracks** (under **Tools**): tracks saved as files of their own. Audio is copied
+  into a format that holds its codec (AAC → M4A, Opus → OPUS…) or converted, subtitles
+  become SRT, WebVTT or ASS (text subtitles only), the video keeps the file's container
+  without sound. One track is saved next to the file (`Film-eng.opus`), several go into a
+  new folder named after it.
+
+Several audio or video files can be **joined** into one, in the order of the list (switch
+**One file** under **Join**, after choosing an audio or video format). When every file has
+the same codecs and parameters, the streams are copied one after the other without
+re-encoding; otherwise everything is encoded again at the size and frame rate of the first
+file (other pictures fitted with black bars, the sound at 48 kHz stereo, silence where a
+file has none), and Konvert says so first. The result is named after the first file
+(`Holiday-joined.mp4`).
 
 PDF documents:
 
@@ -488,6 +523,8 @@ npm run cli -- plan "C:\path\video.mp4" --to webm         # decisions, warnings,
 npm run cli -- convert "C:\path\song.wav" --to mp3 --preset balanced
 npm run cli -- convert "C:\path\photo.heic" --to jpg --max-size 1920
 npm run cli -- convert "C:\path\video.mp4" --to png --every 2   # a series of frames
+npm run cli -- convert "C:\path\film.mkv" --to mp4 --tracks "0, 2:eng*, 1:ita" --normalize
+npm run cli -- join "C:\path\a.mp4" "C:\path\b.mp4" --to mp4   # one file after the other
 ```
 
 `konvert-cli` is a development tool that uses the same engine as the app; it is not
