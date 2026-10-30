@@ -329,8 +329,19 @@ export function audioFileScope(state: QueueState): boolean {
   return state.editCopy || commonTargets(state.items).find((o) => o.format === format)?.group === "video";
 }
 
-/** The only file has audio (its own or added) made into audio or video, or an edited copy: its loudness can change. */
+/**
+ * The files have audio (the only one: its own or added) and are made into
+ * audio or video, or edited copies: their loudness can change.
+ */
 export function volumeScope(state: QueueState): boolean {
+  const ready = readyItems(state);
+  if (ready.length > 1) {
+    if (state.compress || state.extract || ready.length !== state.items.length) return false;
+    if (!ready.every((i) => MEDIA_KINDS.includes(i.file!.media.kind) && i.file!.media.audio.length > 0)) return false;
+    if (state.editCopy) return ready.every((i) => i.file!.edit != null && !ANIMATIONS.includes(i.file!.edit));
+    const option = commonTargets(state.items).find((o) => o.format === state.target);
+    return option != null && ["video", "audio", "audioOnly"].includes(option.group) && !ANIMATIONS.includes(option.format);
+  }
   const scope = trimScope(state);
   if (!scope || state.extract) return false;
   const added = audioFileScope(state) && state.audioFile != null;
@@ -339,11 +350,19 @@ export function volumeScope(state: QueueState): boolean {
   return format != null && !ANIMATIONS.includes(format);
 }
 
-/** Several audio or video files, all ready, made into audio or video (not an animation): they can be joined. */
+/**
+ * Several audio or video files, all ready, made into audio or video (not an
+ * animation), or edited copies all in the same format: they can be joined.
+ */
 export function canJoin(state: QueueState): boolean {
   const ready = readyItems(state);
-  if (state.compress || state.editCopy || state.extract || ready.length < 2 || ready.length !== state.items.length) return false;
+  if (state.compress || state.extract || ready.length < 2 || ready.length !== state.items.length) return false;
   if (!ready.every((i) => MEDIA_KINDS.includes(i.file!.media.kind))) return false;
+  // An edited copy keeps the format the files share.
+  if (state.editCopy) {
+    const format = ready[0].file!.edit;
+    return format != null && !ANIMATIONS.includes(format) && ready.every((i) => i.file!.edit === format);
+  }
   const option = commonTargets(state.items).find((o) => o.format === state.target);
   return option != null && ["video", "audio", "audioOnly"].includes(option.group) && !ANIMATIONS.includes(option.format);
 }
@@ -377,6 +396,7 @@ function mediaOf(state: QueueState, copy: boolean): MediaEdit | null {
 
 /** An edited copy changes something in the pictures or in the tracks. */
 function copyChanged(state: QueueState): boolean {
+  if (joins(state)) return true;
   const scope = editScope(state);
   if (scope && editChanged(state.edit, scope)) return true;
   if (trimScope(state) && isTrimmed(state.trim)) return true;
@@ -473,6 +493,22 @@ export function requestFor(state: QueueState, item: QueueItem): ConversionReques
       pdf: null,
       media: trim ? { tracks: null, trim, audioFile: null, volume: null, copy: false, label: null } : null,
       extract: { tracks: state.extractTracks },
+    };
+  }
+  if (state.editCopy && joins(state)) {
+    // Joined in the format they share: planned once, with the first file.
+    const ready = readyItems(state);
+    if (ready[0]?.key !== item.key) return null;
+    return {
+      target: item.file!.edit!,
+      preset: state.preset,
+      advanced: state.advanced,
+      frames: null,
+      removeLocation: state.removeLocation,
+      pdf: null,
+      edit: null,
+      media: mediaOf(state, true),
+      join: { files: ready.map((i) => i.file!.media), label: null },
     };
   }
   if (state.editCopy) {

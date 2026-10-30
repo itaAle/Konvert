@@ -11,6 +11,8 @@ interface EditCardProps {
   format: string | null;
   /** Audio or video files: their tracks are edited. */
   media?: boolean;
+  /** Several files: joined, or their loudness changed. */
+  several?: boolean;
 }
 
 /**
@@ -18,8 +20,9 @@ interface EditCardProps {
  * mirrored, cropped, resized; audio and video with chosen tracks). Selected
  * like a format card.
  */
-export function EditCard({ selected, onSelect, format, media = false }: EditCardProps) {
-  const note = format ? t(media ? "edit.cardMedia" : "edit.cardFormat", { format }) : t("edit.cardHint");
+export function EditCard({ selected, onSelect, format, media = false, several = false }: EditCardProps) {
+  const kind = media ? (several ? "edit.cardMediaMany" : "edit.cardMedia") : "edit.cardFormat";
+  const note = format ? t(kind, { format }) : t("edit.cardHint");
   return (
     <button
       type="button"

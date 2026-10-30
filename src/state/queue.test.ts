@@ -823,6 +823,44 @@ describe("queue state machine", () => {
     expect(requestOf(s)?.join).toBeNull();
   });
 
+  it("joins edited copies in the format they share, or changes their loudness one by one", () => {
+    const song = (name: string) => {
+      const f = file(name, "audio", 200);
+      f.edit = "mp3";
+      f.media.audio = [{ index: 0, codec: "mp3", sampleRate: 44100, channels: 2, bitRate: 192000, bitDepth: null }];
+      return f;
+    };
+    const [a, b] = [song("a.mp3"), song("b.mp3")];
+    let s = run(
+      initialQueue(),
+      { type: "add", paths: ["a.mp3", "b.mp3"] },
+      { type: "analyzed", key: 1, file: a },
+      { type: "analyzed", key: 2, file: b },
+      { type: "selectEditCopy" },
+    );
+    expect(canJoin(s)).toBe(true);
+    expect(volumeScope(s)).toBe(true);
+    // Nothing chosen yet: nothing to save.
+    s = run(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("mp3", 50) }, { type: "planned", key: 2, version: s.planVersion, plan: plan("mp3", 50) });
+    expect(canStart(s)).toBe(false);
+    // Each normalized on its own: one copy each.
+    s = reduce(s, { type: "setVolume", volume: { mode: "normalize" } });
+    expect(requestFor(s, s.items[1])).toMatchObject({ target: "mp3", media: { volume: { mode: "normalize" }, copy: true } });
+    expect(requestFor(s, s.items[1])?.join ?? null).toBeNull();
+    // Joined: one request, with the first file, in their format.
+    s = reduce(s, { type: "setJoin", join: true });
+    expect(requestFor(s, s.items[0])).toMatchObject({ target: "mp3", media: { volume: { mode: "normalize" } }, join: { files: [a.media, b.media] } });
+    expect(requestFor(s, s.items[1])).toBeNull();
+    expect(combines(s)).toBe(true);
+    s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("mp3", 90) });
+    expect(canStart(s)).toBe(true);
+    // Files in different formats are not joined as copies.
+    const c = file("c.wav", "audio", 30);
+    c.edit = "wav";
+    s = run(s, { type: "add", paths: ["c.wav"] }, { type: "analyzed", key: 3, file: c });
+    expect(canJoin(s)).toBe(false);
+  });
+
   it("extracts tracks of a lone file", () => {
     const film = file("film.mkv", "videoWithAudio", 60);
     film.edit = "mkv";

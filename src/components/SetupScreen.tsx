@@ -174,6 +174,8 @@ export function SetupScreen({ q }: { q: QueueController }) {
           ? state.extractTracks.length > 1
             ? t("actions.extractMany", { n: state.extractTracks.length })
             : t("actions.extractOne")
+          : joins(state)
+          ? t("actions.join", { n: ready.length })
           : editingCopy
           ? ready.length > 1
             ? t("actions.editCopyAll", { n: ready.length })
@@ -186,8 +188,6 @@ export function SetupScreen({ q }: { q: QueueController }) {
           ? t("actions.splitPdf")
           : editing && !together
             ? t("actions.savePdf")
-          : joins(state)
-          ? t("actions.join", { n: ready.length })
           : together || (state.target === "pdf" && ready.length === 1)
           ? t("actions.makePdf")
           : ready.length > 1
@@ -243,7 +243,7 @@ export function SetupScreen({ q }: { q: QueueController }) {
             </SectionTitle>
             <div className={[compressible, editable, extractable].filter(Boolean).length > 1 ? "grid grid-cols-2 gap-2.5" : ""}>
               {compressible && <CompressCard selected={compressing} onSelect={q.selectCompress} format={sharedFormat} />}
-              {editable && <EditCard selected={editingCopy} onSelect={q.selectEditCopy} format={sharedEditFormat} media={mediaCopy} />}
+              {editable && <EditCard selected={editingCopy} onSelect={q.selectEditCopy} format={sharedEditFormat} media={mediaCopy} several={files.length > 1} />}
               {extractable && <ExtractCard selected={extracting} onSelect={q.selectExtract} />}
             </div>
           </section>

@@ -19,6 +19,7 @@ import {
   canStart,
   combines,
   initialQueue,
+  joins,
   queueReducer,
   plannedItems,
   readyItems,
@@ -177,7 +178,8 @@ export function useQueue() {
     for (const group of groups) {
       if (cancelling.current) break;
       // A combined PDF gets the pages of every file (each file was planned with its own).
-      const base = group.length > 1 ? requestOf(s) : requestFor(s, group[0]);
+      // A join is planned as a whole with its first file.
+      const base = group.length > 1 && !joins(s) ? requestOf(s) : requestFor(s, group[0]);
       if (!base) continue;
       const request = labelled(base);
       try {

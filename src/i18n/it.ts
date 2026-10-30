@@ -145,6 +145,7 @@ export const it = {
     card: "Modifica",
     cardFormat: "{format} ridimensionato, ruotato o ritagliato",
     cardHint: "Stesso formato: ridimensiona, ruota, ritaglia",
+    cardMediaMany: "{format}: unisci o regola il volume",
     cardMedia: "{format}: tracce scelte",
     size: "Dimensioni",
     original: "Originali",

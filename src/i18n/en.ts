@@ -146,6 +146,7 @@ export const en: Messages = {
     card: "Edit",
     cardFormat: "{format} resized, turned or cropped",
     cardHint: "Same format: resize, turn, crop",
+    cardMediaMany: "{format}: join or change the volume",
     cardMedia: "{format}: chosen tracks",
     size: "Size",
     original: "Original",
