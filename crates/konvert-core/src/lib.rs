@@ -22,6 +22,7 @@ pub mod disk;
 pub mod docx;
 pub mod edit;
 pub mod error;
+pub mod extract;
 pub mod estimate;
 pub mod exif;
 pub mod formats;

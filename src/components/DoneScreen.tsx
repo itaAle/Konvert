@@ -69,7 +69,14 @@ export function DoneScreen({ q, item }: { q: QueueController; item: QueueItem })
       </h1>
       <p className="mt-2 max-w-lg truncate text-[15px] text-label-secondary" title={item.outcome?.output}>
         {files != null
-          ? t(item.plan?.target === "pdf" ? "done.savedDocuments" : "done.savedFolder", { n: files, name: outputName(item) })
+          ? t(
+              item.plan?.extract.length
+                ? "done.savedFiles"
+                : item.plan?.target === "pdf"
+                  ? "done.savedDocuments"
+                  : "done.savedFolder",
+              { n: files, name: outputName(item) },
+            )
           : t("done.saved", { name: outputName(item) })}
         {!smaller && ` · ${formatBytes(item.outcome?.sizeBytes ?? 0)}`}
       </p>

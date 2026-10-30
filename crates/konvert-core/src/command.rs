@@ -194,6 +194,44 @@ fn media_args(a: &mut Args, plan: &ConversionPlan, spec: &FormatSpec, cover_comm
     }
 }
 
+/// One subtitle track written as a subtitle file (`codec` encoder,
+/// `muxer`), only the part `trim` = `(start, length)` when given.
+pub fn subtitle_args(
+    input: &Path,
+    index: u32,
+    codec: &str,
+    trim: Option<(f64, f64)>,
+    output: &Path,
+) -> Vec<OsString> {
+    let muxer = match codec {
+        "webvtt" => "webvtt",
+        "ass" => "ass",
+        _ => "srt",
+    };
+    let mut a = Args::default();
+    a.push(&[
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "warning",
+        "-progress",
+        "pipe:1",
+    ]);
+    a.push(&["-protocol_whitelist", "file"]);
+    if let Some((start, _)) = trim.filter(|(start, _)| *start > 0.0) {
+        a.push(&["-ss", &format_number(start)]);
+    }
+    a.push(&["-i"]);
+    a.push_os(file_url(input));
+    a.push(&["-map", &format!("0:{index}"), "-c:s", codec]);
+    if let Some((_, length)) = trim {
+        a.push(&["-t", &format_number(length)]);
+    }
+    a.push(&["-f", muxer, "-y"]);
+    a.push_os(file_url(output));
+    a.0
+}
+
 /// One frame of a video at `at_secs`, at most `width` pixels wide, as a PNG.
 pub fn frame_args(input: &Path, at_secs: f64, width: u32, output: &Path) -> Vec<OsString> {
     let mut a = Args::default();

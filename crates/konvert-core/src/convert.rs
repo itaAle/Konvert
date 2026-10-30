@@ -230,6 +230,9 @@ pub async fn run_conversion(
     if let Some(options) = &plan.compress {
         return run_compress(bins, workspace, job, options, cancel, on_progress, started).await;
     }
+    if !plan.extract.is_empty() {
+        return run_extract(bins, workspace, job, &plan, cancel, on_progress, started).await;
+    }
     if plan.frames.is_some_and(|f| f.mode == FrameMode::Sequence) {
         return run_series(bins, workspace, job, &plan, cancel, on_progress, started).await;
     }
@@ -350,6 +353,99 @@ async fn encode(
                 .await;
     }
     Ok(())
+}
+
+/// Tracks saved as files of their own, one after the other in the private
+/// workspace, then moved: one next to the file (`name-ita.m4a`), several in
+/// a new folder named after it.
+async fn run_extract(
+    bins: &Binaries,
+    workspace: &Workspace,
+    job: &ConversionJob,
+    plan: &ConversionPlan,
+    cancel: &CancellationToken,
+    mut on_progress: impl FnMut(Progress) + Send,
+    started: Instant,
+) -> Result<ConversionOutcome, CoreError> {
+    let temp_dir = workspace.job_dir(job.id);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir)?;
+    let trim = job.request.media.as_ref().and_then(|m| m.trim).map(|t| {
+        let end = t
+            .end_secs
+            .or(job.media.duration_secs)
+            .unwrap_or(t.start_secs);
+        (t.start_secs, end - t.start_secs)
+    });
+    let duration = trim.map(|(_, length)| length).or(job.media.duration_secs);
+    let count = plan.extract.len();
+    let mut written = Vec::with_capacity(count);
+    let result: Result<(), CoreError> = async {
+        for (i, file) in plan.extract.iter().enumerate() {
+            let output = temp_dir.join(format!("{i:03}.{}", file.extension));
+            let args = match (&file.plan, &file.subtitle_codec) {
+                (Some(track), _) => build_from_plan(track, &job.input, &output).args,
+                (None, Some(codec)) => {
+                    crate::command::subtitle_args(&job.input, file.index, codec, trim, &output)
+                }
+                (None, None) => continue,
+            };
+            run_ffmpeg(bins, &args, duration, cancel, &mut |p: Progress| {
+                let part = p.fraction.unwrap_or(0.0);
+                on_progress(Progress {
+                    fraction: Some((i as f64 + part) / count as f64),
+                    ..fraction(0, 1)
+                });
+            })
+            .await?;
+            written.push((output, file));
+        }
+        Ok(())
+    }
+    .await;
+    if let Err(e) = result {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Err(e);
+    }
+
+    let stem = output_stem(&job.input);
+    let output_dir = job.output_dir.clone();
+    let files: Vec<(PathBuf, String, String)> = written
+        .into_iter()
+        .map(|(path, f)| (path, f.label.clone(), f.extension.clone()))
+        .collect();
+    let temp = temp_dir.clone();
+    let moved = tokio::task::spawn_blocking(move || -> std::io::Result<(PathBuf, u32, u64)> {
+        let size = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        if let [(path, label, ext)] = files.as_slice() {
+            let mut name = stem.clone();
+            name.push(format!("-{label}"));
+            let bytes = size(path);
+            return naming::move_to_unique(path, &output_dir, &name, ext).map(|p| (p, 1, bytes));
+        }
+        let folder = naming::create_unique_dir(&output_dir, &stem)?;
+        let mut bytes = 0;
+        for (path, label, ext) in &files {
+            let mut name = stem.clone();
+            name.push(format!("-{label}.{ext}"));
+            bytes += size(path);
+            if let Err(e) = naming::move_no_replace(path, &folder.join(name)) {
+                let _ = std::fs::remove_dir_all(&folder);
+                return Err(e);
+            }
+        }
+        Ok((folder, files.len() as u32, bytes))
+    })
+    .await
+    .map_err(|e| CoreError::Io(std::io::Error::other(e)));
+    let _ = std::fs::remove_dir_all(&temp);
+    let (output, files, size_bytes) = moved??;
+    Ok(ConversionOutcome {
+        output,
+        size_bytes,
+        files,
+        elapsed: started.elapsed(),
+    })
 }
 
 /// A smaller copy in the same format, named `name-compressed.ext` (with the

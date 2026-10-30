@@ -5,6 +5,7 @@ import type { ConversionWarning } from "./ConversionWarning";
 import type { DocumentPlan } from "./DocumentPlan";
 import type { FramePlan } from "./FramePlan";
 import type { ImagePlan } from "./ImagePlan";
+import type { PlannedExtract } from "./PlannedExtract";
 import type { PlannedTrack } from "./PlannedTrack";
 import type { SizeEstimate } from "./SizeEstimate";
 import type { TargetFormat } from "./TargetFormat";
@@ -52,6 +53,10 @@ compress?: CompressOptions | null,
  * `video_stream` and `audio_stream` only).
  */
 tracks: Array<PlannedTrack>, 
+/**
+ * Tracks saved as files of their own, in order.
+ */
+extract: Array<PlannedExtract>, 
 /**
  * Only this part of the input is written: `(start, length)` in seconds.
  */

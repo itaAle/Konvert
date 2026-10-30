@@ -483,6 +483,40 @@ pub struct TrackChoice {
     pub default: bool,
 }
 
+/// Subtitle file formats a track can be extracted into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum SubtitleFormat {
+    Srt,
+    Vtt,
+    Ass,
+}
+
+/// One track saved as a file of its own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExtractTrack {
+    /// Stream index in the file.
+    pub index: u32,
+    /// Audio: the format (`None`: one that keeps the track as it is).
+    #[ts(optional = nullable)]
+    pub audio: Option<TargetFormat>,
+    /// Subtitles: the file format (`None`: the one closest to the track).
+    #[ts(optional = nullable)]
+    pub subtitles: Option<SubtitleFormat>,
+}
+
+/// Tracks of an audio or video file saved as files of their own: one next
+/// to the file (`name-ita.m4a`), several in a folder named after it.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct ExtractOptions {
+    pub tracks: Vec<ExtractTrack>,
+}
+
 /// The part of an audio or video file that is kept.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -552,6 +586,11 @@ pub struct ConversionRequest {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub media: Option<MediaEdit>,
+    /// Audio and video only: tracks saved as files of their own (`target`
+    /// is then the file's own format; the trim of `media` applies).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub extract: Option<ExtractOptions>,
 }
 
 impl ConversionRequest {
@@ -576,6 +615,7 @@ impl ConversionRequest {
             compress: None,
             edit: None,
             media: None,
+            extract: None,
         }
     }
 }

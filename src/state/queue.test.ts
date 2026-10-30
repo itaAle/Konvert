@@ -7,6 +7,7 @@ import {
   trackScope,
   trimScope,
   canEditCopy,
+  canExtract,
   editScope,
   EDIT_LABEL,
   canStart,
@@ -109,6 +110,8 @@ const plan = (target: TargetFormat, bytes: number, approximate = false, warnings
   audio: null,
   coverArtStream: null,
   tracks: [],
+  trim: null,
+  extract: [],
   image: null,
   frames: null,
   removeLocation: false,
@@ -744,7 +747,40 @@ describe("queue state machine", () => {
     expect(trimScope(s)).toBeNull();
   });
 
-  it("resizes pictures taken from videos, without turning them", () => {
+  it("extracts tracks of a lone file", () => {
+    const film = file("film.mkv", "videoWithAudio", 60);
+    film.edit = "mkv";
+    film.media.tracks = [
+      { index: 0, kind: "video", codec: "h264", language: null, title: null, default: true, channels: null, bitmap: false },
+      { index: 1, kind: "audio", codec: "aac", language: "ita", title: null, default: true, channels: 2, bitmap: false },
+    ];
+    let s = run(initialQueue(), { type: "add", paths: ["film.mkv"] }, { type: "analyzed", key: 1, file: film });
+    expect(canExtract(s)).toBe(true);
+    s = reduce(s, { type: "selectExtract" });
+    expect(s).toMatchObject({ extract: true, target: null, compress: false, editCopy: false });
+    // Nothing chosen yet: nothing to plan or start.
+    expect(requestFor(s, s.items[0])).toBeNull();
+    expect(canStart(s)).toBe(false);
+    s = reduce(s, { type: "setExtract", tracks: [{ index: 1, audio: "mp3", subtitles: null }] });
+    s = reduce(s, { type: "setTrim", trim: { start: 10, end: null, precise: null } });
+    expect(requestFor(s, s.items[0])).toMatchObject({
+      target: "mkv",
+      extract: { tracks: [{ index: 1, audio: "mp3", subtitles: null }] },
+      // Copied when possible: a trim is fast unless chosen.
+      media: { trim: { startSecs: 10, endSecs: null, precise: false } },
+    });
+    s = reduce(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("mkv", 50) });
+    expect(canStart(s)).toBe(true);
+    // A format chosen instead.
+    s = reduce(s, { type: "selectTarget", target: "mp4" });
+    expect(s.extract).toBe(false);
+    // Another file: no more extraction.
+    s = reduce(s, { type: "selectExtract" });
+    s = run(s, { type: "add", paths: ["b.mkv"] });
+    expect(s.extract).toBe(false);
+  });
+
+    it("resizes pictures taken from videos, without turning them", () => {
     let s = run(
       initialQueue(),
       { type: "add", paths: ["v.mp4"] },

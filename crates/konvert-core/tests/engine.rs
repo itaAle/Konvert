@@ -571,6 +571,7 @@ async fn advanced_options_are_applied() {
         compress: None,
         edit: None,
         media: None,
+        extract: None,
     };
     let (_, out) = convert(&bins, &tmp, &input, request).await;
     let video = out.primary_video().unwrap();
@@ -3109,5 +3110,74 @@ async fn files_are_trimmed_fast_or_precisely() {
         .await
         .unwrap();
     assert!(wave.starts_with("data:image/png;base64,") && wave.len() > 200);
+    assert_eq!(files_in(ws.dir()), [".lock"], "temporary files left behind");
+}
+
+#[tokio::test]
+async fn tracks_are_extracted_into_files() {
+    use konvert_core::request::{ExtractOptions, ExtractTrack, SubtitleFormat};
+    let bins = engine();
+    let tmp = TempDir::new("extract");
+    let film = sample_film(&bins, &tmp);
+    let extract = |tracks: Vec<ExtractTrack>| ConversionRequest {
+        extract: Some(ExtractOptions { tracks }),
+        ..req(TargetFormat::Mkv, QualityPreset::Balanced)
+    };
+    let track = |index, audio, subtitles| ExtractTrack {
+        index,
+        audio,
+        subtitles,
+    };
+
+    // One track: next to the file, named after its language, copied as Opus.
+    let (out, media) = convert(&bins, &tmp, &film, extract(vec![track(2, None, None)])).await;
+    assert!(out.output.ends_with("Film è-eng.opus"), "{:?}", out.output);
+    assert_eq!(media.audio.len(), 1);
+    assert_eq!(media.audio[0].codec, "opus");
+
+    // Several: a folder with the Italian audio as MP3, the subtitles as
+    // WebVTT and the video without audio.
+    let media = probe(&bins, &film).await.unwrap();
+    let request = extract(vec![
+        track(0, None, None),
+        track(1, Some(TargetFormat::Mp3), None),
+        track(3, None, Some(SubtitleFormat::Vtt)),
+    ]);
+    let plan = plan_conversion(&media, &request, &film).unwrap();
+    let labels: Vec<_> = plan
+        .extract
+        .iter()
+        .map(|e| format!("{}.{}", e.label, e.extension))
+        .collect();
+    assert_eq!(labels, ["video.mkv", "ita.mp3", "ita-2.vtt"]);
+    let out_dir = tmp.path("tracce");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ws = Workspace::create(&tmp.path("ws")).unwrap();
+    let job = ConversionJob {
+        id: 4,
+        input: film.clone(),
+        media,
+        request,
+        output_dir: out_dir.clone(),
+        passwords: Default::default(),
+    };
+    let outcome = run_conversion(&bins, &ws, &job, &CancellationToken::new(), |_| {})
+        .await
+        .unwrap();
+    assert_eq!(outcome.files, 3);
+    assert!(outcome.output.is_dir());
+    assert_eq!(
+        files_in(&outcome.output),
+        ["Film è-ita-2.vtt", "Film è-ita.mp3", "Film è-video.mkv"]
+    );
+    let vtt = std::fs::read_to_string(outcome.output.join("Film è-ita-2.vtt")).unwrap();
+    assert!(
+        vtt.starts_with("WEBVTT") && vtt.contains("Ciao a tutti"),
+        "{vtt}"
+    );
+    let video = probe(&bins, &outcome.output.join("Film è-video.mkv"))
+        .await
+        .unwrap();
+    assert!(video.audio.is_empty() && video.video.len() == 1);
     assert_eq!(files_in(ws.dir()), [".lock"], "temporary files left behind");
 }

@@ -7,10 +7,11 @@ interface SwitchProps {
   onChange: (checked: boolean) => void;
   label: string;
   describedBy?: string;
+  disabled?: boolean;
 }
 
 /** iOS-style toggle (ARIA switch). */
-export function Switch({ checked, onChange, label, describedBy }: SwitchProps) {
+export function Switch({ checked, onChange, label, describedBy, disabled = false }: SwitchProps) {
   return (
     <button
       type="button"
@@ -18,8 +19,9 @@ export function Switch({ checked, onChange, label, describedBy }: SwitchProps) {
       aria-checked={checked}
       aria-label={label}
       aria-describedby={describedBy}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors duration-200 ${
+      className={`relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors duration-200 disabled:opacity-40 ${
         checked ? "bg-success" : "bg-fill-strong"
       }`}
     >

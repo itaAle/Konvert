@@ -497,6 +497,7 @@ fn parse_args() -> Result<Cli, String> {
             compress: compress.clone(),
             edit: edit.clone(),
             media: media.clone(),
+            extract: None,
             preset,
             advanced: advanced.clone(),
             frames,

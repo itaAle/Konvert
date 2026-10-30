@@ -536,6 +536,39 @@ export const mockBackend: Backend = {
     return canvas.toDataURL("image/png");
   },
   async planConversion(_path, media, request) {
+    if (request.extract) {
+      await sleep(80);
+      // Like the core: labels from the language, else the kind and position.
+      const used = new Set<string>();
+      const extract = request.extract.tracks.map((chosen) => {
+        const track = media.tracks.find((t) => t.index === chosen.index)!;
+        const position = media.tracks.filter((t) => t.kind === track.kind).indexOf(track) + 1;
+        let label = track.language ?? (track.kind === "video" ? "video" : `${track.kind === "audio" ? "audio" : "subtitles"}${position}`);
+        for (let n = 2; used.has(label); n++) label = `${track.language}-${n}`;
+        used.add(label);
+        const extension =
+          track.kind === "subtitle" ? (chosen.subtitles ?? "srt") : track.kind === "video" ? "mkv" : (chosen.audio ?? "m4a");
+        return { index: track.index, kind: track.kind, extension, label, subtitleCodec: null };
+      });
+      const plan: ConversionPlan = {
+        target: request.target,
+        videoStream: null,
+        video: null,
+        audioStream: null,
+        audio: null,
+        coverArtStream: null,
+        tracks: [],
+        trim: null,
+        extract,
+        image: null,
+        frames: null,
+        document: null,
+        removeLocation: false,
+        warnings: [],
+        estimate: null,
+      };
+      return plan;
+    }
     if (request.compress) {
       await sleep(80);
       const level = { light: 0.75, strong: 0.45, max: 0.25 }[request.compress.level];
@@ -549,6 +582,8 @@ export const mockBackend: Backend = {
         audio: null,
         coverArtStream: null,
         tracks: [],
+        trim: null,
+        extract: [],
         image: null,
         frames: null,
         document: null,
@@ -570,6 +605,8 @@ export const mockBackend: Backend = {
         audio: null,
         coverArtStream: null,
         tracks: [],
+        trim: null,
+        extract: [],
         image: null,
         frames: null,
         document: null,
@@ -613,6 +650,8 @@ export const mockBackend: Backend = {
         audio: null,
         coverArtStream: null,
         tracks: [],
+        trim: null,
+        extract: [],
         image: null,
         frames: null,
         removeLocation: false,
@@ -657,6 +696,8 @@ export const mockBackend: Backend = {
         audio: null,
         coverArtStream: null,
         tracks: [],
+        trim: null,
+        extract: [],
         image: {
           codec: request.target === "jpg" ? "jpeg" : (request.target as "png" | "webp"),
           quality: request.target === "png" ? { kind: "lossless", effort: 6 } : { kind: "lossy", quality: 85 },
@@ -702,6 +743,8 @@ export const mockBackend: Backend = {
         audio: null,
         coverArtStream: null,
         tracks: [],
+        trim: null,
+        extract: [],
         image: {
           codec: request.target === "jpg" ? "jpeg" : (request.target as "png" | "webp" | "avif"),
           quality: png ? { kind: "lossless", effort: 6 } : { kind: "lossy", quality: request.advanced.imageQuality ?? quality },
@@ -748,6 +791,8 @@ export const mockBackend: Backend = {
       audio: remux ? { mode: "copy", codec: "aac" } : null,
       coverArtStream: null,
       tracks: [],
+      trim: null,
+      extract: [],
       image: null,
       frames: null,
       removeLocation: request.removeLocation,

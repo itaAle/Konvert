@@ -16,6 +16,7 @@ import type { Progress } from "../bindings/Progress";
 import type { QualityPreset } from "../bindings/QualityPreset";
 import type { TargetFormat } from "../bindings/TargetFormat";
 import type { TargetOption } from "../bindings/TargetOption";
+import type { ExtractTrack } from "../bindings/ExtractTrack";
 import type { MediaEdit } from "../bindings/MediaEdit";
 import type { TrackChoice } from "../bindings/TrackChoice";
 import { DEFAULT_EDIT, editChanged, pictureEditOf, type EditScope, type EditState } from "./edit";
@@ -66,6 +67,10 @@ export interface QueueState {
   tracks: TrackChoice[] | null;
   /** The part kept of the only audio or video file (`null`: all of it). */
   trim: TrimState | null;
+  /** Tracks of the only audio or video file saved as files of their own (instead of a target format). */
+  extract: boolean;
+  /** The tracks chosen for that, in file order. */
+  extractTracks: ExtractTrack[];
   preset: QualityPreset;
   advanced: AdvancedOptions;
   /** Pictures taken from videos (frame targets only). */
@@ -103,6 +108,8 @@ export type QueueAction =
   | { type: "setEdit"; edit: EditState }
   | { type: "setTracks"; tracks: TrackChoice[] | null }
   | { type: "setTrim"; trim: TrimState | null }
+  | { type: "selectExtract" }
+  | { type: "setExtract"; tracks: ExtractTrack[] }
   | { type: "selectPreset"; preset: QualityPreset }
   | { type: "setAdvanced"; advanced: AdvancedOptions }
   | { type: "setFrames"; frames: FrameOptions }
@@ -162,6 +169,8 @@ export function initialQueue(preset: QualityPreset = "balanced"): QueueState {
     edit: DEFAULT_EDIT,
     tracks: null,
     trim: null,
+    extract: false,
+    extractTracks: [],
     preset,
     advanced: {},
     frames: DEFAULT_FRAMES,
@@ -283,10 +292,18 @@ export function trimScope(state: QueueState): { file: FileAnalysis; duration: nu
   const duration = file.media.durationSecs;
   if (!MEDIA_KINDS.includes(file.media.kind) || !duration) return null;
   const video = file.media.kind !== "audio";
-  if (state.editCopy) return { file, duration, video };
+  if (state.editCopy || state.extract) return { file, duration, video };
   const option = commonTargets(state.items).find((o) => o.format === state.target);
   if (!option || !["video", "audio", "audioOnly"].includes(option.group)) return null;
   return { file, duration, video: video && option.group === "video" };
+}
+
+/** The only file is audio or video with tracks to save as files of their own. */
+export function canExtract(state: QueueState): boolean {
+  const ready = readyItems(state);
+  if (ready.length !== 1 || state.items.length !== 1) return false;
+  const media = ready[0].file!.media;
+  return MEDIA_KINDS.includes(media.kind) && media.tracks.length > 1;
 }
 
 /** The tracks kept, as shown: chosen, or the default ones. */
@@ -387,6 +404,22 @@ function editOf(state: QueueState) {
  * format of the file.
  */
 export function requestFor(state: QueueState, item: QueueItem): ConversionRequest | null {
+  if (state.extract) {
+    if (!canExtract(state) || state.extractTracks.length === 0) return null;
+    // Tracks are copied when they can be: a trim is fast unless chosen.
+    const trim = mediaOf(state, true)?.trim ?? null;
+    return {
+      // The file's own format (only shown; each track has its own).
+      target: item.file?.edit ?? item.file?.compress ?? "mkv",
+      preset: state.preset,
+      advanced: {},
+      frames: null,
+      removeLocation: state.removeLocation,
+      pdf: null,
+      media: trim ? { tracks: null, trim, copy: false, label: null } : null,
+      extract: { tracks: state.extractTracks },
+    };
+  }
   if (state.editCopy) {
     const target = item.file?.edit;
     if (!target) return null;
@@ -478,7 +511,10 @@ export function canStart(state: QueueState): boolean {
   const planned = plannedItems(state);
   return (
     state.phase === "setup" &&
-    (state.target != null || (state.compress && canCompress(ready)) || (state.editCopy && canEditCopy(ready))) &&
+    (state.target != null ||
+      (state.compress && canCompress(ready)) ||
+      (state.editCopy && canEditCopy(ready)) ||
+      (state.extract && canExtract(state))) &&
     // An edited copy with nothing edited would be pointless.
     (!state.editCopy || copyChanged(state)) &&
     planned.length > 0 &&
@@ -562,6 +598,9 @@ function revalidateTarget(state: QueueState): QueueState {
   if (state.editCopy && !canEditCopy(state.items)) {
     return invalidate({ ...state, editCopy: false });
   }
+  if (state.extract && !canExtract(state)) {
+    return invalidate({ ...state, extract: false, extractTracks: [] });
+  }
   return state;
 }
 
@@ -619,6 +658,9 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
         edit: { ...base.edit, crop: null },
         tracks: null,
         trim: null,
+        // Tracks are extracted from one file only.
+        extract: false,
+        extractTracks: [],
       };
     }
 
@@ -656,7 +698,7 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
 
     case "remove": {
       if (state.phase !== "setup") return state;
-      const next = withoutItems({ ...state, edit: { ...state.edit, crop: null }, tracks: null, trim: null }, state.items.filter((i) => i.key !== action.key));
+      const next = withoutItems({ ...state, edit: { ...state.edit, crop: null }, tracks: null, trim: null, extractTracks: [] }, state.items.filter((i) => i.key !== action.key));
       // The pages of the file go with it; edits are forgotten once no PDF is made of the files left.
       if (!next.pages) return next;
       return invalidate(editsPdf(next) ? next : { ...next, pages: null, cuts: [] });
@@ -678,17 +720,25 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
     }
 
     case "selectTarget":
-      if (state.phase !== "setup" || (state.target === action.target && !state.compress && !state.editCopy)) return state;
+      if (state.phase !== "setup" || (state.target === action.target && !state.compress && !state.editCopy && !state.extract)) return state;
       // Codec choices of another format may not apply: start from automatic.
-      return invalidate({ ...state, target: action.target, compress: false, editCopy: false, advanced: {}, notice: null });
+      return invalidate({ ...state, target: action.target, compress: false, editCopy: false, extract: false, advanced: {}, notice: null });
 
     case "selectCompress":
       if (state.phase !== "setup" || state.compress || !canCompress(state.items)) return state;
-      return invalidate({ ...state, compress: true, editCopy: false, target: null, advanced: {}, notice: null });
+      return invalidate({ ...state, compress: true, editCopy: false, extract: false, target: null, advanced: {}, notice: null });
 
     case "selectEditCopy":
       if (state.phase !== "setup" || state.editCopy || !canEditCopy(state.items)) return state;
-      return invalidate({ ...state, editCopy: true, compress: false, target: null, advanced: {}, notice: null });
+      return invalidate({ ...state, editCopy: true, compress: false, extract: false, target: null, advanced: {}, notice: null });
+
+    case "selectExtract":
+      if (state.phase !== "setup" || state.extract || !canExtract(state)) return state;
+      return invalidate({ ...state, extract: true, editCopy: false, compress: false, target: null, advanced: {}, notice: null });
+
+    case "setExtract":
+      if (state.phase !== "setup") return state;
+      return invalidate({ ...state, extractTracks: action.tracks, notice: null });
 
     case "setEdit":
       if (state.phase !== "setup") return state;

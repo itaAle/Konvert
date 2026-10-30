@@ -14,6 +14,7 @@ use crate::compress;
 use crate::edit;
 use crate::error::CoreError;
 use crate::estimate::{SizeEstimate, estimate_size};
+use crate::extract::{self, PlannedExtract};
 use crate::formats::{
     self, AudioCodec, FormatKind, FormatSpec, ImageCodec, TargetFormat, VideoCodec,
     is_lossless_audio_codec, is_lossless_image, is_lossless_video_codec,
@@ -319,6 +320,9 @@ pub struct ConversionPlan {
     /// `video_stream` and `audio_stream` only).
     #[serde(default)]
     pub tracks: Vec<PlannedTrack>,
+    /// Tracks saved as files of their own, in order.
+    #[serde(default)]
+    pub extract: Vec<PlannedExtract>,
     /// Only this part of the input is written: `(start, length)` in seconds.
     #[serde(default)]
     pub trim: Option<(f64, f64)>,
@@ -358,6 +362,38 @@ pub fn plan_conversion(
 ) -> Result<ConversionPlan, CoreError> {
     let mut plan = if let Some(options) = &request.compress {
         compress::plan(media, request, options, input)?
+    } else if let Some(options) = &request.extract {
+        if !matches!(
+            media.kind,
+            MediaKind::Audio | MediaKind::Video | MediaKind::VideoWithAudio
+        ) {
+            return Err(unsupported("only audio and video files have tracks".into()));
+        }
+        let files = extract::plan(media, request, options, input)?;
+        let estimate = files
+            .iter()
+            .map(|f| f.plan.as_ref().and_then(|p| p.estimate))
+            .try_fold((0u64, false), |(bytes, approx), e| {
+                e.map(|e| (bytes + e.bytes, approx || e.approximate))
+            });
+        ConversionPlan {
+            target: request.target,
+            video_stream: None,
+            video: None,
+            audio_stream: None,
+            audio: None,
+            cover_art_stream: None,
+            image: None,
+            frames: None,
+            document: None,
+            remove_location: false,
+            compress: None,
+            tracks: Vec::new(),
+            trim: None,
+            extract: files,
+            warnings: Vec::new(),
+            estimate: estimate.map(|(bytes, approximate)| SizeEstimate { bytes, approximate }),
+        }
     } else if request.edited_copy().is_some() {
         // An edited copy in the file's own format (PNG to PNG too).
         if edit::edit_format(media, input) != Some(request.target) {
@@ -561,6 +597,7 @@ pub(crate) fn plan_offered(
         compress: None,
         tracks,
         trim,
+        extract: Vec::new(),
         warnings: Vec::new(),
         estimate: None,
     };
@@ -769,6 +806,7 @@ fn plan_document(
         compress: None,
         tracks: Vec::new(),
         trim: None,
+        extract: Vec::new(),
         warnings,
         estimate: None,
     };
@@ -899,6 +937,7 @@ fn plan_document(
                 compress: None,
                 tracks: Vec::new(),
                 trim: None,
+                extract: Vec::new(),
                 warnings,
                 // The pages are copied as they are, with what they use.
                 estimate: media.size_bytes.map(|bytes| SizeEstimate {
@@ -1190,6 +1229,7 @@ fn plan_still(
         compress: None,
         tracks: Vec::new(),
         trim: None,
+        extract: Vec::new(),
         warnings,
         estimate: None,
     };

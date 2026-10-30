@@ -9,6 +9,7 @@ import {
   allWarnings,
   canCompress,
   canEditCopy,
+  canExtract,
   canStart,
   combines,
   currentTracks,
@@ -32,6 +33,8 @@ import { CropEditor } from "./CropEditor";
 import { DestinationRow } from "./DestinationRow";
 import { EditCard } from "./EditCard";
 import { EditPanel } from "./EditPanel";
+import { ExtractCard } from "./ExtractCard";
+import { ExtractPanel } from "./ExtractPanel";
 import { FileCard } from "./FileCard";
 import { FileList } from "./FileList";
 import { FormatGrid } from "./FormatGrid";
@@ -131,6 +134,8 @@ export function SetupScreen({ q }: { q: QueueController }) {
   const scope = editScope(state);
   const tracks = trackScope(state);
   const trimming = trimScope(state);
+  const extractable = canExtract(state);
+  const extracting = state.extract && extractable;
   const mediaCopy = files.length > 0 && files.every((i) => i.file!.media.kind !== "image");
   const onlyFile = ready.length === 1 ? ready[0] : null;
   const loneStream = onlyFile?.file?.media.video[0];
@@ -158,7 +163,11 @@ export function SetupScreen({ q }: { q: QueueController }) {
         )}
       </div>
       <Button variant="primary" size="lg" disabled={!canStart(state)} onClick={() => void q.start()} className="min-w-44">
-        {editingCopy
+        {extracting
+          ? state.extractTracks.length > 1
+            ? t("actions.extractMany", { n: state.extractTracks.length })
+            : t("actions.extractOne")
+          : editingCopy
           ? ready.length > 1
             ? t("actions.editCopyAll", { n: ready.length })
             : t("actions.editCopy")
@@ -218,12 +227,15 @@ export function SetupScreen({ q }: { q: QueueController }) {
           )}
         </AnimatePresence>
 
-        {(compressible || editable) && (
+        {(compressible || editable || extractable) && (
           <section>
-            <SectionTitle>{editable ? t("edit.sameFormat") : t("compress.title")}</SectionTitle>
-            <div className={compressible && editable ? "grid grid-cols-2 gap-2.5" : ""}>
+            <SectionTitle>
+              {extractable ? t("extract.tools") : editable ? t("edit.sameFormat") : t("compress.title")}
+            </SectionTitle>
+            <div className={[compressible, editable, extractable].filter(Boolean).length > 1 ? "grid grid-cols-2 gap-2.5" : ""}>
               {compressible && <CompressCard selected={compressing} onSelect={q.selectCompress} format={sharedFormat} />}
               {editable && <EditCard selected={editingCopy} onSelect={q.selectEditCopy} format={sharedEditFormat} media={mediaCopy} />}
+              {extractable && <ExtractCard selected={extracting} onSelect={q.selectExtract} />}
             </div>
           </section>
         )}
@@ -237,7 +249,7 @@ export function SetupScreen({ q }: { q: QueueController }) {
                 {!single && <p className="-mt-2 mb-3 px-1 text-[13px] text-label-secondary">{t("formats.common")}</p>}
                 <FormatGrid
                   options={targets}
-                  selected={compressing || editingCopy ? null : state.target}
+                  selected={compressing || editingCopy || extracting ? null : state.target}
                   onSelect={q.selectTarget}
                   groupTitles={lone ? { document: "formats.groupEditPdf" } : undefined}
                   notes={lone ? { pdf: "formats.editPdf" } : undefined}
@@ -250,7 +262,7 @@ export function SetupScreen({ q }: { q: QueueController }) {
         )}
 
         <AnimatePresence initial={false}>
-          {(option || compressing || editingCopy) && (
+          {(option || compressing || editingCopy || extracting) && (
             <motion.div
               variants={revealVariants}
               initial="initial"
@@ -274,6 +286,13 @@ export function SetupScreen({ q }: { q: QueueController }) {
                   />
                 </section>
               )}
+              {extracting && onlyFile && (
+                <section>
+                  <SectionTitle>{t("extract.title")}</SectionTitle>
+                  <p className="-mt-2 mb-3 px-1 text-[13px] text-label-secondary">{t("extract.hint")}</p>
+                  <ExtractPanel tracks={onlyFile.file!.media.tracks} value={state.extractTracks} onChange={q.setExtract} />
+                </section>
+              )}
               {trimming && (
                 <section>
                   <SectionTitle>{t("trim.heading")}</SectionTitle>
@@ -283,7 +302,7 @@ export function SetupScreen({ q }: { q: QueueController }) {
                     video={trimming.video}
                     value={state.trim}
                     onChange={q.setTrim}
-                    preciseByDefault={!state.editCopy}
+                    preciseByDefault={!state.editCopy && !state.extract}
                   />
                 </section>
               )}

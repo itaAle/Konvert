@@ -26,6 +26,7 @@ import {
   totalEstimate,
   type QueueItem,
 } from "./queue";
+import type { ExtractTrack } from "../bindings/ExtractTrack";
 import type { TrackChoice } from "../bindings/TrackChoice";
 import type { EditState } from "./edit";
 import type { TrimState } from "./trim";
@@ -261,6 +262,8 @@ export function useQueue() {
     setEdit: (edit: EditState) => dispatch({ type: "setEdit", edit }),
     setTracks: (tracks: TrackChoice[] | null) => dispatch({ type: "setTracks", tracks }),
     setTrim: (trim: TrimState | null) => dispatch({ type: "setTrim", trim }),
+    selectExtract: () => dispatch({ type: "selectExtract" }),
+    setExtract: (tracks: ExtractTrack[]) => dispatch({ type: "setExtract", tracks }),
     selectPreset: (preset: QualityPreset) => dispatch({ type: "selectPreset", preset }),
     setAdvanced: (advanced: AdvancedOptions) => dispatch({ type: "setAdvanced", advanced }),
     setFrames: (frames: FrameOptions) => dispatch({ type: "setFrames", frames }),
