@@ -3415,3 +3415,65 @@ async fn files_are_joined_copied_or_encoded() {
     let length = joined.duration_secs.unwrap();
     assert!((3.8..=4.3).contains(&length), "{length}");
 }
+
+#[tokio::test]
+async fn joined_songs_are_normalized_one_by_one() {
+    use konvert_core::request::{JoinOptions, MediaEdit, Volume};
+    let bins = engine();
+    let tmp = TempDir::new("join volume");
+    // A quiet song and a loud one.
+    let song = |name: &str, level: &str| {
+        let path = tmp.path(name);
+        let source = format!("sine=f=330:d=6,volume={level}");
+        generate(
+            &bins,
+            &["-f", "lavfi", "-i", &source, "-c:a", "libmp3lame"],
+            &path,
+        );
+        path
+    };
+    let quiet = song("Piano.mp3", "0.02");
+    let loud = song("Forte.mp3", "0.9");
+    let mut inputs = Vec::new();
+    for path in [&quiet, &loud] {
+        inputs.push((path.clone(), probe(&bins, path).await.unwrap()));
+    }
+    let request = ConversionRequest {
+        media: Some(MediaEdit {
+            volume: Some(Volume::Normalize),
+            copy: true,
+            label: Some("mod".into()),
+            ..MediaEdit::default()
+        }),
+        join: Some(JoinOptions {
+            files: inputs.iter().map(|(_, m)| m.clone()).collect(),
+            label: None,
+        }),
+        ..req(TargetFormat::Mp3, QualityPreset::Balanced)
+    };
+    let out_dir = tmp.path("out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ws = Workspace::create(&tmp.path("ws")).unwrap();
+    let job = konvert_core::CombinedJob {
+        id: 8,
+        inputs,
+        request,
+        output_dir: out_dir,
+        passwords: Default::default(),
+    };
+    let outcome = konvert_core::run_combined(&bins, &ws, &job, &CancellationToken::new(), |_| {})
+        .await
+        .unwrap_or_else(|e| panic!("join failed: {e} {:?}", e.details()));
+    assert!(
+        outcome.output.ends_with("Piano-joined.mp3"),
+        "{:?}",
+        outcome.output
+    );
+    assert_eq!(files_in(ws.dir()), [".lock"], "temporary files left behind");
+    // Both halves at -16 LUFS: the whole too.
+    let after = loudness_of(&bins, &outcome.output);
+    assert!((after - -16.0).abs() <= 1.0, "{after}");
+    let joined = probe(&bins, &outcome.output).await.unwrap();
+    let length = joined.duration_secs.unwrap();
+    assert!((11.8..=12.4).contains(&length), "{length}");
+}

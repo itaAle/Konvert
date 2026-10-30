@@ -997,16 +997,37 @@ async fn run_join(
         std::fs::write(&list, crate::join::concat_list(&paths)).map_err(CoreError::Io)?;
     }
     let temp_output = workspace.job_output(job.id, ext);
-    let command = crate::command::join_args(&plan, &join, &paths, &list, &temp_output);
     let duration: f64 = join.files.iter().map(|f| f.duration_secs).sum();
-    let result = run_ffmpeg(
-        bins,
-        &command.args,
-        Some(duration),
-        cancel,
-        &mut on_progress,
-    )
-    .await;
+    // A normalization measures the sound of every file first (a quarter of the bar).
+    let mut plan = plan;
+    let share = if plan.volume == Some(Volume::Normalize) {
+        let count = join.files.len() as f64;
+        for (i, (file, path)) in join.files.iter().zip(&paths).enumerate() {
+            let Some(index) = file.audio_stream else {
+                plan.loudness.push(None);
+                continue;
+            };
+            let source = crate::volume::Source {
+                path: path.clone(),
+                map: format!("0:{index}"),
+                start_secs: None,
+                length_secs: None,
+            };
+            let mut on_part =
+                |p: Progress| on_progress(scaled(p, 0.25 * i as f64 / count, 0.25 / count));
+            let args = crate::command::loudness_args(&source);
+            let stderr =
+                run_ffmpeg_tail(bins, &args, Some(file.duration_secs), cancel, &mut on_part)
+                    .await?;
+            plan.loudness.push(crate::volume::parse(&stderr));
+        }
+        0.25
+    } else {
+        0.0
+    };
+    let command = crate::command::join_args(&plan, &join, &paths, &list, &temp_output);
+    let mut on_encode = |p: Progress| on_progress(scaled(p, share, 1.0 - share));
+    let result = run_ffmpeg(bins, &command.args, Some(duration), cancel, &mut on_encode).await;
     let _ = std::fs::remove_file(&list);
     let result = result.and_then(|()| match std::fs::metadata(&temp_output) {
         Ok(m) if m.len() > 0 => Ok(()),

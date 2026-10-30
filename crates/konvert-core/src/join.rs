@@ -124,11 +124,18 @@ pub fn plan(files: &[MediaInfo], request: &ConversionRequest) -> Result<Conversi
         video && audio
     });
     let adv = &request.advanced;
+    // A new loudness: every file is encoded (each one gets it on its own).
+    let volume = request.media.as_ref().and_then(|m| m.volume);
+    crate::volume::check(volume)?;
+    if volume.is_some() && first_audio.is_none() && joined.iter().all(|(_, _, a, _)| a.is_none()) {
+        return Err(unsupported("the result has no audio"));
+    }
     let copyable = first_video.is_none_or(|v| spec.copy_video.contains(&v.codec.as_str()))
         && first_audio.is_none_or(|a| spec.copy_audio.contains(&a.codec.as_str()))
         && !adv.touches_video()
         && !adv.touches_audio()
-        && request.preset != QualityPreset::Small;
+        && request.preset != QualityPreset::Small
+        && volume.is_none();
     let copy = same && copyable;
 
     let (video, size, fps) = match first_video {
@@ -192,7 +199,7 @@ pub fn plan(files: &[MediaInfo], request: &ConversionRequest) -> Result<Conversi
         tracks: Vec::new(),
         trim: None,
         added_audio: None,
-        volume: None,
+        volume,
         loudness: Vec::new(),
         join: Some(JoinPlan {
             copy,
@@ -214,6 +221,9 @@ pub fn plan(files: &[MediaInfo], request: &ConversionRequest) -> Result<Conversi
     };
     if !same {
         plan.warnings.push(ConversionWarning::JoinReencoded);
+    }
+    if matches!(volume, Some(crate::request::Volume::Gain { db }) if db > 0.0) {
+        plan.warnings.push(ConversionWarning::VolumeLimited);
     }
     // Each file as it is written, added up.
     plan.estimate = joined
@@ -338,6 +348,36 @@ mod tests {
         assert!(super::plan(std::slice::from_ref(&a), &request(TargetFormat::Mp4)).is_err());
         assert!(super::plan(&[a.clone(), a.clone()], &request(TargetFormat::Gif)).is_err());
         assert!(super::plan(&[a.clone(), a], &request(TargetFormat::Png)).is_err());
+    }
+
+    #[test]
+    fn a_new_loudness_encodes_every_file_on_its_own() {
+        use crate::request::{MediaEdit, Volume};
+        let a = video("h264", 1280, 720, 25.0, Some("aac"));
+        let with = |volume| ConversionRequest {
+            media: Some(MediaEdit {
+                volume: Some(volume),
+                ..MediaEdit::default()
+            }),
+            ..request(TargetFormat::Mp4)
+        };
+        let plan = plan(&[a.clone(), a.clone()], &with(Volume::Gain { db: -3.0 })).unwrap();
+        assert!(!plan.join.as_ref().unwrap().copy);
+        // Alike files: no warning that they differ.
+        assert!(plan.warnings.is_empty());
+        let join = plan.join.clone().unwrap();
+        let args = crate::command::join_args(
+            &plan,
+            &join,
+            &["a.mp4".into(), "b.mp4".into()],
+            "l".as_ref(),
+            "o.mp4".as_ref(),
+        )
+        .args_lossy()
+        .join(" ");
+        assert!(args.contains("[0:1]volume=-3dB,aresample=48000"), "{args}");
+        assert!(args.contains("[1:1]volume=-3dB,aresample=48000"), "{args}");
+        assert!(super::plan(&[a.clone(), a], &with(Volume::Gain { db: 30.0 })).is_err());
     }
 
     #[test]

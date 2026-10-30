@@ -396,6 +396,15 @@ pub fn join_args(
         let fps = format_number(join.fps.unwrap_or(30.0));
         let mut graph = String::new();
         let mut segments = String::new();
+        // Every file's sound gets the new loudness on its own (normalized
+        // with what its measuring pass found).
+        let loudness = |i: usize| match plan.volume {
+            Some(volume) => {
+                let measured = plan.loudness.get(i).copied().flatten();
+                format!("{},", crate::volume::filter(volume, measured.as_ref()))
+            }
+            None => String::new(),
+        };
         for (i, file) in join.files.iter().enumerate() {
             if let (true, Some(index)) = (video, file.video_stream) {
                 graph.push_str(&format!(
@@ -407,7 +416,8 @@ pub fn join_args(
             if audio {
                 match file.audio_stream {
                     Some(index) => graph.push_str(&format!(
-                        "[{i}:{index}]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];"
+                        "[{i}:{index}]{}aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];",
+                        loudness(i)
                     )),
                     // Silence as long as the file.
                     None => graph.push_str(&format!(

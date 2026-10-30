@@ -20,6 +20,18 @@ pub const MAX_GAIN_DB: f32 = 20.0;
 /// Peaks of louder audio are held under this level (-1 dBFS).
 const LIMIT: f64 = 0.891;
 
+/// Refuses a gain outside ±[`MAX_GAIN_DB`].
+pub fn check(volume: Option<Volume>) -> Result<(), crate::error::CoreError> {
+    match volume {
+        Some(Volume::Gain { db }) if !(db.is_finite() && db.abs() <= MAX_GAIN_DB) => {
+            Err(crate::error::CoreError::UnsupportedConversion {
+                details: format!("a gain of {db} dB is out of range"),
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
 /// What the measuring pass found about one track.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Loudness {
@@ -41,6 +53,7 @@ pub struct Source {
 }
 
 /// The audio tracks of the output, in order: the file's own, then the added one.
+/// For a join: the sound of every file that has some, in order.
 pub fn sources(plan: &ConversionPlan, input: &std::path::Path) -> Vec<Source> {
     let start = plan.trim.map(|(start, _)| start).filter(|s| *s > 0.0);
     let length = plan.trim.map(|(_, length)| length);

@@ -335,7 +335,7 @@ pub struct ConversionPlan {
     #[ts(optional = nullable)]
     pub volume: Option<crate::request::Volume>,
     /// What the measuring pass of a normalization found, per audio track
-    /// written (filled just before encoding).
+    /// written, or per file of a join (filled just before encoding).
     #[serde(skip)]
     #[ts(skip)]
     pub loudness: Vec<Option<crate::volume::Loudness>>,
@@ -526,11 +526,7 @@ pub(crate) fn plan_offered(
     let force_encode = request.preset == QualityPreset::Small || same_format || precise;
     // A new loudness: the audio is encoded again (the video can still be copied).
     let volume = request.media.as_ref().and_then(|m| m.volume);
-    if let Some(crate::request::Volume::Gain { db }) = volume
-        && !(db.is_finite() && db.abs() <= crate::volume::MAX_GAIN_DB)
-    {
-        return Err(unsupported(format!("a gain of {db} dB is out of range")));
-    }
+    crate::volume::check(volume)?;
     let encode_audio = force_encode || volume.is_some();
 
     // Tracks chosen by the user, by kind, in their order.
