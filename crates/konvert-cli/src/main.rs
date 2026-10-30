@@ -17,6 +17,9 @@
 //!          --quality 1-100  --max-size PIXELS   (pictures)
 //!          --frame-at SECONDS | --every SECONDS | --every-frame   (pictures from a video)
 //!          --remove-location   (erase GPS data and location tags)
+//!          --turn 90|180|270  --flip-h  --flip-v  --crop "x,y,w,h" (fractions)
+//!          --resize 50% | 1920x1080 | 1920x | x1080 | 1920x1080! | long:1920  --enlarge
+//!          --edit-copy   (an edited copy in the same format, name-mod.ext: no --to needed)
 //!          --page-size a4|letter|fit  --orientation auto|portrait|landscape
 //!          --margin none|small|normal   (pictures to PDF)
 //!          --dpi N  --pages "1-3, 5"   (PDF to pictures)
@@ -40,6 +43,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use konvert_core::request::{CropRect, PictureEdit, Resize};
 use konvert_core::{
     AdvancedOptions, Binaries, ChannelLayout, CombinedJob, CompressLevel, CompressOptions,
     ConversionJob, ConversionRequest, CoreError, FrameMode, FrameOptions, MediaInfo, PageMargin,
@@ -64,6 +68,9 @@ OPTIONS: --preset max|balanced|small  --height N  --fps N
          --quality 1-100  --max-size PIXELS   (pictures)
          --frame-at SECONDS | --every SECONDS | --every-frame   (pictures from a video)
          --remove-location   (erase GPS data and location tags)
+         --turn 90|180|270  --flip-h  --flip-v  --crop \"x,y,w,h\" (fractions)
+         --resize 50% | 1920x1080 | 1920x | x1080 | 1920x1080! | long:1920  --enlarge
+         --edit-copy   (an edited copy in the same format, name-mod.ext: no --to needed)
          --page-size a4|letter|fit  --orientation auto|portrait|landscape
          --margin none|small|normal   (pictures to PDF)
          --dpi N  --pages \"1-3, 5\"   (PDF to pictures)
@@ -179,7 +186,7 @@ fn rotate_pages(request: &mut ConversionRequest, media: &MediaInfo, rotate: Opti
     }
 }
 
-/// A smaller copy is written in the file's own format.
+/// A smaller copy, or an edited one, is written in the file's own format.
 fn compressed_format(
     request: &mut ConversionRequest,
     media: &MediaInfo,
@@ -190,8 +197,45 @@ fn compressed_format(
             compress_format(media, input).ok_or_else(|| CoreError::UnsupportedConversion {
                 details: "Konvert cannot make this file smaller".into(),
             })?;
+    } else if request.edit.as_ref().is_some_and(|e| e.copy) {
+        request.target = konvert_core::edit::edit_format(media, input).ok_or_else(|| {
+            CoreError::UnsupportedConversion {
+                details: "Konvert cannot write this picture in its own format".into(),
+            }
+        })?;
     }
     Ok(())
+}
+
+/// `50%`, `1920x1080` (a box), `1920x1080!` (exact), `1920x`, `x1080`, `long:1920`.
+fn parse_resize(text: &str) -> Option<Resize> {
+    if let Some(percent) = text.strip_suffix('%') {
+        return Some(Resize::Percent {
+            percent: percent.parse().ok()?,
+        });
+    }
+    if let Some(side) = text.strip_prefix("long:") {
+        return Some(Resize::LongSide {
+            side: side.parse().ok()?,
+        });
+    }
+    let (text, exact) = match text.strip_suffix('!') {
+        Some(t) => (t, true),
+        None => (text, false),
+    };
+    let (w, h) = text.split_once('x')?;
+    let side = |v: &str| -> Option<Option<u32>> {
+        if v.is_empty() {
+            Some(None)
+        } else {
+            v.parse().ok().map(Some)
+        }
+    };
+    Some(Resize::Pixels {
+        width: side(w)?,
+        height: side(h)?,
+        keep_ratio: !exact,
+    })
 }
 
 fn parse_args() -> Result<Cli, String> {
@@ -207,6 +251,7 @@ fn parse_args() -> Result<Cli, String> {
     let mut pdf: Option<PdfOptions> = None;
     let mut rotate = None;
     let mut compress: Option<CompressOptions> = None;
+    let mut edit: Option<PictureEdit> = None;
 
     fn number<T: std::str::FromStr>(name: &str, v: OsString) -> Result<T, String> {
         v.to_str()
@@ -353,6 +398,38 @@ fn parse_args() -> Result<Cli, String> {
             Some("--pages-as-pictures") => {
                 compress.get_or_insert_default().pages_as_pictures = true
             }
+            Some("--turn") => {
+                edit.get_or_insert_default().rotation = number("--turn", value("--turn")?)?
+            }
+            Some("--flip-h") => edit.get_or_insert_default().flip_horizontal = true,
+            Some("--flip-v") => edit.get_or_insert_default().flip_vertical = true,
+            Some("--enlarge") => edit.get_or_insert_default().enlarge = true,
+            Some("--edit-copy") => edit.get_or_insert_default().copy = true,
+            Some("--crop") => {
+                let v: Vec<f32> = value("--crop")?
+                    .to_str()
+                    .unwrap_or_default()
+                    .split(',')
+                    .map(|n| n.trim().parse())
+                    .collect::<Result<_, _>>()
+                    .map_err(|_| "--crop needs four fractions \"x,y,w,h\"")?;
+                let [x, y, width, height] = v[..] else {
+                    return Err("--crop needs four fractions \"x,y,w,h\"".into());
+                };
+                edit.get_or_insert_default().crop = Some(CropRect {
+                    x,
+                    y,
+                    width,
+                    height,
+                });
+            }
+            Some("--resize") => {
+                let spec = value("--resize")?;
+                edit.get_or_insert_default().resize =
+                    Some(parse_resize(spec.to_str().unwrap_or_default()).ok_or(
+                        "--resize needs 50%, 1920x1080, 1920x, x1080, 1920x1080! or long:1920",
+                    )?);
+            }
             Some("--mono") => advanced.channels = Some(ChannelLayout::Mono),
             Some("--stereo") => advanced.channels = Some(ChannelLayout::Stereo),
             Some("-h" | "--help") => return Err(String::new()),
@@ -380,12 +457,14 @@ fn parse_args() -> Result<Cli, String> {
     let request = || -> Result<ConversionRequest, String> {
         Ok(ConversionRequest {
             // A smaller copy keeps the file's format, found once it is analysed.
-            target: match (target, &compress) {
-                (Some(target), _) => target,
-                (None, Some(_)) => TargetFormat::Pdf,
-                (None, None) => return Err("missing --to <FORMAT>".into()),
+            target: match (target, &compress, &edit) {
+                (Some(target), _, _) => target,
+                (None, Some(_), _) => TargetFormat::Pdf,
+                (None, None, Some(e)) if e.copy => TargetFormat::Png,
+                (None, _, _) => return Err("missing --to <FORMAT>".into()),
             },
             compress: compress.clone(),
+            edit: edit.clone(),
             preset,
             advanced: advanced.clone(),
             frames,
