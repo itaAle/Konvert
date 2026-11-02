@@ -11,9 +11,9 @@ use std::sync::atomic::Ordering;
 
 use konvert_core::pdf::Thumbnail;
 use konvert_core::{
-    ConversionPlan, ConversionRequest, CoreError, ErrorPayload, MediaInfo, Secret, TargetFormat,
-    TargetOption, available_targets, compress::compress_format, formats::supported_targets,
-    plan_conversion as plan,
+    ConversionPlan, ConversionRequest, CoreError, ErrorPayload, Hardware, MediaInfo, Secret,
+    TargetFormat, TargetOption, available_targets, compress::compress_format,
+    formats::supported_targets, plan_conversion as plan,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State, WebviewWindow};
@@ -247,14 +247,7 @@ async fn analysis(
         .await
         .map_err(payload)?;
     // If the engine cannot be asked, formats needing an optional encoder are left out.
-    let encoders = state
-        .encoders
-        .get_or_init(|| async {
-            konvert_core::engine_encoders(bins)
-                .await
-                .unwrap_or_default()
-        })
-        .await;
+    let encoders = state.encoders().await;
     let targets = supported_targets(available_targets(&media, &path), encoders);
     let encodable = |format: &TargetFormat| {
         konvert_core::formats::spec(*format)
@@ -278,13 +271,25 @@ async fn analysis(
 }
 
 /// Decisions, warnings and size estimate for a conversion (pure, no disk access).
+/// The hardware encoders are those found so far (none while they are tried).
 #[tauri::command]
 pub fn plan_conversion(
+    state: State<'_, AppState>,
     path: PathBuf,
     media: MediaInfo,
-    request: ConversionRequest,
+    mut request: ConversionRequest,
 ) -> Result<ConversionPlan, ErrorPayload> {
+    if state.prefs.get().hardware_acceleration {
+        request.hardware = state.hardware.get().cloned();
+    }
     plan(&media, &request, &path).map_err(payload)
+}
+
+/// The hardware video encoders that work on this computer (waits for the
+/// trial encodes when they are still running).
+#[tauri::command]
+pub async fn hardware_info(state: State<'_, AppState>) -> Result<Hardware, ErrorPayload> {
+    Ok(state.detect_hardware().await.clone())
 }
 
 /// Small pictures of some pages of a PDF, for choosing, turning and moving
@@ -383,13 +388,14 @@ pub async fn audio_waveform(
 /// Queues a conversion; progress arrives through `job-update` events.
 /// The destination comes from the preferences (default: next to the original).
 #[tauri::command]
-pub fn start_conversion(
+pub async fn start_conversion(
     app: AppHandle,
     state: State<'_, AppState>,
     path: PathBuf,
-    request: ConversionRequest,
+    mut request: ConversionRequest,
 ) -> Result<u64, ErrorPayload> {
     let bins = state.binaries().map_err(payload)?.clone();
+    request.hardware = state.hardware_for_jobs().await;
     if !path.is_file() {
         return Err(payload(CoreError::InputNotFound));
     }
@@ -409,13 +415,14 @@ pub fn start_conversion(
 /// Queues several files that become one PDF, in the order given: pictures
 /// become pages, PDFs add all their pages. The PDF is named after the first file.
 #[tauri::command]
-pub fn start_combined(
+pub async fn start_combined(
     app: AppHandle,
     state: State<'_, AppState>,
     paths: Vec<PathBuf>,
-    request: ConversionRequest,
+    mut request: ConversionRequest,
 ) -> Result<u64, ErrorPayload> {
     let bins = state.binaries().map_err(payload)?.clone();
+    request.hardware = state.hardware_for_jobs().await;
     let Some(first) = paths.first() else {
         return Err(payload(CoreError::InputNotFound));
     };

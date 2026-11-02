@@ -37,6 +37,8 @@
 //!                    "2:1-3" are pages of the second file)
 //!          --compress light|strong|max  --max-mb N  --pages-as-pictures
 //!                    (a smaller copy in the same format: no --to needed)
+//!          --no-hardware   (videos: software encoders only; by default the
+//!                    hardware encoders that work here are used, as in the app)
 //! ```
 //!
 //! The engine directory defaults to `$KONVERT_FFMPEG_DIR`, then to
@@ -95,7 +97,9 @@ OPTIONS: --preset max|balanced|small  --height N  --fps N
          --split-every N | --split-after \"2, 5\"   (PDF to PDF; with combine,
                    \"2:1-3\" are pages of the second file)
          --compress light|strong|max  --max-mb N  --pages-as-pictures
-                   (a smaller copy in the same format: no --to needed)";
+                   (a smaller copy in the same format: no --to needed)
+         --no-hardware   (videos: software encoders only; by default the
+                   hardware encoders that work here are used, as in the app)";
 
 enum Action {
     Version,
@@ -112,6 +116,8 @@ struct Cli {
     action: Action,
     /// `--rotate`: turn every page of the new PDF.
     rotate: Option<u16>,
+    /// `--no-hardware`: software video encoders only.
+    no_hardware: bool,
 }
 
 /// `"3, 1-2, 5@90"`: pages in this order (a range may go backwards), each
@@ -300,6 +306,7 @@ fn parse_args() -> Result<Cli, String> {
     let mut remove_location = false;
     let mut pdf: Option<PdfOptions> = None;
     let mut rotate = None;
+    let mut no_hardware = false;
     let mut compress: Option<CompressOptions> = None;
     let mut edit: Option<PictureEdit> = None;
     let mut media: Option<MediaEdit> = None;
@@ -527,6 +534,7 @@ fn parse_args() -> Result<Cli, String> {
                     db: number("--gain", value("--gain")?)?,
                 })
             }
+            Some("--no-hardware") => no_hardware = true,
             Some("--mono") => advanced.channels = Some(ChannelLayout::Mono),
             Some("--stereo") => advanced.channels = Some(ChannelLayout::Stereo),
             Some("-h" | "--help") => return Err(String::new()),
@@ -565,6 +573,7 @@ fn parse_args() -> Result<Cli, String> {
             media: media.clone(),
             extract: None,
             join: None,
+            hardware: None,
             preset,
             advanced: advanced.clone(),
             frames,
@@ -607,6 +616,7 @@ fn parse_args() -> Result<Cli, String> {
         ffmpeg_dir,
         action,
         rotate,
+        no_hardware,
     })
 }
 
@@ -660,6 +670,7 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
             rotate_pages(&mut request, &media, cli.rotate);
             compressed_format(&mut request, &media, &input)?;
             analyse_added_audio(&bins, &mut request).await?;
+            request.hardware = hardware(&bins, cli.no_hardware).await;
             print_json(&plan_conversion(&media, &request, &input)?);
         }
         Action::Convert(input, mut request, out_dir) => {
@@ -667,9 +678,13 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
             rotate_pages(&mut request, &media, cli.rotate);
             compressed_format(&mut request, &media, &input)?;
             analyse_added_audio(&bins, &mut request).await?;
+            request.hardware = hardware(&bins, cli.no_hardware).await;
             let plan = plan_conversion(&media, &request, &input)?;
             for warning in &plan.warnings {
                 eprintln!("warning: {warning:?}");
+            }
+            if let Some(name) = plan.hardware().and_then(|h| h.name()) {
+                eprintln!("video encoder: {name}");
             }
             let output_dir = out_dir.unwrap_or_else(|| {
                 input
@@ -703,7 +718,8 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
             }
             print_outcome(&outcome);
         }
-        Action::Combine(inputs, request, out_dir) => {
+        Action::Combine(inputs, mut request, out_dir) => {
+            request.hardware = hardware(&bins, cli.no_hardware).await;
             let mut probed = Vec::with_capacity(inputs.len());
             for input in inputs {
                 let media = probe(&bins, &input).await?;
@@ -754,7 +770,19 @@ fn show_progress(p: Progress) {
     let _ = std::io::stderr().flush();
 }
 
+/// The hardware video encoders that work here, like the app (none with `--no-hardware`).
+async fn hardware(bins: &Binaries, off: bool) -> Option<konvert_core::Hardware> {
+    if off {
+        return None;
+    }
+    let encoders = engine_encoders(bins).await.unwrap_or_default();
+    Some(konvert_core::hardware::detect(bins, &encoders).await)
+}
+
 fn print_outcome(outcome: &konvert_core::ConversionOutcome) {
+    if outcome.hardware_fallback {
+        eprintln!("warning: the hardware encoder failed; the software encoder made the file");
+    }
     println!(
         "{} ({} file(s), {} bytes, {:.1}s)",
         outcome.output.display(),

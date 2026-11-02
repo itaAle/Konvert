@@ -18,6 +18,7 @@ const COMMANDS: &[&str] = &[
     "unlock_pdf",
     "forget_pdf_password",
     "plan_conversion",
+    "hardware_info",
     "pdf_thumbnails",
     "picture_thumbnail",
     "video_frame",

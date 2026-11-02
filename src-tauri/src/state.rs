@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
 
-use konvert_core::{Binaries, CoreError, Passwords, Secret, Workspace, workspace};
+use konvert_core::{Binaries, CoreError, Hardware, Passwords, Secret, Workspace, workspace};
 use tauri::{AppHandle, Manager};
 
 use crate::debug_log::DebugLog;
@@ -31,6 +31,9 @@ pub struct AppState {
     pub close_confirmed: AtomicBool,
     /// Encoders of the bundled FFmpeg, read once (some formats depend on them).
     pub encoders: tokio::sync::OnceCell<HashSet<String>>,
+    /// Hardware video encoders that work on this computer, tried once
+    /// (in the background at start).
+    pub hardware: tokio::sync::OnceCell<Hardware>,
     /// Numbers of the private files of picture thumbnails (apart from jobs).
     pub thumbnails: AtomicU64,
     /// Passwords typed to open PDFs, kept in memory only while their file is
@@ -69,6 +72,7 @@ impl AppState {
             vibrancy,
             close_confirmed: AtomicBool::new(false),
             encoders: tokio::sync::OnceCell::new(),
+            hardware: tokio::sync::OnceCell::new(),
             thumbnails: AtomicU64::new(THUMBNAIL_IDS),
             passwords: Mutex::default(),
             unlocked: Mutex::default(),
@@ -100,6 +104,47 @@ impl AppState {
 
     pub fn binaries(&self) -> Result<&Binaries, CoreError> {
         self.binaries.as_ref().map_err(|_| CoreError::EngineMissing)
+    }
+
+    /// Encoders of the bundled FFmpeg (empty if the engine cannot be asked).
+    pub async fn encoders(&self) -> &HashSet<String> {
+        self.encoders
+            .get_or_init(|| async {
+                match self.binaries() {
+                    Ok(bins) => konvert_core::engine_encoders(bins)
+                        .await
+                        .unwrap_or_default(),
+                    Err(_) => HashSet::new(),
+                }
+            })
+            .await
+    }
+
+    /// The hardware video encoders that work here, tried on the first call
+    /// (later callers wait for that one).
+    pub async fn detect_hardware(&self) -> &Hardware {
+        self.hardware
+            .get_or_init(|| async {
+                let Ok(bins) = self.binaries() else {
+                    return Hardware::default();
+                };
+                let encoders = self.encoders().await;
+                let found = konvert_core::hardware::detect(bins, encoders).await;
+                let names: Vec<String> = found.encoders.iter().filter_map(|e| e.name()).collect();
+                self.log
+                    .write(&format!("Hardware video encoders: {names:?}"));
+                found
+            })
+            .await
+    }
+
+    /// What a new conversion may use: the encoders found, unless the user
+    /// turned the acceleration off.
+    pub async fn hardware_for_jobs(&self) -> Option<Hardware> {
+        if !self.prefs.get().hardware_acceleration {
+            return None;
+        }
+        Some(self.detect_hardware().await.clone())
     }
 
     /// Stops conversions and removes temporary files (application exit).

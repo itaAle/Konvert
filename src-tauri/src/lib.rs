@@ -53,6 +53,11 @@ pub fn run() {
                 apply_theme(window, state.prefs.get().theme);
             }
             app.manage(state);
+            // The hardware video encoders are tried once, in the background.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                handle.state::<AppState>().detect_hardware().await;
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -81,6 +86,7 @@ pub fn run() {
             commands::unlock_pdf,
             commands::forget_pdf_password,
             commands::plan_conversion,
+            commands::hardware_info,
             commands::pdf_thumbnails,
             commands::picture_thumbnail,
             commands::video_frame,
