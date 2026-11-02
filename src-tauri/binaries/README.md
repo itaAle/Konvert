@@ -18,6 +18,6 @@ SHA-256 and copies them into `ocr/`.
 
 This happens at development time only: the installed application never downloads anything.
 
-Windows and Linux use the LGPL builds of BtbN/FFmpeg-Builds. macOS (Apple Silicon) uses
-a build made by `scripts/build-ffmpeg-macos.sh` with the same libraries, published in
+Windows and Linux use the LGPL builds of BtbN/FFmpeg-Builds. macOS (Apple Silicon and
+Intel) uses builds made by `scripts/build-ffmpeg-macos.sh` with the same libraries, published in
 the FFmpeg mirror release together with its sources.

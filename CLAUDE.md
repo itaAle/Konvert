@@ -6,7 +6,7 @@
 
 ## What it is
 Konvert is an Apple-style audio/video/image/PDF/Word converter for 64-bit Windows 10/11, macOS 11+ on
-Apple Silicon and Linux (x86_64 and arm64).
+Apple Silicon and Intel, and Linux (x86_64 and arm64).
 It uses Tauri 2.11, React 19 with TypeScript, bundles FFmpeg/FFprobe, lays out Word documents with the Typst library and reads scans with the PaddleOCR PP-OCRv5 models run by rten.
 It works **entirely offline, on the user's computer**.
 **Public** repository: https://github.com/itaAle/Konvert (branch `main`).
@@ -115,16 +115,16 @@ Cargo workspace (`Cargo.toml`, resolver 3, toolchain pinned to 1.99.1 in `rust-t
   - Compress: `FileAnalysis::compress` (the file's own format, `null` when it cannot be compressed) → `canCompress` (every file); `state.compress` (instead of a target) + `state.compression`; `requestFor(state, item)` gives each file its own request (`requestOf` is the shared one of a format). `CompressCard` (above "Convert to"; the same `layoutId` highlight as the format cards), `CompressPanel` (levels, "Stay under" limit in MB with a suggested common limit, PDF pages as pictures), DoneScreen shows the saving and when the limit was not reached. The mock: `?mock=nogain` simulates `no_gain`.
 - `src/bindings/`: TypeScript types **generated** by ts-rs during `cargo test`. If you change an exported Rust type, regenerate and commit them.
 - `scripts/`:
-  - `ffmpeg-manifest.json`: FFmpeg n9.0.2-36 per platform with pinned SHA-256 (BtbN `win64-lgpl-shared`, `linux64-lgpl`, `linuxarm64-lgpl`; `macos-aarch64` is our own build), upstream URL plus the mirror.
+  - `ffmpeg-manifest.json`: FFmpeg n9.0.2-36 per platform with pinned SHA-256 (BtbN `win64-lgpl-shared`, `linux64-lgpl`, `linuxarm64-lgpl`; `macos-aarch64` and `macos-x86_64` are our own builds), upstream URL plus the mirror.
   - `setup-ffmpeg.ps1` / `.sh` (the `.sh` must stay compatible with macOS bash 3.2: no `mapfile`, no empty arrays under `set -u`).
   - `ocr-manifest.json` + `setup-ocr.mjs` (`npm run setup:ocr`, Node, every platform): `det.onnx`, `rec.onnx`, `dict.txt` from the oar-ocr v0.1.0 release with pinned SHA-256, cached in `.ocr-download/`, installed into `src-tauri/binaries/ocr/` (bundled as `ocr/`; `src-tauri/build.rs` fails without them). Run by the CI setup action and both release scripts. Mirrored in the `ocr-ppocrv5-v0.1.0` pre-release (second URL of each file).
-  - `build-ffmpeg-macos.sh`: static LGPL build for Apple Silicon, same library commits as BtbN, `--disable-network`; run by `.github/workflows/ffmpeg-macos.yml`.
+  - `build-ffmpeg-macos.sh`: static LGPL build for the Mac's processor (arm64 or x86_64), same library commits as BtbN, `--disable-network`, `PKG_CONFIG_LIBDIR` limited to its own prefix (Homebrew lives in `/usr/local` on Intel); run by `.github/workflows/ffmpeg-macos.yml` (input `arch`: `macos-15` or `macos-15-intel`).
   - `run-platform-script.mjs`: `npm run setup:ffmpeg` / `npm run release` run the `.ps1` on Windows, the `.sh` elsewhere.
   - `check-privacy.mjs`.
   - `generate-licenses.mjs` (regenerates `THIRD_PARTY_LICENSES` from the crates of every shipped platform; rerun it when dependencies or the version change).
   - `monitor-network.ps1` (Windows) and `monitor-network.sh` (strace on Linux, lsof on macOS).
   - `build-release.ps1` (Windows installer) and `build-release.sh` (macOS/Linux packages; signs FFmpeg for the hardened runtime, checks FFmpeg is executable in each package). 7 steps: version, npm ci, FFmpeg, checks and tests, build with `--remap-path-prefix`, check that the executable contains no local paths, copy to `release/` with SHA-256.
-- `.github/`: `ci.yml` (npm test on Windows, macOS arm64, Linux x64/arm64 + network monitor of the app), `release.yml` (manual; .dmg signed ad hoc, or with Developer ID + notarization when the optional `APPLE_*` secrets listed in its header exist; Linux packages; as artifacts), `ffmpeg-macos.yml`, shared `actions/setup`. Actions are pinned by commit SHA.
+- `.github/`: `ci.yml` (npm test on Windows, macOS arm64 and Intel, Linux x64/arm64 + network monitor of the app), `release.yml` (manual, platforms macos-arm64/macos-x64/linux-x64/linux-arm64; .dmg signed ad hoc, or with Developer ID + notarization when the optional `APPLE_*` secrets listed in its header exist; Linux packages; as artifacts), `ffmpeg-macos.yml`, shared `actions/setup`. Actions are pinned by commit SHA.
 - Process lifetime: Windows Job Object; Linux `PR_SET_PDEATHSIG`; macOS has no equivalent (an orphan after a crash only writes into the temp run dir, cleaned at next start).
 
 ## FFmpeg and licenses
@@ -256,6 +256,10 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
 
 - 2026-10-30: **v0.7.0** (picture edits, audio and video tools): version bumped in `package.json`, `package-lock.json`, `Cargo.toml`/`Cargo.lock` and `tauri.conf.json`, licenses regenerated; `npm run release` green (all checks and tests, no local paths in the binaries). Installer `Konvert_0.7.0_x64-setup.exe` (71.9 MB), SHA-256 `310d43f0742331ed3db0bda13d8fda4a43d6690ad7c003ae28a5ba6c7cb77ffd` (rebuild with `npm run release`). Version commit `5b25aa5` pushed; the macOS/Linux packages come from the **Release packages** workflow on it.
   - Published 2026-10-31 (tag `v0.7.0` on `5b25aa5`) with all platforms; zips 12–14 MB larger than 0.6.0 (the OCR models). The release notes list the PDF work of phase 1 too, which came after the 0.6.0 tag.
+
+- 2026-11-02: **macOS Intel (x86_64)** (owner's request; plan approved: a separate `Konvert_<version>_x64.dmg` built natively on GitHub's `macos-15-intel` runner, attached to the v0.7.0 release as `Konvert_0.7.0_macOS_Intel.zip`, since the app code is unchanged). The FFmpeg build script, the setup action, `setup-ffmpeg.sh`, the manifest (`macos-x86_64`), CI, release workflow, licenses (`x86_64-apple-darwin`) and README cover Intel Macs. GitHub says `macos-15-intel` is its last Intel image: once it is gone, Intel builds must be cross-compiled from an Apple Silicon runner.
+  - Steps on GitHub: run **FFmpeg for macOS** with `arch: x86_64`, upload both archives to the `ffmpeg-n9.0.2-36` mirror release, pin the SHA-256 in the manifest, run **Release packages** with `platform: macos-x64`.
+  - Not verified on real hardware: an Intel Mac (CI runners are virtual machines).
 
 ## Backlog (next work, by priority)
 1. **Burned-in subtitles** (postponed from phase 3): subtitles drawn into the picture (check first that libass and fonts work in the three FFmpeg builds).

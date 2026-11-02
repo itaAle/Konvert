@@ -9,8 +9,8 @@ of scans and photos with **OCR** (searchable PDFs, plain text), **compresses** f
 own format (down to a size you choose) and lets you keep or remove EXIF data and locations. Everything happens **on your computer**: no network
 connections, no telemetry, no account.
 
-Platforms: Windows 10/11 (64-bit), macOS 11 or later on Apple Silicon (M1 and later),
-Linux x86_64 and arm64.
+Platforms: Windows 10/11 (64-bit), macOS 11 or later on Apple Silicon (M1 and later) and
+Intel, Linux x86_64 and arm64.
 
 ## How to use it
 
@@ -297,6 +297,7 @@ your system. Each zip holds the package **and its `.sha256` file**: extract both
 | ---------------------- | --------------------------------------- | -------------------------------------- |
 | Windows 10/11 (64-bit) | `Konvert_<version>_Windows_x64.zip`     | `Konvert_<version>_x64-setup.exe`      |
 | macOS, Apple Silicon   | `Konvert_<version>_macOS_arm.zip`       | `Konvert_<version>_aarch64.dmg`        |
+| macOS, Intel           | `Konvert_<version>_macOS_Intel.zip`     | `Konvert_<version>_x64.dmg`            |
 | Debian, Ubuntu, Mint…  | `Konvert_<version>_Linux_x64_deb.zip`   | `Konvert_<version>_amd64.deb`          |
 | Fedora, openSUSE…      | `Konvert_<version>_Linux_x64_rpm.zip`   | `Konvert-<version>-1.x86_64.rpm`       |
 | Any Linux distribution | `Konvert_<version>_Linux_x64_AppImage.zip` | `Konvert_<version>_amd64.AppImage`  |
@@ -476,7 +477,7 @@ winget install Rustlang.Rustup
 winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 ```
 
-### Prerequisites (macOS, Apple Silicon)
+### Prerequisites (macOS, Apple Silicon or Intel)
 
 - Xcode command line tools (`xcode-select --install`), Node.js 20 or later, rustup.
 
@@ -503,10 +504,11 @@ into `src-tauri/binaries/ffmpeg/`. The binaries are not in the repository. The d
 happens **at development time only**: the app never downloads anything.
 
 Windows and Linux use the LGPL builds of [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds).
-No LGPL build exists for macOS on Apple Silicon, so `scripts/build-ffmpeg-macos.sh` makes
-one from source, with the same library versions and `--disable-network`. The
-**FFmpeg for macOS** workflow runs it; its archive and the archive of its sources are
-published in the FFmpeg mirror release, and the manifest pins the archive's SHA-256.
+No LGPL build exists for macOS, so `scripts/build-ffmpeg-macos.sh` makes one from source
+for the Mac's processor (Apple Silicon or Intel), with the same library versions and
+`--disable-network`. The **FFmpeg for macOS** workflow runs it (input `arch`); each
+archive and the archive of its sources are published in the FFmpeg mirror release, and
+the manifest pins the archive's SHA-256.
 
 `npm run setup:ocr` (`scripts/setup-ocr.mjs`, every platform) downloads the PaddleOCR
 PP-OCRv5 models in ONNX format pinned in `scripts/ocr-manifest.json` (detection 4.8 MB,
