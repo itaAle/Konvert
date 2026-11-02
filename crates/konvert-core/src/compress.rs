@@ -96,7 +96,8 @@ pub(crate) fn plan(
             estimate: None,
         });
     }
-    let search = Search::new(media, options, format, request.remove_location);
+    let search = Search::new(media, options, format, request.remove_location)
+        .with_hardware(request.hardware.as_ref());
     let mut plan = search.first().plan(media, input)?;
     plan.compress = Some(options.clone());
     if let Some(estimate) = plan.estimate.as_mut() {
@@ -268,6 +269,17 @@ impl Search {
             max_bytes: limit,
             next,
         }
+    }
+
+    /// Every attempt may use these hardware video encoders.
+    pub fn with_hardware(mut self, hardware: Option<&crate::hardware::Hardware>) -> Self {
+        self.first.request.hardware = hardware.cloned();
+        if let Next::Ladder(ladder) = &mut self.next {
+            for attempt in ladder {
+                attempt.request.hardware = hardware.cloned();
+            }
+        }
+        self
     }
 
     pub fn first(&self) -> Attempt {

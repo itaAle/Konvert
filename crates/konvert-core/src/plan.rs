@@ -94,6 +94,11 @@ pub struct VideoEncode {
     /// Transparency is kept (animated WebP and APNG from transparent sources).
     #[serde(default)]
     pub alpha: bool,
+    /// Encoded by the graphics chip instead of the software encoder (the
+    /// rate is then always a bit rate).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub hardware: Option<crate::hardware::HardwareEncoder>,
 }
 
 /// Rate control of a video encoder.
@@ -389,6 +394,25 @@ impl ConversionPlan {
         self.image.is_none()
             && !matches!(self.video, Some(VideoPlan::Encode(_)))
             && !matches!(self.audio, Some(AudioPlan::Encode(_)))
+    }
+
+    /// The hardware encoder of the video, if the graphics chip encodes it.
+    pub fn hardware(&self) -> Option<&crate::hardware::HardwareEncoder> {
+        match &self.video {
+            Some(VideoPlan::Encode(enc)) => enc.hardware.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The same plan with the software encoder, when the hardware one was
+    /// chosen (what a conversion falls back to if the graphics chip fails).
+    pub fn without_hardware(&self) -> Option<ConversionPlan> {
+        self.hardware()?;
+        let mut plan = self.clone();
+        if let Some(VideoPlan::Encode(enc)) = plan.video.as_mut() {
+            enc.hardware = None;
+        }
+        Some(plan)
     }
 }
 
@@ -1598,6 +1622,24 @@ pub(crate) fn plan_video(
         },
     };
 
+    // The graphics chip, when it encodes this codec: hardware encoders get a
+    // bit rate (H.264's for the same picture, less for the more efficient AV1).
+    let hardware = request
+        .hardware
+        .as_ref()
+        .and_then(|h| h.encoder_for(codec))
+        .cloned();
+    let rate = match (&hardware, rate) {
+        (Some(_), VideoRate::Crf { .. }) => {
+            let kbps = h264_bitrate_kbps(src, size, fps, preset) as f64
+                / codec_efficiency(codec_name(codec));
+            VideoRate::Bitrate {
+                kbps: ((kbps / 10.0).round() as u32 * 10).max(100),
+            }
+        }
+        (_, rate) => rate,
+    };
+
     VideoPlan::Encode(VideoEncode {
         codec,
         rate,
@@ -1607,7 +1649,22 @@ pub(crate) fn plan_video(
         fps,
         alpha: matches!(codec, VideoCodec::Webp | VideoCodec::Apng)
             && src.pix_fmt.as_deref().is_some_and(pix_fmt_has_alpha),
+        hardware,
     })
+}
+
+/// FFmpeg's name of a codec Konvert encodes (for [`codec_efficiency`]).
+fn codec_name(codec: VideoCodec) -> &'static str {
+    match codec {
+        VideoCodec::H264 => "h264",
+        VideoCodec::Av1 => "av1",
+        VideoCodec::Vp9 => "vp9",
+        VideoCodec::Mpeg4 => "mpeg4",
+        VideoCodec::Mpeg2 => "mpeg2video",
+        VideoCodec::Gif => "gif",
+        VideoCodec::Webp => "webp",
+        VideoCodec::Apng => "apng",
+    }
 }
 
 /// Output dimensions: never upscales, keeps the aspect ratio. YUV 4:2:0 codecs

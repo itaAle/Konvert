@@ -633,6 +633,12 @@ pub struct ConversionRequest {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub join: Option<JoinOptions>,
+    /// Hardware video encoders Konvert may use (see [`crate::hardware`]). Set
+    /// by the app from what it detected, never sent by the interface; `None`:
+    /// software encoders only.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub hardware: Option<crate::hardware::Hardware>,
 }
 
 /// Several audio or video files joined into one, in order.
@@ -671,6 +677,7 @@ impl ConversionRequest {
             media: None,
             extract: None,
             join: None,
+            hardware: None,
         }
     }
 }
