@@ -22,7 +22,7 @@ on:
         description: Platform to package (all, or a single one to redo it)
         type: choice
         default: all
-        options: [all, macos-arm64, linux-x64, linux-arm64]
+        options: [all, macos-arm64, macos-x64, linux-x64, linux-arm64]
 
 permissions:
   contents: read
@@ -40,6 +40,7 @@ jobs:
         run: |
           all='[
             {"key":"macos-arm64","name":"macOS arm64","os":"macos-15"},
+            {"key":"macos-x64","name":"macOS Intel","os":"macos-15-intel"},
             {"key":"linux-x64","name":"Linux x64","os":"ubuntu-22.04"},
             {"key":"linux-arm64","name":"Linux arm64","os":"ubuntu-22.04-arm"}
           ]'
@@ -54,7 +55,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.select.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
