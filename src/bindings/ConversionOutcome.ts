@@ -19,4 +19,9 @@ files: number,
 /**
  * Seconds.
  */
-elapsed: number, };
+elapsed: number, 
+/**
+ * The graphics chip could not encode the video: the software encoder
+ * made it instead (see [`crate::hardware`]).
+ */
+hardwareFallback: boolean, };

@@ -4,11 +4,13 @@ import { useEffect, useId, useState } from "react";
 
 import appIcon from "../../src-tauri/icons/app-icon.svg";
 import type { EngineInfo } from "../bindings/EngineInfo";
+import type { Hardware } from "../bindings/Hardware";
 import type { LanguagePref } from "../bindings/LanguagePref";
 import type { QualityPreset } from "../bindings/QualityPreset";
 import type { ThemePref } from "../bindings/ThemePref";
 import { t } from "../i18n";
 import { backend } from "../lib/api";
+import { hardwareSummary } from "../lib/hardware";
 import { spring } from "../lib/motion";
 import { usePreferences } from "../state/preferences";
 import { DestinationRow } from "./DestinationRow";
@@ -30,6 +32,48 @@ function Row({ label, children, hint }: { label: string; children: React.ReactNo
       <p className="px-1 text-[12px] font-medium text-label-secondary">{label}</p>
       {children}
       {hint && <p className="px-1 text-[12px] leading-snug text-label-tertiary">{hint}</p>}
+    </div>
+  );
+}
+
+/** The switch for the graphics chip, with what Konvert found on this computer. */
+function HardwareRow() {
+  const { prefs, update } = usePreferences();
+  const hintId = useId();
+  const [found, setFound] = useState<Hardware | null>(null);
+  useEffect(() => {
+    let live = true;
+    backend.hardwareInfo().then(
+      (hardware) => live && setFound(hardware),
+      () => live && setFound({ encoders: [] }),
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+  const status =
+    found == null
+      ? t("settings.hardwareSearching")
+      : found.encoders.length > 0
+        ? t("settings.hardwareFound", { list: hardwareSummary(found.encoders).join(" · ") })
+        : t("settings.hardwareNone");
+  return (
+    <div className="flex flex-col gap-2 rounded-[14px] bg-fill px-4 py-3">
+      <div className="flex items-center justify-between gap-4">
+        <p className="text-[14px] font-medium">{t("settings.hardware")}</p>
+        <Switch
+          checked={prefs.hardwareAcceleration}
+          onChange={(hardwareAcceleration) => update({ hardwareAcceleration })}
+          label={t("settings.hardware")}
+          describedBy={hintId}
+        />
+      </div>
+      <p id={hintId} className="text-[12px] leading-snug text-label-secondary">
+        {t("settings.hardwareHint")}
+      </p>
+      <p className="text-[12px] leading-snug text-label-tertiary" aria-live="polite">
+        {status}
+      </p>
     </div>
   );
 }
@@ -76,6 +120,7 @@ function General() {
           <DestinationRow compact />
         </div>
       </Row>
+      <HardwareRow />
       <div className="flex flex-col gap-2 rounded-[14px] bg-fill px-4 py-3">
         <div className="flex items-center justify-between gap-4">
           <p className="text-[14px] font-medium">{t("settings.debug")}</p>

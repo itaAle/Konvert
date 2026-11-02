@@ -15,4 +15,8 @@ outputDir: string | null,
 /**
  * Write a local diagnostic log (off by default).
  */
-debugLogging: boolean, };
+debugLogging: boolean, 
+/**
+ * Let the graphics chip encode videos where it can (on by default).
+ */
+hardwareAcceleration: boolean, };

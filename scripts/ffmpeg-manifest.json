@@ -79,6 +79,19 @@
         "ffmpeg",
         "ffprobe"
       ]
+    },
+    "macos-x86_64": {
+      "note": "Built by scripts/build-ffmpeg-macos.sh on an Intel Mac (.github/workflows/ffmpeg-macos.yml, arch x86_64, run 41471824179) with the same libraries as the BtbN builds and --disable-network; mirrored with its sources archive in the TheLastOxygen/Konvert fork release of the same name.",
+      "urls": [
+        "https://github.com/TheLastOxygen/Konvert/releases/download/ffmpeg-n9.0.2-36/ffmpeg-n9.0.2-36-g6882969ce9-macos-x86_64-lgpl.tar.xz"
+      ],
+      "sha256": "562760b479412116577c2b982685e89bca6bd2bea9b94bc64b92e732b81d0ac5",
+      "archive": "tar.xz",
+      "binDir": "bin",
+      "files": [
+        "ffmpeg",
+        "ffprobe"
+      ]
     }
   }
 }

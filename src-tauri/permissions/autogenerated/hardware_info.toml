@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-hardware-info"
+description = "Enables the hardware_info command without any pre-configured scope."
+commands.allow = ["hardware_info"]
+
+[[permission]]
+identifier = "deny-hardware-info"
+description = "Denies the hardware_info command without any pre-configured scope."
+commands.deny = ["hardware_info"]

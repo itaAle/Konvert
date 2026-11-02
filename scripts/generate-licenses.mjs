@@ -21,6 +21,7 @@ const OUTPUT = join(ROOT, "THIRD_PARTY_LICENSES");
 const TARGETS = {
   "x86_64-pc-windows-msvc": "Windows",
   "aarch64-apple-darwin": "macOS",
+  "x86_64-apple-darwin": "macOS",
   "x86_64-unknown-linux-gnu": "Linux",
   "aarch64-unknown-linux-gnu": "Linux",
 };
@@ -155,9 +156,10 @@ Version:    ${ffmpeg.ffmpegVersion}
 Builds:     Windows and Linux: BtbN FFmpeg-Builds, variants win64-lgpl-shared,
             linux64-lgpl and linuxarm64-lgpl
             ${ffmpeg.source.release}
-            macOS (Apple Silicon): built by scripts/build-ffmpeg-macos.sh of the
-            Konvert repository, with the same library versions and without
-            any network protocol (--disable-network)
+            macOS (Apple Silicon and Intel): built by
+            scripts/build-ffmpeg-macos.sh of the Konvert repository, with the
+            same library versions and without any network protocol
+            (--disable-network)
 Website:    https://ffmpeg.org/
 
 How Konvert uses FFmpeg

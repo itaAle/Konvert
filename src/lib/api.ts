@@ -9,6 +9,7 @@ import type { ConversionRequest } from "../bindings/ConversionRequest";
 import type { EngineInfo } from "../bindings/EngineInfo";
 import type { ErrorPayload } from "../bindings/ErrorPayload";
 import type { FileAnalysis } from "../bindings/FileAnalysis";
+import type { Hardware } from "../bindings/Hardware";
 import type { JobEvent } from "../bindings/JobEvent";
 import type { MediaInfo } from "../bindings/MediaInfo";
 import type { PlatformInfo } from "../bindings/PlatformInfo";
@@ -39,6 +40,8 @@ export interface Backend {
   /** Forgets the password of a PDF that left the list. */
   forgetPdfPassword(path: string): Promise<void>;
   planConversion(path: string, media: MediaInfo, request: ConversionRequest): Promise<ConversionPlan>;
+  /** The hardware video encoders that work on this computer (waits while they are tried). */
+  hardwareInfo(): Promise<Hardware>;
   /** Small pictures of some pages of a PDF (longest side `size` pixels), drawn locally. */
   pdfThumbnails(path: string, pages: number[], size: number): Promise<Thumbnail[]>;
   /** Native dialog choosing a PNG or JPEG picture (a watermark). */
@@ -102,6 +105,7 @@ const tauriBackend: Backend = {
   unlockPdf: (path, password) => call("unlock_pdf", { path, password }),
   forgetPdfPassword: (path) => call("forget_pdf_password", { path }),
   planConversion: (path, media, request) => call("plan_conversion", { path, media, request }),
+  hardwareInfo: () => call("hardware_info"),
   pdfThumbnails: (path, pages, size) => call("pdf_thumbnails", { path, pages, size }),
   pictureThumbnail: (path, size) => call("picture_thumbnail", { path, size }),
   videoFrame: (path, atSecs, size) => call("video_frame", { path, atSecs, size }),

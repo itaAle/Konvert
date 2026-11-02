@@ -74,6 +74,9 @@ pub struct ConversionOutcome {
     #[serde(serialize_with = "serialize_secs")]
     #[ts(type = "number")]
     pub elapsed: Duration,
+    /// The graphics chip could not encode the video: the software encoder
+    /// made it instead (see [`crate::hardware`]).
+    pub hardware_fallback: bool,
 }
 
 fn serialize_secs<S: serde::Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
@@ -256,7 +259,7 @@ pub async fn run_conversion(
         return run_pages(bins, workspace, job, &plan, cancel, on_progress, started).await;
     }
     let temp_output = workspace.job_output(job.id, ext);
-    encode(
+    let hardware_fallback = encode(
         bins,
         workspace,
         job,
@@ -292,12 +295,14 @@ pub async fn run_conversion(
         size_bytes,
         files: 1,
         elapsed: started.elapsed(),
+        hardware_fallback,
     })
 }
 
 /// One file made by FFmpeg (after Konvert drew an SVG picture, or prepared an
 /// Ogg cover), written to `output` in the private workspace, EXIF data
-/// copied. On failure nothing is left behind.
+/// copied. On failure nothing is left behind. Gives `true` when the software
+/// encoder had to take over from the graphics chip.
 async fn encode(
     bins: &Binaries,
     workspace: &Workspace,
@@ -306,7 +311,7 @@ async fn encode(
     output: &Path,
     cancel: &CancellationToken,
     on_progress: &mut (impl FnMut(Progress) + Send),
-) -> Result<(), CoreError> {
+) -> Result<bool, CoreError> {
     let cover_comment = prepare_cover_comment(bins, workspace, job, plan).await;
     // A vector picture is drawn first; FFmpeg then encodes the drawing.
     let drawing = match plan.image.as_ref().and_then(|i| i.render) {
@@ -353,7 +358,16 @@ async fn encode(
     };
     let command = build_from_plan_with(plan, source, cover_comment.as_deref(), output);
     let mut on_encode = |p: Progress| on_progress(scaled(p, share, 1.0 - share));
-    let result = run_ffmpeg(bins, &command.args, duration, cancel, &mut on_encode).await;
+    let mut result = run_ffmpeg(bins, &command.args, duration, cancel, &mut on_encode).await;
+    // The graphics chip failed: the software encoder makes the file instead.
+    let mut fell_back = false;
+    if let (Err(e), Some(software)) = (&result, plan.without_hardware())
+        && hardware_may_be_at_fault(e)
+    {
+        fell_back = true;
+        let command = build_from_plan_with(&software, source, cover_comment.as_deref(), output);
+        result = run_ffmpeg(bins, &command.args, duration, cancel, &mut on_encode).await;
+    }
     for temporary in [&cover_comment, &drawing].into_iter().flatten() {
         let _ = std::fs::remove_file(temporary);
     }
@@ -384,7 +398,20 @@ async fn encode(
             tokio::task::spawn_blocking(move || finish_exif(&input, &output, copy, remove, size))
                 .await;
     }
-    Ok(())
+    Ok(fell_back)
+}
+
+/// Whether an encode that failed might work with the software encoder (not
+/// when it was stopped, or the disk or the destination is the problem).
+fn hardware_may_be_at_fault(error: &CoreError) -> bool {
+    !matches!(
+        error,
+        CoreError::Cancelled
+            | CoreError::DiskFull { .. }
+            | CoreError::PermissionDenied { .. }
+            | CoreError::OutputUnavailable
+            | CoreError::InputNotFound
+    )
 }
 
 /// Tracks saved as files of their own, one after the other in the private
@@ -477,6 +504,7 @@ async fn run_extract(
         size_bytes,
         files,
         elapsed: started.elapsed(),
+        hardware_fallback: false,
     })
 }
 
@@ -497,7 +525,9 @@ async fn run_compress(
     let ext = formats::spec(job.request.target).extension;
     let temp_output = workspace.job_output(job.id, ext);
     let result = if matches!(job.media.kind, MediaKind::Document | MediaKind::Text) {
-        compress_document(job, options, &temp_output, cancel, &mut on_progress).await
+        compress_document(job, options, &temp_output, cancel, &mut on_progress)
+            .await
+            .map(|size| (size, false))
     } else {
         compress_media(
             bins,
@@ -510,8 +540,8 @@ async fn run_compress(
         )
         .await
     };
-    let size = match result {
-        Ok(size) if size < input_size => size,
+    let (size, hardware_fallback) = match result {
+        Ok((size, fell_back)) if size < input_size => (size, fell_back),
         Ok(_) => {
             let _ = std::fs::remove_file(&temp_output);
             return Err(CoreError::NoGain);
@@ -545,6 +575,7 @@ async fn run_compress(
         size_bytes: size,
         files: 1,
         elapsed: started.elapsed(),
+        hardware_fallback,
     })
 }
 
@@ -795,12 +826,14 @@ async fn finish_file(
         size_bytes: bytes.len() as u64,
         files: 1,
         elapsed: started.elapsed(),
+        hardware_fallback: false,
     })
 }
 
 /// Converts a media file into its own format with the settings of each
 /// attempt, until one fits under the limit (or nothing is left to try): the
-/// first that fits, else the smallest, ends up in `output`; gives its size.
+/// first that fits, else the smallest, ends up in `output`; gives its size
+/// (and whether the software encoder had to take over from the graphics chip).
 async fn compress_media(
     bins: &Binaries,
     workspace: &Workspace,
@@ -809,14 +842,16 @@ async fn compress_media(
     output: &Path,
     cancel: &CancellationToken,
     on_progress: &mut (impl FnMut(Progress) + Send),
-) -> Result<u64, CoreError> {
+) -> Result<(u64, bool), CoreError> {
     let ext = formats::spec(job.request.target).extension;
     let mut search = compress::Search::new(
         &job.media,
         options,
         job.request.target,
         job.request.remove_location,
-    );
+    )
+    .with_hardware(job.request.hardware.as_ref());
+    let mut fell_back = false;
     let mut attempt = search.first();
     let mut kept: Option<(PathBuf, u64)> = None;
     let forget = |kept: &Option<(PathBuf, u64)>| {
@@ -835,9 +870,12 @@ async fn compress_media(
         let file = workspace
             .dir()
             .join(format!("job-{}-try-{n}.{ext}", job.id));
-        if let Err(e) = encode(bins, workspace, job, &plan, &file, cancel, on_progress).await {
-            forget(&kept);
-            return Err(e);
+        match encode(bins, workspace, job, &plan, &file, cancel, on_progress).await {
+            Ok(software) => fell_back |= software,
+            Err(e) => {
+                forget(&kept);
+                return Err(e);
+            }
         }
         let size = std::fs::metadata(&file)
             .map(|m| m.len())
@@ -859,7 +897,7 @@ async fn compress_media(
         let _ = std::fs::remove_file(&file);
         return Err(e.into());
     }
-    Ok(size)
+    Ok((size, fell_back))
 }
 
 /// A series of pictures: FFmpeg writes them into a private folder, then they
@@ -911,6 +949,7 @@ async fn run_series(
         size_bytes,
         files,
         elapsed: started.elapsed(),
+        hardware_fallback: false,
     })
 }
 
@@ -1027,7 +1066,16 @@ async fn run_join(
     };
     let command = crate::command::join_args(&plan, &join, &paths, &list, &temp_output);
     let mut on_encode = |p: Progress| on_progress(scaled(p, share, 1.0 - share));
-    let result = run_ffmpeg(bins, &command.args, Some(duration), cancel, &mut on_encode).await;
+    let mut result = run_ffmpeg(bins, &command.args, Some(duration), cancel, &mut on_encode).await;
+    // The graphics chip failed: the software encoder joins the files instead.
+    let mut hardware_fallback = false;
+    if let (Err(e), Some(software)) = (&result, plan.without_hardware())
+        && hardware_may_be_at_fault(e)
+    {
+        hardware_fallback = true;
+        let command = crate::command::join_args(&software, &join, &paths, &list, &temp_output);
+        result = run_ffmpeg(bins, &command.args, Some(duration), cancel, &mut on_encode).await;
+    }
     let _ = std::fs::remove_file(&list);
     let result = result.and_then(|()| match std::fs::metadata(&temp_output) {
         Ok(m) if m.len() > 0 => Ok(()),
@@ -1060,6 +1108,7 @@ async fn run_join(
         size_bytes,
         files: 1,
         elapsed: started.elapsed(),
+        hardware_fallback,
     })
 }
 
@@ -1320,6 +1369,7 @@ async fn run_build(
         size_bytes,
         files,
         elapsed: started.elapsed(),
+        hardware_fallback: false,
     })
 }
 
@@ -1486,6 +1536,7 @@ async fn run_pages(
         size_bytes,
         files,
         elapsed: started.elapsed(),
+        hardware_fallback: false,
     })
 }
 

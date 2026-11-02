@@ -38,7 +38,7 @@ pub enum ThemePref {
     Dark,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
 #[ts(export)]
 pub struct Preferences {
@@ -50,6 +50,21 @@ pub struct Preferences {
     pub output_dir: Option<PathBuf>,
     /// Write a local diagnostic log (off by default).
     pub debug_logging: bool,
+    /// Let the graphics chip encode videos where it can (on by default).
+    pub hardware_acceleration: bool,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            language: LanguagePref::default(),
+            theme: ThemePref::default(),
+            default_preset: QualityPreset::default(),
+            output_dir: None,
+            debug_logging: false,
+            hardware_acceleration: true,
+        }
+    }
 }
 
 /// Loads and saves the preferences file.
@@ -119,6 +134,7 @@ mod tests {
             default_preset: QualityPreset::Small,
             output_dir: Some(PathBuf::from("D:\\Musica convertita")),
             debug_logging: true,
+            hardware_acceleration: false,
         };
         store.set(prefs.clone()).unwrap();
         let text = fs::read_to_string(d.join(FILE_NAME)).unwrap();

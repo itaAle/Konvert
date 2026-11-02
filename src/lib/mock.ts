@@ -7,6 +7,7 @@ import type { AudioCodecInfo } from "../bindings/AudioCodecInfo";
 import type { ConversionPlan } from "../bindings/ConversionPlan";
 import type { ConversionWarning } from "../bindings/ConversionWarning";
 import type { FileAnalysis } from "../bindings/FileAnalysis";
+import type { Hardware } from "../bindings/Hardware";
 import type { JobEvent } from "../bindings/JobEvent";
 import type { PdfOptions } from "../bindings/PdfOptions";
 import type { PictureEdit } from "../bindings/PictureEdit";
@@ -25,7 +26,21 @@ let preferences: Preferences = {
   defaultPreset: "balanced",
   outputDir: null,
   debugLogging: false,
+  hardwareAcceleration: true,
 };
+
+/** `?mock=nohw`: a computer without hardware video encoders. */
+const HARDWARE: Hardware = {
+  encoders:
+    params.get("mock") === "nohw"
+      ? []
+      : [
+          { accelerator: "nvenc", codec: "h264" },
+          { accelerator: "qsv", codec: "h264" },
+        ],
+};
+/** `?mock=hwfallback`: the graphics chip fails and the software encoder takes over. */
+const hardwareFallback = params.get("mock") === "hwfallback";
 
 const audioCodec = (codec: AudioCodecInfo["codec"]): AudioCodecInfo => ({
   codec,
@@ -449,6 +464,10 @@ export const mockBackend: Backend = {
     return { vibrancy: false };
   },
   async appReady() {},
+  async hardwareInfo() {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    return HARDWARE;
+  },
   async engineInfo() {
     return { appVersion: "0.2.0-dev", ffmpegVersion: "ffmpeg version n9.0 (simulated)" };
   },
@@ -790,7 +809,21 @@ export const mockBackend: Backend = {
     const plan: ConversionPlan = {
       target: request.target,
       videoStream: media.video[0]?.index ?? null,
-      video: remux ? { mode: "copy", codec: "h264" } : null,
+      video: remux
+        ? { mode: "copy", codec: "h264" }
+        : video && media.video.length > 0
+          ? {
+              mode: "encode",
+              codec: "h264",
+              rate: { kind: "bitrate", kbps: 4350 },
+              width: media.video[0].width,
+              height: media.video[0].height,
+              resize: false,
+              fps: null,
+              alpha: false,
+              hardware: preferences.hardwareAcceleration ? (HARDWARE.encoders[0] ?? null) : null,
+            }
+          : null,
       audioStream: media.audio[0]?.index ?? null,
       audio: remux ? { mode: "copy", codec: "aac" } : null,
       coverArtStream: null,
@@ -834,6 +867,7 @@ export const mockBackend: Backend = {
             ),
             files: 1,
             elapsed: 1.2,
+            hardwareFallback,
           }
       : null;
     // A split PDF: a folder of PDFs.
@@ -868,17 +902,18 @@ export const mockBackend: Backend = {
             update: {
               state: "done",
               outcome: series
-                ? { output: `C:\\Video\\${name}`, sizeBytes: 42_000_000, files: 120, elapsed: 9.8 }
+                ? { output: `C:\\Video\\${name}`, sizeBytes: 42_000_000, files: 120, elapsed: 9.8, hardwareFallback }
                 : parts.length > 1
-                  ? { output: `C:\\Documenti\\${name}`, sizeBytes: 1_300_000, files: parts.length, elapsed: 0.6 }
+                  ? { output: `C:\\Documenti\\${name}`, sizeBytes: 1_300_000, files: parts.length, elapsed: 0.6, hardwareFallback }
                   : pages && pages.length > 1
-                  ? { output: `C:\\Documenti\\${name}`, sizeBytes: pages.length * 420_000, files: pages.length, elapsed: 2.4 }
+                  ? { output: `C:\\Documenti\\${name}`, sizeBytes: pages.length * 420_000, files: pages.length, elapsed: 2.4, hardwareFallback }
                   : pages
                     ? {
                         output: `C:\\Documenti\\${name}-${label}-${String(pages[0]).padStart(2, "0")}.${request.target}`,
                         sizeBytes: 420_000,
                         files: 1,
                         elapsed: 0.4,
+            hardwareFallback,
                       }
                     : {
                         // Like the core: an edited copy is `name-mod.ext`.
@@ -886,6 +921,7 @@ export const mockBackend: Backend = {
                         sizeBytes: 5_400_000,
                         files: 1,
                         elapsed: 6.2,
+            hardwareFallback,
                       },
             },
           });

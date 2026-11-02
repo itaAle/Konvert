@@ -38,11 +38,12 @@ runs:
       if: runner.os == 'macOS'
       shell: bash
       run: |
-        sha="$(node -p 'require("./scripts/ffmpeg-manifest.json").platforms["macos-aarch64"].sha256')"
+        case "$(uname -m)" in arm64) key=macos-aarch64 ;; *) key=macos-x86_64 ;; esac
+        sha="$(node -p "require('./scripts/ffmpeg-manifest.json').platforms['$key']?.sha256 ?? ''")"
         if [[ -n "$sha" ]]; then echo "pinned=true" >> "$GITHUB_OUTPUT"; exit 0; fi
         echo "pinned=false" >> "$GITHUB_OUTPUT"
         if [[ "${{ inputs.require-pinned-ffmpeg }}" == "true" ]]; then
-          echo "::error::Pin the macOS FFmpeg build in scripts/ffmpeg-manifest.json before a release."
+          echo "::error::Pin the macOS FFmpeg build ($key) in scripts/ffmpeg-manifest.json before a release."
           exit 1
         fi
 
@@ -52,7 +53,7 @@ runs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .ffmpeg-build/out
-        key: ffmpeg-macos-${{ hashFiles('scripts/build-ffmpeg-macos.sh') }}
+        key: ffmpeg-macos-${{ runner.arch }}-${{ hashFiles('scripts/build-ffmpeg-macos.sh') }}
 
     - name: Build FFmpeg for macOS (not pinned yet)
       if: steps.mac.outputs.pinned == 'false' && steps.mac-cache.outputs.cache-hit != 'true'
@@ -67,7 +68,7 @@ runs:
         if [[ "${{ steps.mac.outputs.pinned }}" == "false" ]]; then
           dest=src-tauri/binaries/ffmpeg
           rm -rf "$dest" "$RUNNER_TEMP/ffmpeg" && mkdir -p "$dest" "$RUNNER_TEMP/ffmpeg"
-          tar -xJf .ffmpeg-build/out/ffmpeg-*-macos-arm64-lgpl.tar.xz -C "$RUNNER_TEMP/ffmpeg"
+          tar -xJf .ffmpeg-build/out/ffmpeg-*-macos-"$(uname -m)"-lgpl.tar.xz -C "$RUNNER_TEMP/ffmpeg"
           cp "$RUNNER_TEMP"/ffmpeg/*/bin/* "$RUNNER_TEMP"/ffmpeg/*/LICENSE.txt "$dest/"
           "$dest/ffmpeg" -hide_banner -version | head -n1
         else

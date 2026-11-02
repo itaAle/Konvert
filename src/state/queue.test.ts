@@ -233,7 +233,7 @@ describe("queue state machine", () => {
       { type: "start" },
       { type: "started", key: 1, jobId: 1 },
       { type: "started", key: 2, jobId: 2 },
-      { type: "job", event: { jobId: 1, update: { state: "done", outcome: { output: "a.webp", sizeBytes: 1, files: 1, elapsed: 1 } } } },
+      { type: "job", event: { jobId: 1, update: { state: "done", outcome: { output: "a.webp", sizeBytes: 1, files: 1, elapsed: 1, hardwareFallback: false } } } },
     );
     expect(overallProgress(s)).toBeCloseTo(0.5);
   });
@@ -298,7 +298,7 @@ describe("queue state machine", () => {
     s = reduce(s, { type: "job", event: { jobId: 11, update: { state: "progress", progress } } });
     // 100 s × 0.5 of 400 s.
     expect(overallProgress(s)).toBeCloseTo(0.125);
-    const outcome = { output: "C:\\m\\a.mp3", sizeBytes: 1, files: 1, elapsed: 1 };
+    const outcome = { output: "C:\\m\\a.mp3", sizeBytes: 1, files: 1, elapsed: 1, hardwareFallback: false };
     s = reduce(s, { type: "job", event: { jobId: 11, update: { state: "done", outcome } } });
     expect(overallProgress(s)).toBeCloseTo(0.25);
     expect(s.phase).toBe("converting");
@@ -339,7 +339,7 @@ describe("queue state machine", () => {
     let s = run(initialQueue("small"), { type: "add", paths: ["a.wav"] });
     s = run(s, { type: "analyzed", key: 1, file: file("a.wav", "audio", 1) }, { type: "selectTarget", target: "mp3" });
     s = run(s, { type: "planned", key: 1, version: s.planVersion, plan: plan("mp3", 1) }, { type: "start" }, { type: "started", key: 1, jobId: 5 });
-    s = reduce(s, { type: "job", event: { jobId: 5, update: { state: "done", outcome: { output: "a.mp3", sizeBytes: 1, files: 1, elapsed: 1 } } } });
+    s = reduce(s, { type: "job", event: { jobId: 5, update: { state: "done", outcome: { output: "a.mp3", sizeBytes: 1, files: 1, elapsed: 1, hardwareFallback: false } } } });
     expect(s.phase).toBe("finished");
     s = reduce(s, { type: "add", paths: ["b.wav"] });
     expect(s).toMatchObject({ phase: "setup", preset: "small", target: null });
@@ -571,7 +571,7 @@ describe("queue state machine", () => {
     // Moving files is over once the conversion started.
     expect(reduce(s, { type: "move", key: 1, delta: -1 })).toBe(s);
 
-    const outcome = { output: "C:\m\c.pdf", sizeBytes: 300, files: 1, elapsed: 1 };
+    const outcome = { output: "C:\m\c.pdf", sizeBytes: 300, files: 1, elapsed: 1, hardwareFallback: false };
     s = reduce(s, { type: "job", event: { jobId: 9, update: { state: "done", outcome } } });
     expect(s.phase).toBe("finished");
     expect(resultItems(s)).toHaveLength(1);

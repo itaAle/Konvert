@@ -12,6 +12,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   defaultPreset: "balanced",
   outputDir: null,
   debugLogging: false,
+  hardwareAcceleration: true,
 };
 
 interface PreferencesContext {

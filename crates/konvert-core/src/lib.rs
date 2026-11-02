@@ -8,6 +8,7 @@
 //! * [`command`]: pure FFmpeg command builder (plan → arguments).
 //! * [`convert`]: runs FFmpeg, reports progress, supports cancellation.
 //! * [`compress`] / [`pdf_compress`]: smaller copies of files in their own format.
+//! * [`hardware`]: hardware video encoders of the graphics chip, detected once.
 //! * [`naming`] / [`workspace`]: safe output naming and temporary files.
 //! * [`metadata`]: cover art comments for Ogg files.
 //!
@@ -26,6 +27,7 @@ pub mod estimate;
 pub mod exif;
 pub mod extract;
 pub mod formats;
+pub mod hardware;
 pub mod join;
 pub mod metadata;
 pub mod naming;
@@ -55,6 +57,7 @@ pub use disk::available_space;
 pub use error::{CoreError, ErrorPayload};
 pub use estimate::SizeEstimate;
 pub use formats::{TargetFormat, TargetOption, available_targets};
+pub use hardware::Hardware;
 pub use plan::{ConversionPlan, ConversionWarning, plan_conversion};
 pub use probe::{MediaInfo, MediaKind, probe, probe_with};
 pub use progress::Progress;

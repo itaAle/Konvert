@@ -411,6 +411,8 @@ export const it = {
     approximate: "circa {size}",
     remux: "Senza ricodifica: veloce e senza perdita",
     remuxShort: "Senza ricodifica",
+    hardware: "Il video viene codificato dalla scheda grafica ({name}): più veloce",
+    hardwareShort: "Accelerata",
     lowSpace: "Lo spazio libero nella cartella di destinazione ({free}) potrebbe non bastare.",
   },
   warnings: {
@@ -503,6 +505,7 @@ export const it = {
     compressedTitle: "Compressione completata",
     smaller: "{percent} in meno: da {from} a {to}",
     overLimit: "Non è stato possibile scendere sotto {limit}: questo è il minimo raggiunto.",
+    hardwareFallback: "La scheda grafica non è riuscita a codificare il video: lo ha fatto il processore.",
     saved: "Salvato come {name}",
     savedFolder: "{n} immagini salvate nella cartella {name}",
     savedDocuments: "{n} PDF salvati nella cartella {name}",
@@ -537,6 +540,12 @@ export const it = {
       "Salva informazioni tecniche in un registro locale per diagnosticare problemi. Il registro non contiene nomi o percorsi dei tuoi file e non viene mai inviato.",
     showLog: "Mostra registro",
     clearLog: "Elimina registro",
+    hardware: "Accelerazione hardware",
+    hardwareHint:
+      "Codifica i video H.264 e AV1 con la scheda grafica: le conversioni sono più veloci. Se la scheda non riesce, Konvert usa il processore.",
+    hardwareSearching: "Ricerca della scheda grafica…",
+    hardwareFound: "Disponibile: {list}",
+    hardwareNone: "Nessun encoder hardware disponibile su questo computer: i video vengono codificati dal processore.",
   },
   about: {
     version: "Versione {version}",

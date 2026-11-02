@@ -9,8 +9,8 @@ of scans and photos with **OCR** (searchable PDFs, plain text), **compresses** f
 own format (down to a size you choose) and lets you keep or remove EXIF data and locations. Everything happens **on your computer**: no network
 connections, no telemetry, no account.
 
-Platforms: Windows 10/11 (64-bit), macOS 11 or later on Apple Silicon (M1 and later),
-Linux x86_64 and arm64.
+Platforms: Windows 10/11 (64-bit), macOS 11 or later on Apple Silicon (M1 and later) and
+Intel, Linux x86_64 and arm64.
 
 ## How to use it
 
@@ -65,6 +65,14 @@ Less common formats are behind **More formats**, so the usual choices stay in fr
   tags, and Konvert says so.
 - H.264 video with OpenH264, VP9 for WebM, AV1 (SVT-AV1) among the advanced options; MPG
   uses MPEG-2 video with MP2 audio, like DVDs.
+- **Hardware acceleration** (on by default, **Settings → Hardware acceleration**): where
+  the graphics chip can encode H.264 or AV1, it does, at the same bit rate, faster and
+  without loading the processor: NVIDIA NVENC, Intel Quick Sync and AMD AMF on Windows and
+  Linux, VA-API on Linux, VideoToolbox on macOS. Konvert tries each encoder once at start
+  with a tiny encode of a generated picture and uses only those that work; if the graphics
+  chip fails during a conversion, the processor finishes it and Konvert says so. Measured
+  on a ProRes 1080p clip (i5-10400, GeForce RTX 2060): OpenH264 119 frames/s, NVENC H.264
+  204 frames/s, with the same or better quality (SSIM) at the same bit rate.
 - ALAC and AAC both use the `.m4a` extension: the cards say which is which
   (**ALAC · M4A · Lossless**). CAF holds Apple Lossless (FFmpeg cannot write AAC or Opus
   into CAF). MKA keeps the original soundtrack whenever it can.
@@ -297,6 +305,7 @@ your system. Each zip holds the package **and its `.sha256` file**: extract both
 | ---------------------- | --------------------------------------- | -------------------------------------- |
 | Windows 10/11 (64-bit) | `Konvert_<version>_Windows_x64.zip`     | `Konvert_<version>_x64-setup.exe`      |
 | macOS, Apple Silicon   | `Konvert_<version>_macOS_arm.zip`       | `Konvert_<version>_aarch64.dmg`        |
+| macOS, Intel           | `Konvert_<version>_macOS_Intel.zip`     | `Konvert_<version>_x64.dmg`            |
 | Debian, Ubuntu, Mint…  | `Konvert_<version>_Linux_x64_deb.zip`   | `Konvert_<version>_amd64.deb`          |
 | Fedora, openSUSE…      | `Konvert_<version>_Linux_x64_rpm.zip`   | `Konvert-<version>-1.x86_64.rpm`       |
 | Any Linux distribution | `Konvert_<version>_Linux_x64_AppImage.zip` | `Konvert_<version>_amd64.AppImage`  |
@@ -419,7 +428,7 @@ Konvert works entirely on your computer. No data leaves your device.
 **Data on disk**
 - No history of converted files, names, paths or thumbnails.
 - The only saved settings are your preferences (language, appearance, default quality,
-  destination folder, debug mode) in a readable JSON file, `preferences.json`, in
+  destination folder, hardware acceleration, debug mode) in a readable JSON file, `preferences.json`, in
   `%APPDATA%\app.konvert.desktop` (Windows), `~/Library/Application Support/app.konvert.desktop`
   (macOS) or `~/.config/app.konvert.desktop` (Linux). No installation or device identifier.
 - Files being processed live in a dedicated temporary folder (`Konvert` in the system
@@ -453,8 +462,8 @@ Every dependency and its license is listed in
 
 Ideas collected for upcoming updates:
 
-- **Hardware-accelerated** video (NVIDIA NVENC, Intel Quick Sync, AMD AMF, Apple
-  VideoToolbox), with automatic detection.
+- **HEVC** output where the graphics chip can encode it (smaller files, HDR kept), and
+  hardware **decoding** of the inputs.
 - FFmpeg built **without any network support** on Windows and Linux too (today the network
   is blocked at runtime there; the macOS build already has no network protocol).
 - **Signed** installer with a code-signing certificate (no SmartScreen warning).
@@ -476,7 +485,7 @@ winget install Rustlang.Rustup
 winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 ```
 
-### Prerequisites (macOS, Apple Silicon)
+### Prerequisites (macOS, Apple Silicon or Intel)
 
 - Xcode command line tools (`xcode-select --install`), Node.js 20 or later, rustup.
 
@@ -503,9 +512,10 @@ into `src-tauri/binaries/ffmpeg/`. The binaries are not in the repository. The d
 happens **at development time only**: the app never downloads anything.
 
 Windows and Linux use the LGPL builds of [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds).
-No LGPL build exists for macOS on Apple Silicon, so `scripts/build-ffmpeg-macos.sh` makes
-one from source, with the same library versions and `--disable-network`. The
-**FFmpeg for macOS** workflow runs it; its archive and the archive of its sources are
+No LGPL build exists for macOS, so `scripts/build-ffmpeg-macos.sh` makes one from source
+for the Mac's processor (Apple Silicon or Intel), with the same library versions,
+VideoToolbox (Apple's hardware video encoder) and `--disable-network`. The **FFmpeg for
+macOS** workflow runs it (input `arch`); each archive and the archive of its sources are
 published in the FFmpeg mirror release, and the manifest pins the archive's SHA-256.
 
 `npm run setup:ocr` (`scripts/setup-ocr.mjs`, every platform) downloads the PaddleOCR

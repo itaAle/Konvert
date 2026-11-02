@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::CoreError;
 use crate::formats::{self, AudioCodec, FormatSpec, ImageCodec, VideoCodec};
+use crate::hardware::{Accelerator, HardwareEncoder};
 use crate::join::JoinPlan;
 use crate::plan::{
     AddedAudio, AudioEncode, AudioPlan, AudioRate, ConversionPlan, FramePlan, ImagePlan,
@@ -83,6 +84,7 @@ pub fn build_from_plan_with(
     ]);
     a.push(&["-progress", "pipe:1"]);
 
+    hardware_device_args(&mut a, plan);
     // Input: local files only.
     a.push(&["-protocol_whitelist", "file"]);
     if let Some(at) = plan.frames.and_then(|f| f.at_secs) {
@@ -184,7 +186,7 @@ fn media_args(a: &mut Args, plan: &ConversionPlan, spec: &FormatSpec, cover_comm
                 a.push(&["-tag:v", "hvc1"]);
             }
         }
-        Some(VideoPlan::Encode(enc)) if enc.codec != VideoCodec::Gif => video_args(a, enc),
+        Some(VideoPlan::Encode(enc)) if enc.codec != VideoCodec::Gif => video_args(a, enc, true),
         _ => {}
     }
 
@@ -371,6 +373,7 @@ pub fn join_args(
         "-progress",
         "pipe:1",
     ]);
+    hardware_device_args(&mut a, plan);
     if join.copy {
         a.push(&[
             "-protocol_whitelist",
@@ -428,14 +431,27 @@ pub fn join_args(
                 segments.push_str(&format!("[a{i}]"));
             }
         }
+        // VA-API encodes frames already in the graphics memory: they are
+        // uploaded at the end of the graph.
+        let upload = match &plan.video {
+            Some(VideoPlan::Encode(enc)) => hardware_upload(enc),
+            _ => None,
+        };
         graph.push_str(&format!(
             "{segments}concat=n={}:v={}:a={}{}{}",
             join.files.len(),
             u8::from(video),
             u8::from(audio),
-            if video { "[v]" } else { "" },
+            match (video, upload) {
+                (true, Some(_)) => "[joined]",
+                (true, None) => "[v]",
+                (false, _) => "",
+            },
             if audio { "[a]" } else { "" },
         ));
+        if let (true, Some(upload)) = (video, upload) {
+            graph.push_str(&format!(";[joined]{upload}[v]"));
+        }
         a.push(&["-filter_complex", &graph]);
         if video {
             a.push(&["-map", "[v]"]);
@@ -444,7 +460,7 @@ pub fn join_args(
             a.push(&["-map", "[a]"]);
         }
         if let Some(VideoPlan::Encode(enc)) = &plan.video {
-            video_args(&mut a, enc);
+            video_args(&mut a, enc, false);
         }
         if let Some(AudioPlan::Encode(enc)) = &plan.audio {
             audio_args(&mut a, enc, spec);
@@ -785,7 +801,12 @@ fn avif_crf(quality: u8) -> u8 {
     ((100 - quality.min(100) as u32) * 63 + 50).div_euclid(100) as u8
 }
 
-fn video_args(a: &mut Args, enc: &VideoEncode) {
+/// Encoder, rate and pixel format of an encoded video; `filters`: the size
+/// and frame rate are set here (`-vf`), not by a filter graph of the caller.
+fn video_args(a: &mut Args, enc: &VideoEncode, filters: bool) {
+    if let Some(hardware) = &enc.hardware {
+        return hardware_video_args(a, enc, hardware, filters);
+    }
     let bitrate = |a: &mut Args, kbps: u32| {
         a.push(&[
             "-b:v",
@@ -856,6 +877,21 @@ fn video_args(a: &mut Args, enc: &VideoEncode) {
         VideoCodec::Gif => unreachable!("GIF uses a filter graph"),
     }
 
+    if filters {
+        size_and_rate_filters(a, enc, None);
+    }
+    let pix_fmt = match (enc.codec, enc.alpha) {
+        (VideoCodec::Webp, true) => "yuva420p",
+        (VideoCodec::Apng, true) => "rgba",
+        (VideoCodec::Apng, false) => "rgb24",
+        // 8-bit 4:2:0: what every player and OpenH264 support.
+        _ => "yuv420p",
+    };
+    a.push(&["-pix_fmt", pix_fmt]);
+}
+
+/// `-vf` with the new size and frame rate of the video (if any), then `last`.
+fn size_and_rate_filters(a: &mut Args, enc: &VideoEncode, last: Option<&str>) {
     let mut filters = Vec::new();
     if let (true, Some(w), Some(h)) = (enc.resize, enc.width, enc.height) {
         // Animations are small: the sharper (slower) filter is affordable.
@@ -869,17 +905,62 @@ fn video_args(a: &mut Args, enc: &VideoEncode) {
     if let Some(fps) = enc.fps {
         filters.push(format!("fps={}", format_number(fps)));
     }
+    filters.extend(last.map(str::to_owned));
     if !filters.is_empty() {
         a.push(&["-vf", &filters.join(",")]);
     }
-    let pix_fmt = match (enc.codec, enc.alpha) {
-        (VideoCodec::Webp, true) => "yuva420p",
-        (VideoCodec::Apng, true) => "rgba",
-        (VideoCodec::Apng, false) => "rgb24",
-        // 8-bit 4:2:0: what every player and OpenH264 support.
-        _ => "yuv420p",
-    };
-    a.push(&["-pix_fmt", pix_fmt]);
+}
+
+/// The graphics device of a VA-API encoder (a global option, before the inputs).
+fn hardware_device_args(a: &mut Args, plan: &ConversionPlan) {
+    if let Some(device) = plan.hardware().and_then(|h| h.device.as_deref()) {
+        a.push(&["-vaapi_device", device]);
+    }
+}
+
+/// The filter that hands the frames to the graphics chip, for encoders that
+/// only take frames in its memory (VA-API).
+fn hardware_upload(enc: &VideoEncode) -> Option<&'static str> {
+    match enc.hardware.as_ref()?.accelerator {
+        Accelerator::Vaapi => Some("format=nv12,hwupload"),
+        _ => None,
+    }
+}
+
+/// A video encoded by the graphics chip: the same bit rate as the software
+/// encoders (variable, with a peak), each vendor's options for quality, and
+/// 8-bit NV12 frames (decoded and filtered on the processor).
+fn hardware_video_args(a: &mut Args, enc: &VideoEncode, hardware: &HardwareEncoder, filters: bool) {
+    let name = hardware.name().unwrap_or_default();
+    a.push(&["-c:v", &name]);
+    match hardware.accelerator {
+        // Measured: p5 + hq is as fast as OpenH264 or faster, and better.
+        Accelerator::Nvenc => a.push(&["-preset", "p5", "-tune", "hq", "-rc", "vbr"]),
+        Accelerator::Qsv => a.push(&["-preset", "medium"]),
+        Accelerator::Amf => a.push(&["-quality", "balanced", "-rc", "vbr_peak"]),
+        // The rate control follows from the bit rate and its peak.
+        Accelerator::Vaapi | Accelerator::VideoToolbox => {}
+    }
+    if hardware.codec == VideoCodec::H264 {
+        a.push(&["-profile:v", "high"]);
+    }
+    if let VideoRate::Bitrate { kbps } = enc.rate {
+        a.push(&[
+            "-b:v",
+            &format!("{kbps}k"),
+            "-maxrate",
+            &format!("{}k", kbps * 3 / 2),
+            "-bufsize",
+            &format!("{}k", kbps * 2),
+        ]);
+    }
+    let upload = hardware_upload(enc);
+    if filters {
+        size_and_rate_filters(a, enc, upload);
+    }
+    if upload.is_none() {
+        a.push(&["-pix_fmt", "nv12"]);
+    }
 }
 
 /// Palette-optimized GIF in a single pass of the filter graph.
@@ -1903,5 +1984,152 @@ mod tests {
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         assert!(wave.join(" ").contains("showwavespic=s=600x64"));
+    }
+
+    fn hardware(accelerator: Accelerator, codecs: &[VideoCodec]) -> crate::hardware::Hardware {
+        crate::hardware::Hardware {
+            encoders: codecs
+                .iter()
+                .map(|&codec| HardwareEncoder {
+                    accelerator,
+                    codec,
+                    device: (accelerator == Accelerator::Vaapi)
+                        .then(|| "/dev/dri/renderD128".to_owned()),
+                })
+                .collect(),
+        }
+    }
+
+    fn req_hw(target: TargetFormat, accelerator: Accelerator) -> ConversionRequest {
+        ConversionRequest {
+            hardware: Some(hardware(accelerator, &[VideoCodec::H264, VideoCodec::Av1])),
+            ..req(target, QualityPreset::Balanced)
+        }
+    }
+
+    fn all_args(media: &MediaInfo, request: &ConversionRequest) -> Vec<String> {
+        build_command(media, request, Path::new("clip.mp4"), Path::new("out.tmp"))
+            .unwrap()
+            .args_lossy()
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn hardware_encoders_get_each_vendors_options_and_the_same_bit_rate() {
+        let src = mp4();
+        let rate = ["-b:v", "4350k", "-maxrate", "6525k", "-bufsize", "8700k"];
+        let expect = |accelerator, codec: &[&str]| {
+            let mut args: Vec<String> = ["-map", "0:0", "-map", "0:1", "-map_metadata", "0"]
+                .iter().chain(codec).chain(&rate).map(|a| (*a).to_owned()).collect();
+            args.extend(["-pix_fmt", "nv12", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]
+                .map(String::from));
+            assert_eq!(body(&src, &req_hw(TargetFormat::Mp4, accelerator), "clip.mp4"), args);
+        };
+        expect(Accelerator::Nvenc, &["-c:v", "h264_nvenc", "-preset", "p5", "-tune", "hq", "-rc", "vbr", "-profile:v", "high"]);
+        expect(Accelerator::Qsv, &["-c:v", "h264_qsv", "-preset", "medium", "-profile:v", "high"]);
+        expect(Accelerator::Amf, &["-c:v", "h264_amf", "-quality", "balanced", "-rc", "vbr_peak", "-profile:v", "high"]);
+        expect(Accelerator::VideoToolbox, &["-c:v", "h264_videotoolbox", "-profile:v", "high"]);
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn vaapi_names_its_device_and_uploads_the_frames() {
+        let mut request = req_hw(TargetFormat::Mp4, Accelerator::Vaapi);
+        request.advanced.max_height = Some(720);
+        let args = all_args(&mp4(), &request);
+        // A global option, before the input.
+        let device = args.iter().position(|a| a == "-vaapi_device").unwrap();
+        let input = args.iter().position(|a| a == "-i").unwrap();
+        assert!(device < input);
+        assert_eq!(args[device + 1], "/dev/dri/renderD128");
+        // Scaled on the processor, then handed to the graphics chip.
+        assert!(args.windows(2).any(|w| w == ["-vf", "scale=1280:720:flags=bicubic,format=nv12,hwupload"]), "{args:?}");
+        assert!(args.windows(2).any(|w| w == ["-c:v", "h264_vaapi"]));
+        assert!(!args.contains(&"-pix_fmt".to_owned()), "{args:?}");
+        // Other encoders keep their frames in memory: no device, no upload.
+        let nvenc = all_args(&mp4(), &req_hw(TargetFormat::Mp4, Accelerator::Nvenc));
+        assert!(!nvenc.contains(&"-vaapi_device".to_owned()));
+        assert!(!nvenc.iter().any(|a| a.contains("hwupload")));
+    }
+
+    #[test]
+    fn hardware_is_used_only_for_its_codecs() {
+        // VP9 (WebM) and animations stay with the software encoders.
+        let webm = all_args(&mp4(), &req_hw(TargetFormat::Webm, Accelerator::Nvenc));
+        assert!(webm.windows(2).any(|w| w == ["-c:v", "libvpx-vp9"]));
+        let gif = all_args(&mp4(), &req_hw(TargetFormat::Gif, Accelerator::Nvenc));
+        assert!(!gif.iter().any(|a| a.contains("nvenc")));
+        // A copied video is not encoded at all.
+        let mkv = all_args(&mp4(), &req_hw(TargetFormat::Mkv, Accelerator::Nvenc));
+        assert!(mkv.windows(2).any(|w| w == ["-c:v", "copy"]));
+        // Only H.264 found: AV1 is encoded by SVT-AV1.
+        let mut request = req(TargetFormat::Mp4, QualityPreset::Balanced);
+        request.advanced.video_codec = Some(VideoCodec::Av1);
+        request.hardware = Some(hardware(Accelerator::Qsv, &[VideoCodec::H264]));
+        let av1 = all_args(&mp4(), &request);
+        assert!(av1.windows(2).any(|w| w == ["-c:v", "libsvtav1"]));
+    }
+
+    #[test]
+    fn hardware_av1_gets_a_bit_rate_instead_of_a_quality() {
+        let mut request = req_hw(TargetFormat::Mp4, Accelerator::Nvenc);
+        request.advanced.video_codec = Some(VideoCodec::Av1);
+        let plan = plan_conversion(&mp4(), &request, Path::new("clip.mp4")).unwrap();
+        let Some(VideoPlan::Encode(enc)) = &plan.video else {
+            panic!("encoded")
+        };
+        // H.264's 4350 kbit/s for the same picture, divided by 1.8 for AV1.
+        assert_eq!(enc.rate, VideoRate::Bitrate { kbps: 2420 });
+        let args = build_from_plan(&plan, Path::new("clip.mp4"), Path::new("o.mp4")).args_lossy();
+        assert!(args.windows(2).any(|w| w == ["-c:v", "av1_nvenc"]));
+        assert!(!args.contains(&"-profile:v".to_owned()));
+        // The software fallback keeps that rate with SVT-AV1.
+        let software = plan.without_hardware().unwrap();
+        assert!(software.hardware().is_none());
+        let args =
+            build_from_plan(&software, Path::new("clip.mp4"), Path::new("o.mp4")).args_lossy();
+        assert!(
+            args.windows(4)
+                .any(|w| w == ["-c:v", "libsvtav1", "-b:v", "2420k"]),
+            "{args:?}"
+        );
+        // Nothing to fall back from without hardware.
+        assert!(software.without_hardware().is_none());
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn joins_upload_to_vaapi_at_the_end_of_their_graph() {
+        let small = media(
+            r#"{ "streams": [
+            { "index": 0, "codec_name": "h264", "codec_type": "video", "width": 1280, "height": 720,
+              "avg_frame_rate": "30/1" },
+            { "index": 1, "codec_name": "aac", "codec_type": "audio", "sample_rate": "48000",
+              "channels": 2 }],
+            "format": { "format_name": "mov,mp4,m4a,3gp,3g2,mj2", "duration": "10" } }"#,
+        );
+        let files = vec![mp4(), small];
+        let request = ConversionRequest {
+            join: Some(crate::request::JoinOptions { files: files.clone(), label: None }),
+            ..req_hw(TargetFormat::Mp4, Accelerator::Vaapi)
+        };
+        let plan = crate::join::plan(&files, &request).unwrap();
+        let join = plan.join.clone().unwrap();
+        assert!(!join.copy);
+        let paths = [PathBuf::from("a.mp4"), PathBuf::from("b.mp4")];
+        let args = join_args(&plan, &join, &paths, Path::new("l.txt"), Path::new("o.mp4")).args_lossy();
+        assert_eq!(args[args.iter().position(|a| a == "-vaapi_device").unwrap() + 1], "/dev/dri/renderD128");
+        let graph = &args[args.iter().position(|a| a == "-filter_complex").unwrap() + 1];
+        assert!(graph.contains("[joined][a];[joined]format=nv12,hwupload[v]"), "{graph}");
+        assert!(args.windows(2).any(|w| w == ["-c:v", "h264_vaapi"]));
+        assert!(!args.contains(&"-vf".to_owned()) && !args.contains(&"-pix_fmt".to_owned()), "{args:?}");
+        // NVENC joins take the graph's frames as they are, in NV12.
+        let request = ConversionRequest { hardware: Some(hardware(Accelerator::Nvenc, &[VideoCodec::H264])), ..request };
+        let plan = crate::join::plan(&files, &request).unwrap();
+        let args = join_args(&plan, &join, &paths, Path::new("l.txt"), Path::new("o.mp4")).args_lossy();
+        let graph = &args[args.iter().position(|a| a == "-filter_complex").unwrap() + 1];
+        assert!(graph.ends_with("[v][a]") && !graph.contains("hwupload"), "{graph}");
+        assert!(args.windows(4).any(|w| w == ["-c:v", "h264_nvenc", "-preset", "p5"]));
+        assert!(args.windows(2).any(|w| w == ["-pix_fmt", "nv12"]));
     }
 }

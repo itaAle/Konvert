@@ -573,6 +573,7 @@ async fn advanced_options_are_applied() {
         media: None,
         extract: None,
         join: None,
+        hardware: None,
     };
     let (_, out) = convert(&bins, &tmp, &input, request).await;
     let video = out.primary_video().unwrap();
@@ -3476,4 +3477,75 @@ async fn joined_songs_are_normalized_one_by_one() {
     let joined = probe(&bins, &outcome.output).await.unwrap();
     let length = joined.duration_secs.unwrap();
     assert!((11.8..=12.4).contains(&length), "{length}");
+}
+
+/// Every hardware encoder that works on this computer converts a video (on
+/// computers without one, as on CI runners, only detection runs).
+#[tokio::test]
+async fn hardware_encoders_found_here_convert_videos() {
+    use konvert_core::hardware::{self, Hardware};
+    let bins = engine();
+    let encoders = konvert_core::engine_encoders(&bins).await.unwrap();
+    let found = hardware::detect(&bins, &encoders).await;
+    eprintln!(
+        "hardware encoders here: {:?}",
+        found
+            .encoders
+            .iter()
+            .filter_map(|e| e.name())
+            .collect::<Vec<_>>()
+    );
+    let tmp = TempDir::new("hardware");
+    let input = sample_mp4(&bins, &tmp);
+    for encoder in &found.encoders {
+        let mut request = ConversionRequest::new(TargetFormat::Mp4, QualityPreset::Balanced);
+        request.advanced.video_codec = Some(encoder.codec);
+        request.advanced.max_height = Some(120);
+        request.hardware = Some(Hardware {
+            encoders: vec![encoder.clone()],
+        });
+        let media = probe(&bins, &input).await.unwrap();
+        let plan = konvert_core::plan_conversion(&media, &request, &input).unwrap();
+        assert_eq!(plan.hardware(), Some(encoder));
+        let (outcome, out) = convert(&bins, &tmp, &input, request).await;
+        let name = encoder.name().unwrap();
+        assert!(!outcome.hardware_fallback, "{name} fell back to software");
+        let video = out.primary_video().unwrap();
+        let codec = match encoder.codec {
+            formats::VideoCodec::Av1 => "av1",
+            _ => "h264",
+        };
+        assert_eq!(video.codec, codec, "{name}");
+        assert_eq!(
+            (video.width, video.height),
+            (Some(160), Some(120)),
+            "{name}"
+        );
+        assert!(out.primary_audio().is_some(), "{name}");
+        std::fs::remove_file(&outcome.output).unwrap();
+    }
+}
+
+/// A graphics chip that fails mid-way leaves the work to the software encoder.
+#[tokio::test]
+async fn a_failing_hardware_encoder_falls_back_to_software() {
+    use konvert_core::hardware::{Accelerator, Hardware, HardwareEncoder};
+    let bins = engine();
+    let tmp = TempDir::new("hardware fallback");
+    let input = sample_mp4(&bins, &tmp);
+    // VA-API with a device that does not exist fails everywhere.
+    let mut request = ConversionRequest::new(TargetFormat::Mp4, QualityPreset::Balanced);
+    request.advanced.max_height = Some(120);
+    request.hardware = Some(Hardware {
+        encoders: vec![HardwareEncoder {
+            accelerator: Accelerator::Vaapi,
+            codec: formats::VideoCodec::H264,
+            device: Some("/nonexistent/renderD999".into()),
+        }],
+    });
+    let (outcome, out) = convert(&bins, &tmp, &input, request).await;
+    assert!(outcome.hardware_fallback);
+    let video = out.primary_video().unwrap();
+    assert_eq!(video.codec, "h264");
+    assert_eq!(video.height, Some(120));
 }

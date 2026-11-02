@@ -22,6 +22,7 @@
     "allow-unlock-pdf",
     "allow-forget-pdf-password",
     "allow-plan-conversion",
+    "allow-hardware-info",
     "allow-pdf-thumbnails",
     "allow-picture-thumbnail",
     "allow-video-frame",

@@ -1,21 +1,24 @@
 #!/usr/bin/env bash
-# Builds the LGPL FFmpeg/FFprobe used by Konvert on macOS (Apple Silicon).
+# Builds the LGPL FFmpeg/FFprobe used by Konvert on macOS, for the processor of the
+# Mac it runs on: Apple Silicon (arm64) or Intel (x86_64).
 #
-# No upstream project publishes an LGPL arm64 build for macOS, so Konvert builds its
-# own. The external libraries are the ones of the Windows/Linux builds (BtbN
+# No upstream project publishes an LGPL build for macOS, so Konvert builds its own. The external libraries are the ones of the Windows/Linux builds (BtbN
 # FFmpeg-Builds, same tag as scripts/ffmpeg-manifest.json) at the same commits, so
 # the three platforms behave the same. Every source is pinned to a commit (or SVN
 # revision) and verified after checkout.
 #
-# The result is static: ffmpeg and ffprobe link only macOS system libraries.
+# The result is static: ffmpeg and ffprobe link only macOS system libraries and
+# frameworks (VideoToolbox, Apple's hardware video encoder, is one of them).
 # Unlike the BtbN builds it is configured with --disable-network: the binaries
 # cannot open any network protocol at all.
 #
 # Development/CI only (.github/workflows/ffmpeg-macos.yml). Outputs in <out-dir>:
-#   ffmpeg-<version>-macos-arm64-lgpl.tar.xz          binaries (bin/) + LICENSE.txt
-#   ffmpeg-<version>-macos-arm64-lgpl-sources.tar.xz  every source + this script (LGPL)
-# Upload both to the FFmpeg mirror release, then pin the first one's SHA-256 in
-# scripts/ffmpeg-manifest.json (platforms.macos-aarch64).
+#   ffmpeg-<version>-<variant>-macos-<arch>-lgpl.tar.xz          binaries (bin/) + LICENSE.txt
+#   ffmpeg-<version>-<variant>-macos-<arch>-lgpl-sources.tar.xz  every source + this script (LGPL)
+# (<variant> changes whenever this script builds something different from the same sources).
+# (<arch> is arm64 or x86_64). Upload both to the FFmpeg mirror release, then pin the
+# first one's SHA-256 in scripts/ffmpeg-manifest.json (platforms.macos-aarch64 or
+# platforms.macos-x86_64).
 #
 # Usage: bash scripts/build-ffmpeg-macos.sh [out-dir]   (default: .ffmpeg-build/out)
 # Requirements: Xcode command line tools and
@@ -31,12 +34,18 @@ SRC="$WORK/src"
 BUILD="$WORK/build"
 PREFIX="$WORK/prefix"
 
-[[ "$(uname -s)-$(uname -m)" == "Darwin-arm64" ]] || { echo "Run this on an Apple Silicon Mac." >&2; exit 1; }
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64)  ARCH="arm64";  VPX_TARGET="arm64-darwin20-gcc" ;;
+  Darwin-x86_64) ARCH="x86_64"; VPX_TARGET="x86_64-darwin20-gcc" ;;
+  *) echo "Run this on a Mac (Apple Silicon or Intel)." >&2; exit 1 ;;
+esac
 
 # FFmpeg: the commit of the version pinned in the manifest (n9.0.2-36-g6882969ce9).
 FFMPEG_REPO="https://github.com/FFmpeg/FFmpeg.git"
 FFMPEG_COMMIT="6882969ce9fd2aa6aa1d0008b2bfe1c838aac11d"
 FFMPEG_VERSION="n9.0.2-36-g6882969ce9"
+# konvert2: with VideoToolbox (hardware H.264 encoding).
+VARIANT="konvert2"
 
 # name|repository|commit — from BtbN/FFmpeg-Builds scripts.d at autobuild-2026-10-25-13-00.
 LIBS=(
@@ -55,12 +64,14 @@ LAME_SVN="https://svn.code.sf.net/p/lame/svn/trunk/lame"
 LAME_REV="6835"
 
 export MACOSX_DEPLOYMENT_TARGET="11.0"
+# Only the libraries built here: never the Homebrew ones (/usr/local on Intel Macs).
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
-export CFLAGS="-O2 -arch arm64"
-export CXXFLAGS="-O2 -arch arm64"
+export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
+export CFLAGS="-O2 -arch $ARCH"
+export CXXFLAGS="-O2 -arch $ARCH"
 JOBS="$(sysctl -n hw.ncpu)"
 CMAKE_COMMON=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PREFIX"
-  -DCMAKE_PREFIX_PATH="$PREFIX" -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_OSX_ARCHITECTURES=arm64
+  -DCMAKE_PREFIX_PATH="$PREFIX" -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_OSX_ARCHITECTURES="$ARCH"
   -DBUILD_SHARED_LIBS=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5)
 MESON_COMMON=(--prefix="$PREFIX" --libdir=lib --buildtype=release --default-library=static)
 
@@ -121,7 +132,7 @@ meson_build dav1d -Denable_tools=false -Denable_tests=false
   && make -j "$JOBS" && make install )
 
 ( mkdir -p "$BUILD/vpx" && cd "$BUILD/vpx" \
-  && "$SRC/vpx/configure" --prefix="$PREFIX" --target=arm64-darwin20-gcc --enable-static \
+  && "$SRC/vpx/configure" --prefix="$PREFIX" --target="$VPX_TARGET" --enable-static \
     --disable-shared --enable-pic --enable-vp9-highbitdepth --disable-examples --disable-tools \
     --disable-docs --disable-unit-tests \
   && make -j "$JOBS" && make install )
@@ -137,7 +148,7 @@ mkdir -p "$BUILD/ffmpeg"
     --enable-zlib --enable-iconv --enable-pthreads \
     --enable-libaom --enable-libdav1d --enable-libkvazaar --enable-libmp3lame \
     --enable-libopenh264 --enable-libopus --enable-libsvtav1 --enable-libvorbis \
-    --enable-libvpx --enable-libwebp \
+    --enable-libvpx --enable-libwebp --enable-videotoolbox \
   && make -j "$JOBS" && make install )
 
 echo "==> Checking the binaries"
@@ -150,9 +161,12 @@ done
 if "$PREFIX/bin/ffmpeg" -hide_banner -protocols | grep -qE '^\s+(https?|tcp|udp|tls)$'; then
   echo "ffmpeg still has network protocols" >&2; exit 1
 fi
+if ! "$PREFIX/bin/ffmpeg" -hide_banner -encoders | grep -qE '^ V\S* h264_videotoolbox '; then
+  echo "ffmpeg has no VideoToolbox H.264 encoder" >&2; exit 1
+fi
 
 echo "==> Packaging"
-NAME="ffmpeg-$FFMPEG_VERSION-macos-arm64-lgpl"
+NAME="ffmpeg-$FFMPEG_VERSION-$VARIANT-macos-$ARCH-lgpl"
 STAGE="$WORK/stage"
 rm -rf "$STAGE" && mkdir -p "$STAGE/$NAME/bin" "$STAGE/$NAME-sources"
 cp "$PREFIX/bin/ffmpeg" "$PREFIX/bin/ffprobe" "$STAGE/$NAME/bin/"
