@@ -410,6 +410,8 @@ export const en: Messages = {
     approximate: "about {size}",
     remux: "No re-encoding: fast and lossless",
     remuxShort: "No re-encoding",
+    hardware: "The video is encoded by the graphics chip ({name}): faster",
+    hardwareShort: "Accelerated",
     lowSpace: "The free space in the destination folder ({free}) may not be enough.",
   },
   warnings: {
@@ -497,6 +499,7 @@ export const en: Messages = {
     compressedTitle: "Compression complete",
     smaller: "{percent} smaller: from {from} to {to}",
     overLimit: "The file could not get under {limit}: this is the smallest it can be.",
+    hardwareFallback: "The graphics chip could not encode the video: the processor did it instead.",
     title: "Conversion complete",
     saved: "Saved as {name}",
     savedFolder: "{n} pictures saved in the folder {name}",
@@ -531,6 +534,12 @@ export const en: Messages = {
       "Saves technical information to a local log to diagnose problems. The log contains no names or paths of your files and is never sent anywhere.",
     showLog: "Show log",
     clearLog: "Delete log",
+    hardware: "Hardware acceleration",
+    hardwareHint:
+      "Encodes H.264 and AV1 videos with the graphics chip: conversions are faster. If the chip fails, Konvert uses the processor.",
+    hardwareSearching: "Looking for the graphics chip…",
+    hardwareFound: "Available: {list}",
+    hardwareNone: "No hardware encoder is available on this computer: videos are encoded by the processor.",
   },
   about: {
     version: "Version {version}",

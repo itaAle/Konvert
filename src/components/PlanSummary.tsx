@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
-import { HardDrive, Info, TriangleAlert, Zap } from "lucide-react";
+import { Gauge, HardDrive, Info, TriangleAlert, Zap } from "lucide-react";
 
 import type { ConversionPlan } from "../bindings/ConversionPlan";
 import type { ConversionWarning } from "../bindings/ConversionWarning";
@@ -49,11 +49,13 @@ interface FooterInfoProps {
   estimate: { bytes: number; approximate: boolean } | null;
   total: boolean;
   remux: boolean;
+  /** Name of the hardware encoder that encodes the video, if any. */
+  hardware?: string | null;
   loading: boolean;
 }
 
-/** Estimate and "no re-encoding" badge, shown next to the primary action. */
-export function PlanFooterInfo({ estimate, total, remux, loading }: FooterInfoProps) {
+/** Estimate and "no re-encoding" / "accelerated" badges, shown next to the primary action. */
+export function PlanFooterInfo({ estimate, total, remux, hardware, loading }: FooterInfoProps) {
   if (loading) return <span className="inline-block h-4 w-40 animate-pulse rounded-full bg-fill-strong" />;
   return (
     <p className="flex min-w-0 items-center gap-3 text-[14px]" aria-live="polite">
@@ -65,6 +67,16 @@ export function PlanFooterInfo({ estimate, total, remux, loading }: FooterInfoPr
         <span className="flex shrink-0 items-center gap-1 font-medium text-success" title={t("summary.remux")}>
           <Zap size={14} aria-hidden />
           {t("summary.remuxShort")}
+        </span>
+      )}
+      {!remux && hardware && (
+        <span
+          className="flex shrink-0 items-center gap-1 font-medium text-accent"
+          title={t("summary.hardware", { name: hardware })}
+        >
+          <Gauge size={14} aria-hidden />
+          {t("summary.hardwareShort")}
+          <span className="sr-only">{` (${hardware})`}</span>
         </span>
       )}
     </p>

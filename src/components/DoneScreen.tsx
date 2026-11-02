@@ -87,6 +87,12 @@ export function DoneScreen({ q, item }: { q: QueueController; item: QueueItem })
           {t("done.overLimit", { limit: formatBytes(limit) })}
         </p>
       )}
+      {item.outcome?.hardwareFallback && (
+        <p className="mt-3 flex max-w-md items-start gap-2 text-left text-[13px] text-label-secondary">
+          <Info size={15} className="mt-0.5 shrink-0" aria-hidden />
+          {t("done.hardwareFallback")}
+        </p>
+      )}
       <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
         <Button
           variant="primary"
@@ -141,6 +147,7 @@ export function BatchDoneScreen({ q }: { q: QueueController }) {
                       folderFiles(item) != null && t("done.pictures", { n: folderFiles(item)! }),
                       saving(item) ? t("done.smaller", saving(item)!) : formatBytes(item.outcome?.sizeBytes ?? 0),
                       overLimit(item) != null && t("done.overLimit", { limit: formatBytes(overLimit(item)!) }),
+                      item.outcome?.hardwareFallback && t("done.hardwareFallback"),
                     ]
                       .filter(Boolean)
                       .join(" · ")

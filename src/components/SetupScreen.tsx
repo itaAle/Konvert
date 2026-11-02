@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import type { TargetFormat } from "../bindings/TargetFormat";
 import { t } from "../i18n";
+import { acceleratorName, planHardware } from "../lib/hardware";
 import { revealVariants } from "../lib/motion";
 import {
   allWarnings,
@@ -84,6 +85,8 @@ export function SetupScreen({ q }: { q: QueueController }) {
   const allPlanned = planned.length > 0 && planned.every((i) => i.plan);
   const estimate = allPlanned ? totalEstimate(planned) : null;
   const remux = allPlanned && planned.every((i) => isRemux(i.plan!));
+  // The graphics chip encodes the video of at least one file.
+  const hardware = allPlanned ? (planned.map((i) => planHardware(i.plan!)).find((h) => h != null) ?? null) : null;
   // Pictures from videos: the moment must exist in every video.
   const durations = ready.map((i) => i.file?.media.durationSecs ?? null);
   const shortest = durations.every((d) => d != null) && durations.length > 0 ? Math.min(...(durations as number[])) : null;
@@ -166,7 +169,13 @@ export function SetupScreen({ q }: { q: QueueController }) {
     <>
       <div className="min-w-0 flex-1">
         {state.target && ready.length > 0 && (
-          <PlanFooterInfo estimate={estimate} total={ready.length > 1} remux={remux} loading={!allPlanned && !planError} />
+          <PlanFooterInfo
+            estimate={estimate}
+            total={ready.length > 1}
+            remux={remux}
+            hardware={hardware && acceleratorName(hardware.accelerator)}
+            loading={!allPlanned && !planError}
+          />
         )}
       </div>
       <Button variant="primary" size="lg" disabled={!canStart(state)} onClick={() => void q.start()} className="min-w-44">
