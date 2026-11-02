@@ -258,7 +258,7 @@ The owner only has Windows: macOS and Linux are built and tested on GitHub Actio
   - Published 2026-10-31 (tag `v0.7.0` on `5b25aa5`) with all platforms; zips 12–14 MB larger than 0.6.0 (the OCR models). The release notes list the PDF work of phase 1 too, which came after the 0.6.0 tag.
 
 - 2026-11-02: **macOS Intel (x86_64)** (owner's request; plan approved: a separate `Konvert_<version>_x64.dmg` built natively on GitHub's `macos-15-intel` runner, attached to the v0.7.0 release as `Konvert_0.7.0_macOS_Intel.zip`, since the app code is unchanged). The FFmpeg build script, the setup action, `setup-ffmpeg.sh`, the manifest (`macos-x86_64`), CI, release workflow, licenses (`x86_64-apple-darwin`) and README cover Intel Macs. GitHub says `macos-15-intel` is its last Intel image: once it is gone, Intel builds must be cross-compiled from an Apple Silicon runner.
-  - Steps on GitHub: run **FFmpeg for macOS** with `arch: x86_64`, upload both archives to the `ffmpeg-n9.0.2-36` mirror release, pin the SHA-256 in the manifest, run **Release packages** with `platform: macos-x64`.
+  - Done in the `TheLastOxygen/Konvert` fork (no write access to `itaAle/Konvert`): **FFmpeg for macOS** with `arch: x86_64` (run 41471824179, 25 min), both archives in the fork's `ffmpeg-n9.0.2-36` pre-release, `macos-x86_64` pinned in the manifest (SHA-256 `562760b4…0ac5`, URL of the fork). Then **Release packages** with `platform: macos-x64`; the package goes to a fork release `v0.7.0-macos-intel`. Hardware acceleration (VideoToolbox) was postponed by the owner.
   - Not verified on real hardware: an Intel Mac (CI runners are virtual machines).
 
 ## Backlog (next work, by priority)
