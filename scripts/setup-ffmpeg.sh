@@ -8,7 +8,7 @@
 # Usage: bash scripts/setup-ffmpeg.sh [--force]
 #
 # Requirements: curl, sha256sum (or shasum), tar/unzip, node (to read the manifest).
-# Platforms: Linux x86_64/arm64 and macOS on Apple Silicon. Windows uses
+# Platforms: Linux x86_64/arm64 and macOS (Apple Silicon and Intel). Windows uses
 # scripts/setup-ffmpeg.ps1 (`npm run setup:ffmpeg` picks the right script).
 # Written for the bash 3.2 that ships with macOS (no mapfile).
 
@@ -27,6 +27,7 @@ case "$(uname -s)-$(uname -m)" in
   Linux-x86_64)               PLATFORM="linux-x86_64" ;;
   Linux-aarch64|Linux-arm64)  PLATFORM="linux-aarch64" ;;
   Darwin-arm64)               PLATFORM="macos-aarch64" ;;
+  Darwin-x86_64)              PLATFORM="macos-x86_64" ;;
   MINGW*-x86_64|MSYS*-x86_64) PLATFORM="windows-x86_64" ;;
   *) echo "Unsupported platform: $(uname -s) $(uname -m)" >&2; exit 1 ;;
 esac

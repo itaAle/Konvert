@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Release build of Konvert for macOS (Apple Silicon) and Linux: the packages plus
+# Release build of Konvert for macOS (Apple Silicon or Intel) and Linux: the packages plus
 # their SHA-256 checksums in release/. Windows uses scripts/build-release.ps1;
 # `npm run release` picks the right script.
 #
@@ -16,13 +16,13 @@
 #   7. Copies the packages to release/ and writes <package>.sha256.
 #
 # Packages: macOS .dmg; Linux .deb, .rpm and .AppImage (x86_64 or arm64, the
-# architecture of the build machine).
+# architecture of the build machine, on macOS too).
 #
 # macOS signing and notarization are optional and use these environment variables:
 #   APPLE_SIGNING_IDENTITY  "Developer ID Application: Name (TEAMID)", in the keychain
 #   APPLE_ID, APPLE_PASSWORD (app-specific password), APPLE_TEAM_ID
 # Without them (no Apple Developer account) the app is signed ad hoc and not
-# notarized: it runs on Apple Silicon, but Gatekeeper asks the user to allow it
+# notarized: it runs, but Gatekeeper asks the user to allow it
 # once (see "Installation" in README.md).
 #
 # Network is used only here, at build time (npm, FFmpeg archive, the AppImage
