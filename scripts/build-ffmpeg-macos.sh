@@ -7,13 +7,15 @@
 # the three platforms behave the same. Every source is pinned to a commit (or SVN
 # revision) and verified after checkout.
 #
-# The result is static: ffmpeg and ffprobe link only macOS system libraries.
+# The result is static: ffmpeg and ffprobe link only macOS system libraries and
+# frameworks (VideoToolbox, Apple's hardware video encoder, is one of them).
 # Unlike the BtbN builds it is configured with --disable-network: the binaries
 # cannot open any network protocol at all.
 #
 # Development/CI only (.github/workflows/ffmpeg-macos.yml). Outputs in <out-dir>:
-#   ffmpeg-<version>-macos-<arch>-lgpl.tar.xz          binaries (bin/) + LICENSE.txt
-#   ffmpeg-<version>-macos-<arch>-lgpl-sources.tar.xz  every source + this script (LGPL)
+#   ffmpeg-<version>-<variant>-macos-<arch>-lgpl.tar.xz          binaries (bin/) + LICENSE.txt
+#   ffmpeg-<version>-<variant>-macos-<arch>-lgpl-sources.tar.xz  every source + this script (LGPL)
+# (<variant> changes whenever this script builds something different from the same sources).
 # (<arch> is arm64 or x86_64). Upload both to the FFmpeg mirror release, then pin the
 # first one's SHA-256 in scripts/ffmpeg-manifest.json (platforms.macos-aarch64 or
 # platforms.macos-x86_64).
@@ -42,6 +44,8 @@ esac
 FFMPEG_REPO="https://github.com/FFmpeg/FFmpeg.git"
 FFMPEG_COMMIT="6882969ce9fd2aa6aa1d0008b2bfe1c838aac11d"
 FFMPEG_VERSION="n9.0.2-36-g6882969ce9"
+# konvert2: with VideoToolbox (hardware H.264 encoding).
+VARIANT="konvert2"
 
 # name|repository|commit — from BtbN/FFmpeg-Builds scripts.d at autobuild-2026-10-25-13-00.
 LIBS=(
@@ -144,7 +148,7 @@ mkdir -p "$BUILD/ffmpeg"
     --enable-zlib --enable-iconv --enable-pthreads \
     --enable-libaom --enable-libdav1d --enable-libkvazaar --enable-libmp3lame \
     --enable-libopenh264 --enable-libopus --enable-libsvtav1 --enable-libvorbis \
-    --enable-libvpx --enable-libwebp \
+    --enable-libvpx --enable-libwebp --enable-videotoolbox \
   && make -j "$JOBS" && make install )
 
 echo "==> Checking the binaries"
@@ -157,9 +161,12 @@ done
 if "$PREFIX/bin/ffmpeg" -hide_banner -protocols | grep -qE '^\s+(https?|tcp|udp|tls)$'; then
   echo "ffmpeg still has network protocols" >&2; exit 1
 fi
+if ! "$PREFIX/bin/ffmpeg" -hide_banner -encoders | grep -qE '^ V\S* h264_videotoolbox '; then
+  echo "ffmpeg has no VideoToolbox H.264 encoder" >&2; exit 1
+fi
 
 echo "==> Packaging"
-NAME="ffmpeg-$FFMPEG_VERSION-macos-$ARCH-lgpl"
+NAME="ffmpeg-$FFMPEG_VERSION-$VARIANT-macos-$ARCH-lgpl"
 STAGE="$WORK/stage"
 rm -rf "$STAGE" && mkdir -p "$STAGE/$NAME/bin" "$STAGE/$NAME-sources"
 cp "$PREFIX/bin/ffmpeg" "$PREFIX/bin/ffprobe" "$STAGE/$NAME/bin/"
